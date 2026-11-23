@@ -18,6 +18,7 @@ import { descNullsLast } from '../db/dialect';
 import { discoveryResults, rankBatches, taskRuns, type RankBatchState } from '../db/schema';
 import { readSetting, writeSetting } from '../lib/ai';
 import type { UserCtx } from './base';
+import { ownedBy } from './base';
 import { verdictOrder } from './discovery';
 
 export type RankBatchRow = typeof rankBatches.$inferSelect;
@@ -65,7 +66,7 @@ export function basisFingerprint(basis: string): string {
 }
 
 const owned = (ctx: UserCtx, id: string) =>
-  and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.id, id));
+  and(ownedBy(discoveryResults.userId, ctx), eq(discoveryResults.id, id));
 
 const batchWaiting = eq(discoveryResults.rankSkipReason, 'batch_waiting');
 
@@ -85,6 +86,9 @@ export async function setBatchWaiting(
     .set({
       rankDeferredAt: sql`coalesce(${discoveryResults.rankDeferredAt}, ${now})`,
       rankSkipReason: 'batch_waiting',
+      // A new wait counts its own returns (#686, tl on #715); one already waiting keeps its count,
+      // or asking it to wait again would undo MAX_BATCH_RETURNS.
+      rankBatchReturns: sql`CASE WHEN ${discoveryResults.rankSkipReason} = 'batch_waiting' THEN ${discoveryResults.rankBatchReturns} ELSE 0 END`,
     })
     .where(and(owned(ctx, id), eq(discoveryResults.disposition, 'pending')))
     .returning({ id: discoveryResults.id })
@@ -99,7 +103,7 @@ export async function listBatchWaitingIds(exec: Exec, ctx: UserCtx): Promise<str
     .from(discoveryResults)
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         batchWaiting,
         isNull(discoveryResults.rankBatchId),
         isNotNull(discoveryResults.rankDeferredAt),
@@ -141,10 +145,11 @@ export async function usersWithBatchWaiting(exec: Exec): Promise<string[]> {
 export async function releaseBatchWaiting(exec: Exec, ctx: UserCtx): Promise<number> {
   const rows = await exec
     .update(discoveryResults)
-    .set({ rankSkipReason: null })
+    // Their batch wait ends, and its count of returns with it (tl on #715).
+    .set({ rankSkipReason: null, rankBatchReturns: 0 })
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         batchWaiting,
         isNull(discoveryResults.rankBatchId),
       ),
@@ -164,9 +169,29 @@ export async function findInFlightBatch(
   return await exec
     .select()
     .from(rankBatches)
-    .where(and(eq(rankBatches.userId, ctx.userId), inArray(rankBatches.state, IN_FLIGHT)))
+    .where(and(ownedBy(rankBatches.userId, ctx), inArray(rankBatches.state, IN_FLIGHT)))
     .limit(1)
     .get();
+}
+
+/**
+ * Adds one applied result's outcome to the batch's counts (#784), in the caller's transaction:
+ * the one that applies the result, so the count lands with it or not at all.
+ */
+export async function countApplied(exec: Exec, batchId: string, outcome: string): Promise<void> {
+  const row = await exec
+    .select({ counts: rankBatches.appliedCounts })
+    .from(rankBatches)
+    .where(eq(rankBatches.id, batchId))
+    .get();
+  if (row === undefined) return;
+  const counts = new Map(Object.entries(row.counts ?? {}));
+  counts.set(outcome, (counts.get(outcome) ?? 0) + 1);
+  await exec
+    .update(rankBatches)
+    .set({ appliedCounts: Object.fromEntries(counts) })
+    .where(eq(rankBatches.id, batchId))
+    .run();
 }
 
 export async function getBatch(exec: Exec, id: string): Promise<RankBatchRow | undefined> {
@@ -193,7 +218,7 @@ export async function batchHoldUsd(
     .leftJoin(discoveryResults, eq(discoveryResults.rankBatchId, rankBatches.id))
     .where(
       and(
-        eq(rankBatches.userId, ctx.userId),
+        ownedBy(rankBatches.userId, ctx),
         inArray(rankBatches.state, IN_FLIGHT),
         gte(sql`coalesce(${rankBatches.submittedAt}, ${rankBatches.createdAt})`, now - HOLD_MS),
       ),
@@ -221,7 +246,7 @@ export async function rankOutputHistory(
     .from(taskRuns)
     .where(
       and(
-        eq(taskRuns.userId, ctx.userId),
+        ownedBy(taskRuns.userId, ctx),
         eq(taskRuns.taskKey, RANK_TASK),
         eq(taskRuns.status, 'ok'),
         gte(taskRuns.createdAt, now - HISTORY_MS),
@@ -311,7 +336,8 @@ export async function endBatchWait(
 ): Promise<void> {
   await tx
     .update(discoveryResults)
-    .set({ rankDeferredAt: null, rankSkipReason: null })
+    // Its returns end with the wait (#686, tl on #715): a later wait counts its own.
+    .set({ rankDeferredAt: null, rankSkipReason: null, rankBatchReturns: 0 })
     .where(owned(ctx, id))
     .run();
   if (reason === null) return;
@@ -332,12 +358,16 @@ export async function markBatchSubmitted(
   id: string,
   providerBatchId: string,
   now: number = Date.now(),
-): Promise<void> {
-  await exec
+): Promise<boolean> {
+  // Whether the batch was still being sent (#784, tl on #820): false when its row is gone (its
+  // account deleted) or the stale sweep failed it meanwhile.
+  const rows = await exec
     .update(rankBatches)
     .set({ providerBatchId, state: 'submitted', submittedAt: now, updatedAt: now })
     .where(and(eq(rankBatches.id, id), eq(rankBatches.state, 'submitting')))
-    .run();
+    .returning({ id: rankBatches.id })
+    .all();
+  return rows.length > 0;
 }
 
 export async function setBatchState(
@@ -369,7 +399,7 @@ export async function unlinkBatch(
   exec: Exec,
   ctx: UserCtx,
   batchId: string,
-  opts: { batching: boolean },
+  opts: { batching: boolean; returned?: boolean },
 ): Promise<number> {
   const rows = await exec
     .update(discoveryResults)
@@ -379,10 +409,51 @@ export async function unlinkBatch(
       rankBatchPromptId: null,
       ...(opts.batching ? {} : { rankSkipReason: null }),
     })
-    .where(and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.rankBatchId, batchId)))
+    .where(and(ownedBy(discoveryResults.userId, ctx), eq(discoveryResults.rankBatchId, batchId)))
     .returning({ id: discoveryResults.id })
     .all();
+  if (opts.returned === true)
+    await countBatchReturns(
+      exec,
+      ctx,
+      rows.map((r) => r.id),
+    );
   return rows.length;
+}
+
+/**
+ * How many times a sent batch may hand a posting back with no result before its wait ends (#686,
+ * qa; tl: two resends at most, so the third return ends it). Each return was otherwise resent at
+ * once, for ever.
+ */
+export const MAX_BATCH_RETURNS = 3;
+
+/**
+ * Counts one return for each of these postings, handed back by a sent batch with no result. One
+ * at MAX_BATCH_RETURNS waits no more: it fails as a live provider failure does (endBatchWait), and
+ * its count starts again for whatever ranks it next. Any end of a wait, and the start of a new one
+ * (setBatchWaiting), starts it again (tl on #715).
+ */
+export async function countBatchReturns(tx: Exec, ctx: UserCtx, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const mine = and(ownedBy(discoveryResults.userId, ctx), inArray(discoveryResults.id, ids));
+  await tx
+    .update(discoveryResults)
+    .set({ rankBatchReturns: sql`${discoveryResults.rankBatchReturns} + 1` })
+    .where(mine)
+    .run();
+  const done = await tx
+    .select({ id: discoveryResults.id })
+    .from(discoveryResults)
+    .where(and(mine, gte(discoveryResults.rankBatchReturns, MAX_BATCH_RETURNS)))
+    .all();
+  // endBatchWait starts its count again too.
+  for (const { id } of done) await endBatchWait(tx, ctx, id, 'provider_error');
+}
+
+/** A posting a batch ranked starts its count of returns again. */
+export async function clearBatchReturns(tx: Exec, ctx: UserCtx, id: string): Promise<void> {
+  await tx.update(discoveryResults).set({ rankBatchReturns: 0 }).where(owned(ctx, id)).run();
 }
 
 /**

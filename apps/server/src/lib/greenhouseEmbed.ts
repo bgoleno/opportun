@@ -11,14 +11,14 @@
 // The request is made only when a posting link is set or changed (attach, a URL edit) and on
 // Find posting, never on a page view, and never by the writers that keep or drop an identity
 // without asking (postingAtsJobRefKeeping).
+import { boardFromUrl, boardOfSource } from './atsBoard';
 import { greenhouseJidOf } from '@opportun/core';
-import { and, eq, ne } from 'drizzle-orm';
-import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
-import { ATS_MAX_BYTES } from '../adapters/sources/atsCommon';
+import { createHash } from 'node:crypto';
+import { and, desc, eq, isNull, ne } from 'drizzle-orm';
+import { greenhouseModule } from '../sites/greenhouse';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { companies, discoverySources, opportunities } from '../db/schema';
-import { boardFromUrl, boardOfSource } from '../jobs/atsDetect';
 import { splitConfig } from '../repos/discovery';
 import type { UserCtx } from '../repos/base';
 import { postingAtsJobRefKeeping, verifiedGreenhouseRef, type AtsJobRef } from './atsJobRef';
@@ -26,19 +26,29 @@ import { postingAtsJobRefKeeping, verifiedGreenhouseRef, type AtsJobRef } from '
 /** Greenhouse boards asked about one link, at most (tl's criterion 1). */
 export const MAX_TOKENS_TRIED = 3;
 
+/**
+ * The time every board check for one link may take in all (#598): each request gets what is left
+ * of it, and none starts once it is spent. A save waited up to 15 s a board before, 45 s in all.
+ * When it runs out the save goes on with no identity, as when no board holds the job.
+ */
+export const EMBED_CHECK_BUDGET_MS = 5000;
+
 const TOKEN = /^[a-z0-9-]{1,100}$/;
 
 /**
  * The company's known Greenhouse board tokens, in the order they are tried: its detected board
  * (ATS detection), then its Greenhouse discovery sources, then the boards of its other
- * opportunities' identities. Never anything read from the link.
+ * opportunities' identities, each group newest first (#598: read with no order before, so which
+ * three were tried was the database's choice). Never anything read from the link. A company not
+ * yet known (`companyId` null: a save naming a new one) has no board.
  */
 export async function knownGreenhouseTokens(
   db: Db,
   ctx: UserCtx,
-  opp: { id: string; companyId: string },
+  opp: { id: string; companyId: string | null },
 ): Promise<string[]> {
   const out: string[] = [];
+  if (opp.companyId === null) return out;
   const add = (token: string | null | undefined): void => {
     const t = token?.toLowerCase();
     if (t !== undefined && TOKEN.test(t) && !out.includes(t)) out.push(t);
@@ -59,6 +69,7 @@ export async function knownGreenhouseTokens(
         eq(discoverySources.kind, 'ats_greenhouse'),
       ),
     )
+    .orderBy(desc(discoverySources.createdAt), desc(discoverySources.id))
     .all();
   for (const source of sources) {
     add(boardOfSource(source.kind, splitConfig(source).config)?.slug);
@@ -73,6 +84,7 @@ export async function knownGreenhouseTokens(
         ne(opportunities.id, opp.id),
       ),
     )
+    .orderBy(desc(opportunities.createdAt), desc(opportunities.id))
     .all();
   for (const row of others) {
     if (row.atsJobRef?.kind === 'ats_greenhouse') add(row.atsJobRef.org);
@@ -80,51 +92,105 @@ export async function knownGreenhouseTokens(
   return out.slice(0, MAX_TOKENS_TRIED);
 }
 
-/** Whether Greenhouse's API says board `token` holds job `jid`. Any failure is a no. */
-async function boardHoldsJob(
+/** What a check found: an identity, or none, and whether some board gave no answer (#685). */
+export interface EmbedCheck {
+  ref: AtsJobRef | null;
+  /** A known board was not asked, or gave no answer, before a yes: a later check may find it. */
+  undecided: boolean;
+}
+
+/**
+ * Asks the company's known boards in turn whether they hold the link's job. With `budgetMs` (a
+ * save), every board's request gets an even share of what is left (#685: a board that hangs uses
+ * only its own share, so the next are still asked) and none starts once it is spent; null (the
+ * background check) leaves each request to the fetch's own limits.
+ */
+export async function checkEmbeddedGreenhouse(
+  db: Db,
+  ctx: UserCtx,
+  opp: { id: string; companyId: string | null },
+  link: string,
   sctx: Pick<SourceContext, 'fetch' | 'log'>,
-  token: string,
-  jid: string,
-): Promise<boolean> {
-  let res;
-  try {
-    res = await sctx.fetch(`https://${GREENHOUSE_HOST}/v1/boards/${token}/jobs/${jid}`, {
-      allowHosts: [GREENHOUSE_HOST],
-      maxBytes: ATS_MAX_BYTES,
-    });
-  } catch (err) {
-    // The token names the company's board: only the kind is logged (design 14.8).
-    sctx.log.warn({ 'opportun.ats.kind': 'ats_greenhouse', err }, 'greenhouse job check failed');
-    return false;
+  now: number,
+  budgetMs: number | null,
+): Promise<EmbedCheck> {
+  if (boardFromUrl(link) !== null) return { ref: null, undecided: false };
+  const jid = greenhouseJidOf(link);
+  if (jid === null) return { ref: null, undecided: false };
+  const tokens = await knownGreenhouseTokens(db, ctx, opp);
+  const deadline = budgetMs === null ? null : Date.now() + budgetMs;
+  let undecided = false;
+  for (const [i, token] of tokens.entries()) {
+    let share: number | undefined;
+    if (deadline !== null) {
+      const left = deadline - Date.now();
+      if (left <= 0) return { ref: null, undecided: true };
+      share = Math.max(1, Math.floor(left / (tokens.length - i)));
+    }
+    const said = await greenhouseModule.api!.holdsJob!(sctx, token, jid, share);
+    if (said === 'yes') return { ref: verifiedGreenhouseRef(token, jid, now), undecided: false };
+    if (said === 'unknown') undecided = true;
   }
-  if (res.status !== 200) return false;
-  try {
-    const body = JSON.parse(res.body.toString('utf8')) as { id?: unknown };
-    return String(body.id) === jid;
-  } catch {
-    return false;
-  }
+  return { ref: null, undecided };
 }
 
 /**
  * A verified Greenhouse identity for a `gh_jid` link on a company's own page, or null: the first
- * of the company's known boards whose API answers with that job. One request per token tried.
+ * of the company's known boards whose API answers with that job. One request per token tried, all
+ * of them within `budgetMs` (#598).
  */
 export async function verifyEmbeddedGreenhouse(
   db: Db,
   ctx: UserCtx,
-  opp: { id: string; companyId: string },
+  opp: { id: string; companyId: string | null },
   link: string,
   sctx: Pick<SourceContext, 'fetch' | 'log'>,
   now: number = Date.now(),
+  budgetMs: number = EMBED_CHECK_BUDGET_MS,
 ): Promise<AtsJobRef | null> {
-  if (boardFromUrl(link) !== null) return null;
-  const jid = greenhouseJidOf(link);
-  if (jid === null) return null;
-  for (const token of await knownGreenhouseTokens(db, ctx, opp)) {
-    if (await boardHoldsJob(sctx, token, jid)) return verifiedGreenhouseRef(token, jid, now);
-  }
-  return null;
+  return (await checkEmbeddedGreenhouse(db, ctx, opp, link, sctx, now, budgetMs)).ref;
+}
+
+/**
+ * Sets the identity a check found, only while the opportunity's link and company are still the
+ * ones checked and it has none yet (#685, #785): a check that finishes after a later save changed
+ * the link or the company (whose boards the check did not ask), or after another found an
+ * identity, writes nothing. The condition is in the UPDATE itself, so there is no window between
+ * a read and this write. Answers whether it was set.
+ */
+export async function setCheckedPostingRef(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+  link: string,
+  ref: AtsJobRef,
+  companyId: string | null,
+): Promise<boolean> {
+  const updated = await db
+    .update(opportunities)
+    .set({ atsJobRef: ref, updatedAt: Date.now() })
+    .where(
+      and(
+        eq(opportunities.userId, ctx.userId),
+        eq(opportunities.id, id),
+        eq(opportunities.postingUrl, link),
+        companyId === null
+          ? isNull(opportunities.companyId)
+          : eq(opportunities.companyId, companyId),
+        isNull(opportunities.atsJobRef),
+      ),
+    )
+    .returning({ id: opportunities.id })
+    .all();
+  return updated.length > 0;
+}
+
+/** The background check of a saved link whose boards did not all answer in time (#685). */
+export const POSTING_CHECK_KIND = 'opportunity.greenhouse_check';
+
+/** One job per opportunity and link at a time: the link itself is hashed into the key. */
+export function postingCheckKey(opportunityId: string, link: string): string {
+  return `${opportunityId}:${createHash('sha256').update(link).digest('hex').slice(0, 32)}`;
 }
 
 /**
@@ -135,7 +201,7 @@ export async function verifyEmbeddedGreenhouse(
 export async function resolvePostingAtsJobRef(
   db: Db,
   ctx: UserCtx,
-  opp: { id: string; companyId: string; atsJobRef: AtsJobRef | null | undefined },
+  opp: { id: string; companyId: string | null; atsJobRef: AtsJobRef | null | undefined },
   link: string | null | undefined,
   sctx: Pick<SourceContext, 'fetch' | 'log'>,
 ): Promise<AtsJobRef | null> {

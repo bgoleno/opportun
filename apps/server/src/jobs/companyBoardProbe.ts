@@ -8,6 +8,8 @@
 // A company with no board is recorded as probed with no counts, so it is not probed again for want
 // of an answer. A provider that is down is retried (AtsDetectTransientError, or the listing's own
 // error), and nothing is stored until it answers.
+import { detectAts, type DetectOptions } from '../lib/atsDetect';
+import { boardConfig, type AtsKind } from '../lib/atsBoard';
 import type { NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -18,9 +20,8 @@ import { adapterBoardLookup } from '../lib/postingSearch';
 import { prefilter } from '../lib/prefilter';
 import { line } from '../lib/promptText';
 import type { UserCtx } from '../repos/base';
-import { boardConfig, detectAts, type AtsKind, type DetectOptions } from './atsDetect';
 import { requireService, type JobHandler } from './registry';
-import { enqueueVendorCheck } from './vendorCheckQueue';
+import { enqueueVendorCheck } from '../lib/vendorCheckQueue';
 
 export const BOARD_PROBE_KIND = 'company.board_probe'; // payload {companyId}
 export const boardProbeDedupeKey = (companyId: string): string =>

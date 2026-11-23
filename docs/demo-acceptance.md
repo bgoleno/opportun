@@ -176,11 +176,93 @@ reset in §3, at minimum).
       days before today, and after a reset the same opportunity should have moved forward with
       it rather than staying pinned to the original seed date.
 
+- [ ] **The reset waits for what is in, and nothing written before it survives it.** Signed in to a
+      shared account, start a change (for example saving a note), and have the nightly reset run at
+      once (or wait for it). The change either finishes before the reset and is then gone, or is
+      refused with you signed out; no half-written copy is left on the reseeded account. A session
+      signed in before the reset is signed out after it (its next request is refused).
+- [ ] **A reset that cannot get in tells you so and tries again.** If requests or jobs are still in
+      after a minute, the reset changes nothing, and the server log says "demo reset waited too long
+      for requests or jobs in flight; not reset, will retry". Check the log after the first
+      nightly reset: that line should be absent.
+- [ ] **An AI call is ended after 40 seconds.** This needs a provider slower than that, so a
+      deployed host cannot check it from the browser alone: against a stub provider that never
+      answers, a tailoring or ranking call ends at 40 seconds and the page shows what it shows when
+      the AI provider fails, and a tailoring chat reply keeps the text it had so far.
+      `apps/server/test/demoAiTimeLimit.test.ts` covers the AI call limit (and
+      `demoResetGate.test.ts` the reset gate); tick this box only if you ran
+      the stub check, and say so in the sign-off if not.
+
 ## 8. Operational visibility, not employer-visible but worth confirming before go-live
 
 - [x] Settings → Jobs shows the nightly reset schedule registered. Its _absence_ here should be
       visible by looking, not something only noticed when the data unexpectedly stops resetting
       (the #270 lesson this requirement exists to avoid repeating).
+
+## 9. Assisted apply
+
+On since [#542](https://github.com/bgoleno/opportun/issues/542) (its slices #544, #545, #546 and
+#547, all on `main`). What a shared account may do is in
+[docs/demo-deployment.md](demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo), and
+the visitor's walkthrough is in the guide's
+[Try assisted apply on the demo](guide/pipeline.md#try-assisted-apply-on-the-demo). The automated
+run of the same path, against a seeded demo server and a stub form, is `apps/web/e2e/demo.spec.ts`.
+These boxes are for the deployed host, with the extension downloaded from it.
+
+**Use a real posting whose form you will not send, or one you mean to apply to with your own
+details.** Nothing below presses the employer's Submit, and nothing below may put the demo's own
+names, addresses or resumes on a real form (the owner's decision 1 on #542).
+
+### A shared account (demo-user1 to demo-user4)
+
+- [ ] Settings > Integrations > Extensions and Connectors offers the extension's download, and
+      the downloaded extension, loaded unpacked, pairs with an **Assisted apply** token minted
+      there with the account's shared password.
+- [ ] An opportunity made from a real Greenhouse posting link (New opportunity, then Find posting
+      on its Details tab, then moved to Interested) offers **Apply on Greenhouse**, with no Final
+      resume needed.
+- [ ] The resume step offers none of the account's resumes and says "On the demo an application
+      carries no resume: attach your own on the employer’s form."
+- [ ] **Your details** starts empty, has no **Save to my profile** ticks, and shows the warning
+      "This is a shared demo account. Anything you enter here is visible to others using it, and
+      is cleared at the nightly reset." So do Settings > Profile and its application details.
+- [ ] With the account's own display name (for example "Demo User 1") as Full name, **Confirm
+      review and open** is refused naming Full name ("this value came with the demo"), and no form
+      opens (a blank tab opens on the click and closes at once).
+- [ ] With the seeded candidate's phone number, `+1 415 555 0134` (the number in the demo
+      resumes' header, written in any punctuation), as the phone number, **Confirm review and open** is
+      refused naming the phone field ("this value came with the demo").
+- [ ] With your own details instead, it opens the posting's Greenhouse form in a new tab, and the
+      extension, opened on that tab, fills your details and attaches no resume. Close the tab
+      without submitting, or submit it yourself if you mean to apply.
+- [ ] Signed in to the same account in a second browser (another visitor), the application is
+      readable on the opportunity, but its details are disabled there (changing a draft started in
+      the other session says "This application was started in another session on this shared demo
+      account"), and an extension paired in that second session is not given it.
+- [ ] On an opportunity's Details tab, the upload under **Attachments** has the notice "This is a
+      shared demo account. A file you attach here can be opened by everyone signed in to this
+      account, and is deleted at the nightly reset." A file attached in one browser opens in
+      another browser signed in to the same account, and is gone after the reset.
+- [ ] In **Settings > Security**, while two-factor sign-in is off, the setup card has the notice
+      "This is a shared demo account. Turning on two-factor sign-in here locks everyone else out of
+      it until the nightly reset: they would need your authenticator to sign in." (Do not turn it
+      on to check; reading the notice is enough.)
+- [ ] After the next nightly reset, the application and both tokens are gone, and the extension
+      paired before it is signed out (its next read gets 401).
+
+### A dedicated account
+
+- [ ] `createDemoAccount.ts` (see
+      [A dedicated account for one person](demo-deployment.md#a-dedicated-account-for-one-person))
+      prints a password that signs the account in.
+- [ ] The account's Attachments upload and Settings > Security two-factor setup show neither of the
+      shared-account notices above.
+- [ ] The account sees no shared-account warning anywhere, and is offered the normal tour and the
+      Get set up checklist ([#576](https://github.com/bgoleno/opportun/issues/576)).
+- [ ] Applying works as on any instance: the resume step offers its own Final resume, **Your
+      details** starts filled from its account and profile, with **Save to my profile** ticks,
+      and the review opens the form.
+- [ ] After the next nightly reset, the account, its application and its token are still there.
 
 ## What this checklist does not cover
 

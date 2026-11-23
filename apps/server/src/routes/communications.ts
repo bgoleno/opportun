@@ -89,8 +89,13 @@ const ListQuery = z.object({
  * capped at MAX_LIMIT so a single request cannot be unbounded; ids that are not the caller's
  * are skipped by the per-message scoping, never touched.
  */
+/** The link the user saw a message under, null for none (#666): required, never assumed. */
+const SeenLink = z.string().min(1).max(64).nullable();
 const BulkBody = z.object({
-  ids: z.array(z.string().min(1).max(64)).min(1).max(MAX_LIMIT),
+  items: z
+    .array(z.object({ id: z.string().min(1).max(64), opportunityId: SeenLink }))
+    .min(1)
+    .max(MAX_LIMIT),
   // Reject only. Bulk reclassify is intentionally not exposed: its link-target 404 cannot be
   // told apart from a not-yours 404 at the bulk layer, so it would miscount. See bulkTriage.
   action: z.object({
@@ -118,6 +123,7 @@ const RejectBody = z.object({
   /** Opts this one note in to prompt refinement; off by default. */
   shareNote: z.boolean().optional(),
   neverIngest: z.enum(['address', 'domain']).optional(),
+  expectedOpportunityId: SeenLink,
 });
 
 const RejectResponseSchema = z.object({
@@ -143,7 +149,11 @@ export async function communicationRoutes(app: FastifyInstance): Promise<void> {
       schema: {
         body: BulkBody,
         response: {
-          200: z.object({ succeeded: z.number().int(), skipped: z.number().int() }),
+          200: z.object({
+            succeeded: z.number().int(),
+            skipped: z.number().int(),
+            changed: z.number().int(),
+          }),
         },
       },
     },
@@ -272,7 +282,13 @@ export async function communicationRoutes(app: FastifyInstance): Promise<void> {
     async (req) => {
       const ctx = requireUser(req);
       if (req.body.confirm !== PURGE_CONFIRMATION) {
-        throw new HttpError(400, 'not_confirmed', `Type ${PURGE_CONFIRMATION} to confirm`);
+        throw new HttpError(
+          400,
+          'not_confirmed',
+          `Type ${PURGE_CONFIRMATION} to confirm`,
+          undefined,
+          { userFacing: true },
+        );
       }
       const what = req.body.what;
       const purgesMail = what !== 'discovery';

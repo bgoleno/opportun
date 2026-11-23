@@ -25,8 +25,6 @@ import {
 import { ATS_REF_KINDS, COMM_CHANNELS, DISCOVERY_SOURCE_KINDS } from '@opportun/core';
 import { getTableName } from 'drizzle-orm';
 import * as schema from '../db/schema';
-import { registeredJobKinds } from '../jobs/registry';
-import { ATS_ALLOW_HOSTS } from '../lib/safeFetch';
 
 /** A closed list of values, or a function returning one (read when a value is checked). */
 type Values = readonly string[] | (() => readonly string[]);
@@ -102,12 +100,40 @@ export type OutboundTarget = (typeof OUTBOUND_TARGETS)[number];
 let fixedHosts: readonly string[] | undefined;
 
 /**
- * Read on first use, not at load: safeFetch imports obs/outbound, which imports this file, so
- * reading ATS_ALLOW_HOSTS while the modules load would find safeFetch still initialising.
+ * The lists the catalog names but other modules own (https://github.com/bgoleno/opportun/issues/764):
+ * the public ATS API hosts (lib/safeFetch.ts) and the registered job kinds (jobs/registry.ts).
+ * Each owner hands its own over as it loads, so the catalog imports neither (the cycle in
+ * docs/architecture.md 6.1). They are read at use, never at this file's load, and a read before
+ * an owner has loaded throws: an entry point that never loads one fails loudly instead of gating
+ * telemetry against a short list.
  */
+let atsHosts: readonly string[] | undefined;
+let jobKinds: (() => readonly string[]) | undefined;
+
+/** lib/safeFetch.ts's ATS_ALLOW_HOSTS, handed over as safeFetch loads. */
+export function provideAtsHosts(hosts: readonly string[]): void {
+  atsHosts = hosts;
+  fixedHosts = undefined;
+}
+
+/** jobs/registry.ts's registeredJobKinds, handed over as the registry loads; read at each use. */
+export function provideJobKinds(source: () => readonly string[]): void {
+  jobKinds = source;
+}
+
 export function fixedServiceHosts(): readonly string[] {
-  fixedHosts ??= serviceHostsWith(ATS_ALLOW_HOSTS);
+  if (atsHosts === undefined) {
+    throw new Error('obs/catalog: the ATS hosts are read before lib/safeFetch.ts has loaded');
+  }
+  fixedHosts ??= serviceHostsWith(atsHosts);
   return fixedHosts;
+}
+
+function registeredKinds(): readonly string[] {
+  if (jobKinds === undefined) {
+    throw new Error('obs/catalog: the job kinds are read before jobs/registry.ts has loaded');
+  }
+  return jobKinds();
 }
 
 const serviceHostsWith = (ats: readonly string[]): readonly string[] => [
@@ -216,8 +242,8 @@ export const ATTRIBUTES = {
   'db.system.name': { kind: 'enum', values: ['sqlite', 'postgresql'] },
   'db.operation.name': { kind: 'enum', values: DB_OPERATIONS },
   'db.collection.name': { kind: 'enum', values: tableNames },
-  'opportun.job.kind': { kind: 'enum', values: () => [...registeredJobKinds(), OTHER] },
-  'opportun.job.outcome': { kind: 'enum', values: ['done', 'retry', 'dead'] },
+  'opportun.job.kind': { kind: 'enum', values: () => [...registeredKinds(), OTHER] },
+  'opportun.job.outcome': { kind: 'enum', values: ['done', 'retry', 'dead', 'discarded'] },
   'opportun.obs.signal': { kind: 'enum', values: SIGNALS },
   'opportun.obs.reason': { kind: 'enum', values: DROP_REASONS },
   // The caller's row id. Local only: export drops it (14.8), and metrics never carry it.
@@ -245,6 +271,7 @@ export const ATTRIBUTES = {
   'opportun.count.described': int,
   'opportun.count.deferred': int,
   'opportun.count.skipped': int,
+  'opportun.count.holders': int,
   'opportun.count.truncated': int,
   'opportun.count.read': int,
   'opportun.count.set': int,
@@ -617,6 +644,7 @@ export const AUDIT_EVENTS = [
   'admin.oauth_provider_configured',
   'admin.oauth_provider_removed',
   'admin.password_reset',
+  'admin.registration_updated',
   'ai.discovery_budget.updated',
   'ai.key.validated',
   'ai.policy.updated',
@@ -815,6 +843,24 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.job.attempt',
     'opportun.job.max_attempts',
   ],
+  // #588: a job that ended the process at its last attempt is not run again on the next start.
+  'a job left running at its last attempt when the process ended: dead': [
+    'opportun.job.id',
+    'opportun.job.kind',
+  ],
+  // qa on #720: one left pending at its limit by the recovery before #588.
+  'a pending job at its attempt limit: dead': ['opportun.job.id', 'opportun.job.kind'],
+  // #618: a shared demo account's job whose account the nightly reset replaced.
+  'job discarded: the demo reset replaced its account': ['opportun.job.id', 'opportun.job.kind'],
+  'job held the demo reset gate to its limit; told to stop': [
+    'opportun.job.id',
+    'opportun.job.kind',
+  ],
+  'a request held the demo reset gate to its limit; ended': [],
+  'a request held the demo reset gate too long before its handler; ended': [],
+  'demo reset waited too long for requests or jobs in flight; not reset, will retry': [
+    'opportun.count.holders',
+  ],
   'healthz database check failed': [],
   'healthz queue lag check failed': [],
   'healthz integrity read failed': [],
@@ -870,6 +916,9 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
     'opportun.count.returned',
   ],
   'sending a ranking batch failed': ['opportun.rank_batch.id'],
+  'a ranking batch was sent after its row went: its removal at the provider is queued': [
+    'opportun.rank_batch.id',
+  ],
   'applying a ranking batch result failed': [
     'opportun.rank_batch.id',
     'opportun.discovery_result.id',
@@ -877,6 +926,9 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'ranking batch results for postings no longer there: their cost is not recorded': [
     'opportun.rank_batch.id',
     'opportun.count.unmatched',
+  ],
+  'ranking batch cleanup: what the batch holds could not be read; read at the cleanup': [
+    'opportun.rank_batch.id',
   ],
   'could not read the message again; classifying on the snippet': [
     'opportun.communication.id',
@@ -887,14 +939,24 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   ],
   // AI
   'opportunity dedupe AI unavailable': ['opportun.dedupe_candidate.id', 'error.type'],
+  'opportunity dedupe AI call failed': ['opportun.dedupe_candidate.id', 'error.type'],
+  'opportunity dedupe AI pass failed on a row': ['opportun.dedupe_candidate.id', 'error.type'],
   'opportunity dedupe AI returned an unrecognized ref': ['opportun.dedupe_candidate.id'],
+  // #742: the row stops being sent to the model; error.type is why its last pass failed.
+  'opportunity dedupe AI gave up on a row at its failure cap': [
+    'opportun.dedupe_candidate.id',
+    'error.type',
+  ],
   'failed to record a streamed AI call': [ATTR.aiTask],
   'could not read the base resume': ['opportun.resume.id'],
   // Accounts and integrations
   'failed to persist a refreshed Google token': ['user.id'],
   'google token exchange failed': [],
   'google token revocation failed': [],
+  'google grant revocation after a failed connect failed': [],
   'oauth sign-in exchange failed': ['opportun.oauth.provider'],
+  'oauth callback failed': ['opportun.oauth.provider'],
+  'google callback failed': [],
 };
 
 export const LOG_MESSAGES: ReadonlyMap<string, readonly AttrKey[]> = new Map(

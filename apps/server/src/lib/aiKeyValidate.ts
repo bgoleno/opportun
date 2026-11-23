@@ -17,7 +17,7 @@ import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { secrets, settings } from '../db/schema';
-import type { UserCtx } from '../repos/base';
+import type { Exec, UserCtx } from '../repos/base';
 import { buildAiDeps, readSetting, writeSetting } from './ai';
 import { notFound } from './errors';
 import { getSecretValue } from './secretBox';
@@ -259,6 +259,15 @@ function workspaceScoped(error: string): string {
     : error;
 }
 
+/**
+ * An Anthropic key is checked with one 1-token call per distinct model the user's policies name
+ * (https://github.com/bgoleno/opportun/issues/828): with the defaults, three (Opus, Sonnet, Haiku).
+ * One call is not enough because only a call to a model proves this key can use that model:
+ * workspace scoping and a refusal for that model (403, 404, 429) answer per model, and Settings
+ * shows each model's answer. A call also shows a key with no credit left, which Anthropic's model
+ * list would pass. A key rejected outright stops at the first call.
+ * test/aiKeySaveRequests.test.ts counts the requests a save sends.
+ */
 async function validateAnthropic(
   apiKey: string,
   policies: ModelPolicy[],
@@ -369,7 +378,7 @@ export async function readKeyValidation(
   return parsed.success ? parsed.data : null;
 }
 
-export async function deleteKeyValidation(db: Db, ctx: UserCtx, secretId: string): Promise<void> {
+export async function deleteKeyValidation(db: Exec, ctx: UserCtx, secretId: string): Promise<void> {
   await db
     .delete(settings)
     .where(

@@ -2,8 +2,11 @@
 // issuecomment-6794239917, "Tests that matter most", and ruling on #441), against a fake batch
 // provider: no provider has a real batch client in this slice. The live call is mocked, every key
 // and posting is made up.
+import { enqueue } from '../src/lib/jobQueue';
+import { rankAnyway, rankBelowCut } from '../src/lib/discoveryIngest';
 import {
   AiUnavailableError,
+  BatchRefusedError,
   estimateBatchRequestUsd,
   resolvePolicy,
   runStructured,
@@ -23,20 +26,24 @@ import {
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
 import { discoveryResults, jobs, rankBatches, secrets, taskRuns, users } from '../src/db/schema';
-import { MULTI_POSTED_PREFIX } from '../src/jobs/discoveryKinds';
+import { MULTI_POSTED_PREFIX } from '../src/lib/jobKinds';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { drainWaitingResults, sweepWaitingResults } from '../src/jobs/discoveryRankWaiting';
-import { DISCOVERY_RUN_KIND, rankAnyway, rankBelowCut } from '../src/jobs/discoveryRun';
+import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import {
   collectRankBatch,
+  RANK_BATCH_CLEANUP_KIND,
   RANK_BATCH_COLLECT_KIND,
   RANK_BATCH_SEND_KIND,
   setRankBatching,
   submitRankBatch,
   sweepRankBatches,
+  cleanupPendingRankBatches,
+  enqueueRankBatchCleanup,
+  rankBatchCleanupJob,
 } from '../src/jobs/rankBatch';
 import { rankBudgetHasRoom } from '../src/jobs/rankBudget';
-import { enqueue } from '../src/jobs/runner';
+import { backoffMs, DEFAULT_KIND_LIMITS } from '../src/jobs/runner';
 import { budgetKey, writeSetting } from '../src/lib/ai';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { UserCtx } from '../src/repos/base';
@@ -59,7 +66,9 @@ import {
   unlinkBatch,
   writeRankBatching,
 } from '../src/repos/rankBatches';
+import { enqueueRankBatchSubmit } from '../src/jobs/rankBatchClient';
 import { useApi } from './api';
+import { withFailingInsert } from './db';
 import type { TestClient } from './isolation';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
@@ -89,6 +98,26 @@ class FakeBatches implements BatchProvider {
   }
   async results(batchId: string): Promise<BatchResultItem[]> {
     return this.answers.get(batchId) ?? [];
+  }
+  /** Every batch id cleanup was asked to remove, in order (#634). */
+  cleaned: string[] = [];
+  /** What each cleanup was told the batch holds (#686: read at the collect). */
+  cleanedRefs: (readonly string[] | undefined)[] = [];
+  /** Thrown by every cleanup call while set: a refused delete. */
+  cleanupError: Error | null = null;
+  /** Every batch id a cancel was asked for (#784). */
+  cancelled: string[] = [];
+  async cancel(batchId: string): Promise<void> {
+    this.cancelled.push(batchId);
+    if (this.states.get(batchId) === 'in_progress') this.states.set(batchId, 'ended');
+  }
+  async cleanupRefs(batchId: string): Promise<string[]> {
+    return [`file-of-${batchId}`];
+  }
+  async cleanup(batchId: string, refs?: readonly string[]): Promise<void> {
+    if (this.cleanupError !== null) throw this.cleanupError;
+    this.cleaned.push(batchId);
+    this.cleanedRefs.push(refs);
   }
   /** Ends the nth batch sent (1-based), each request answered by `answer`. */
   end(n: number, answer: (r: BatchRequest) => BatchResultItem | null): void {
@@ -467,10 +496,38 @@ describe('through a crash at each step: sent once, scored once, costed once', ()
       ledger + batch!.estCostUsd / 3,
       12,
     );
-    expect(await collect(app, a)).toMatchObject({ status: 'collected', ranked: 1 });
+    // The batch's counts (#784): the two applied before the crash and the one applied now. Each
+    // was applied once: three scores, three cost rows.
+    expect(await collect(app, a)).toMatchObject({ status: 'collected', ranked: 3 });
     expect((await results(app, a)).map((r) => r.aiScore)).toEqual([50, 50, 50]);
     expect(await rankRows(app, a)).toHaveLength(3);
     expect(fake!.sent).toHaveLength(1);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/597 (b): two collects of one batch at once. The
+  // first has read the results and not applied any when the second runs to the end; the first then
+  // finds every link taken (takeBatchLink) and applies nothing: each posting scored once, costed once.
+  it('two collects at once: the one that applies second applies nothing', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 2);
+    await submit(app, a);
+    fake!.end(1, succeeded(55));
+    const [batch] = await batchRows(app, a);
+    let second: Awaited<ReturnType<typeof collectRankBatch>> | undefined;
+    setRaceHook(async (p) => {
+      if (p !== 'rankBatch.results_read' || second !== undefined) return;
+      second = { status: 'not_in_flight' }; // marks the hook as used before the nested collect reaches it
+      second = await collectRankBatch(app.db, batch!.id, app.jobs.services);
+    });
+    const first = await collectRankBatch(app.db, batch!.id, app.jobs.services);
+    setRaceHook(undefined);
+    // Both report the batch's rankings (#784), though only the second applied them: two scores and
+    // two cost rows, not four.
+    expect(second).toMatchObject({ status: 'collected', ranked: 2 });
+    expect(first).toMatchObject({ status: 'collected', ranked: 2 });
+    expect((await results(app, a)).map((r) => r.aiScore)).toEqual([55, 55]);
+    expect(await rankRows(app, a)).toHaveLength(2);
   });
 });
 
@@ -516,6 +573,78 @@ describe('a result that does not score the posting', () => {
     for (const kind of ['expired', 'canceled', 'errored'] as const) {
       expect((await getResult(app.db, ctxOf(a), byKind.get(kind)!.id)).aiScore).toBe(61);
     }
+  });
+
+  // #686 (qa): an expired batch was resent at once, every time, with no end. Two resends at most:
+  // the third return from a batch ends the wait, as a live provider failure does (tl on #686).
+  it('a posting a batch hands back three times waits no more: two resends at most', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    // Returned by an expiry, by a batch the provider no longer has, and by no result at all.
+    const returnOnce = [
+      () => fake!.end(fake!.sent.length, (r) => ({ customId: r.customId, kind: 'expired' })),
+      () => fake!.forget(fake!.sent.length),
+      () => fake!.end(fake!.sent.length, () => null),
+    ];
+    for (const [i, giveBack] of returnOnce.entries()) {
+      expect(await submit(app, a), `send ${i + 1}`).toMatchObject({ status: 'submitted' });
+      giveBack();
+      await collect(app, a);
+    }
+    const [r] = await results(app, a);
+    expect(r).toMatchObject({
+      aiScore: null,
+      rankSkipReason: 'provider_error',
+      rankDeferredAt: null,
+    });
+    // Not sent again.
+    expect(fake!.sent).toHaveLength(3);
+    expect(await submit(app, a)).not.toMatchObject({ status: 'submitted' });
+    expect(fake!.sent).toHaveLength(3);
+  });
+
+  it('the count starts again with each new batch wait, so returns from an old wait do not carry over (tl on #715)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    for (let i = 0; i < 2; i++) {
+      await submit(app, a);
+      fake!.end(fake!.sent.length, (r) => ({ customId: r.customId, kind: 'expired' }));
+      await collect(app, a);
+    }
+    const [r] = await results(app, a);
+    // Its wait ends another way (ranked live, say), and weeks later it waits for a batch again.
+    await endBatchWait(app.db, ctxOf(a), r!.id, null);
+    expect(await setBatchWaiting(app.db, ctxOf(a), r!.id)).toBe(true);
+    // One return now is the first of the new wait, not the third.
+    await submit(app, a);
+    fake!.end(fake!.sent.length, (x) => ({ customId: x.customId, kind: 'expired' }));
+    await collect(app, a);
+    expect((await results(app, a))[0]).toMatchObject({ rankSkipReason: 'batch_waiting' });
+    // And a posting already waiting keeps its count when it is asked to wait again.
+    expect(await setBatchWaiting(app.db, ctxOf(a), r!.id)).toBe(true);
+    const [row] = await app.db
+      .select({ n: discoveryResults.rankBatchReturns })
+      .from(discoveryResults)
+      .where(eq(discoveryResults.id, r!.id))
+      .all();
+    expect(row!.n).toBe(1);
+  });
+
+  it('a posting handed back twice is still sent a third time, and ranked then', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    for (let i = 0; i < 2; i++) {
+      await submit(app, a);
+      fake!.end(fake!.sent.length, (r) => ({ customId: r.customId, kind: 'expired' }));
+      await collect(app, a);
+    }
+    expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 1 });
+    fake!.end(3, succeeded(64));
+    await collect(app, a);
+    expect((await results(app, a))[0]).toMatchObject({ aiScore: 64 });
   });
 
   it('a batch the provider no longer has: its postings wait again, as if expired', async () => {
@@ -1051,14 +1180,179 @@ describe('the rules tl found untested (blocking 6)', () => {
     const { app, a } = await boot();
     await batching(app, a);
     await discover(app, a, 2);
-    fake!.submitError = new Error('400 from the provider');
-    expect(await submit(app, a)).toEqual({ status: 'provider_error', returned: 2 });
+    fake!.submitError = new BatchRefusedError('submit', 400, 'Anthropic');
+    expect(await submit(app, a)).toEqual({ status: 'provider_error', returned: 2, answered: true });
     expect((await batchRows(app, a))[0]).toMatchObject({ state: 'failed' });
     for (const r of await results(app, a)) {
       expect(r).toMatchObject({ rankSkipReason: 'batch_waiting', rankBatchId: null });
     }
     fake!.submitError = null;
     expect(await submit(app, a)).toMatchObject({ status: 'submitted', requests: 2 });
+  });
+
+  // #784 (qa's regression pass): a refused send is sent again on the runner's backoff, not only at
+  // the hourly sweep or when the next posting joins.
+  const returnsOf = async (app: FastifyInstance, id: string) =>
+    (
+      await app.db
+        .select({ n: discoveryResults.rankBatchReturns })
+        .from(discoveryResults)
+        .where(eq(discoveryResults.id, id))
+        .all()
+    )[0]!.n;
+
+  // #827 (qa on #820): a refused send had no overall cap; the sweep sent it again every hour, for
+  // good. Each send the runner gives up on (its last attempt, or one with no answer) counts a
+  // return for its postings; at MAX_BATCH_RETURNS their wait ends, as a provider failure.
+  it('a send refused every time stops after 3 sends of 3 attempts, and says why (#827)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    fake!.submitError = new BatchRefusedError('submit', 529, 'Anthropic');
+    const sendJob = async () =>
+      (await app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).all())[0]!;
+    let tries = 0;
+    const realSubmit = fake!.submit.bind(fake!);
+    fake!.submit = async (r) => {
+      tries += 1;
+      return realSubmit(r);
+    };
+    vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
+    for (let send = 1; send <= 3; send++) {
+      // One send: its attempts, each when due.
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        await app.jobs.drain();
+        const job = await sendJob();
+        if (job.status === 'pending') vi.setSystemTime(job.runAt + 1);
+      }
+      const [r] = await results(app, a);
+      if (send < 3) {
+        expect(r).toMatchObject({ rankSkipReason: 'batch_waiting' });
+        expect(await returnsOf(app, r!.id)).toBe(send);
+        // The sweep's next send, as an hour later.
+        await app.db.delete(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).run();
+        await enqueueRankBatchSubmit(app.db, ctxOf(a));
+      }
+    }
+    expect(tries).toBe(9);
+    const [ended] = await results(app, a);
+    expect(ended).toMatchObject({ rankSkipReason: 'provider_error', aiScore: null });
+    // #835 (qa on #840): the last attempt's error says what happened, not "sending it again".
+    const last = await sendJob();
+    expect(last.status).toBe('dead');
+    expect(last.lastError).toContain('1 posting stopped waiting');
+    expect(last.lastError).not.toContain('sending it again');
+  });
+
+  it('a refused attempt the runner will try again counts no return (#827)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    fake!.submitError = new BatchRefusedError('submit', 529, 'Anthropic');
+    vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
+    await app.jobs.drain();
+    const [r] = await results(app, a);
+    expect(r).toMatchObject({ rankSkipReason: 'batch_waiting' });
+    expect(await returnsOf(app, r!.id)).toBe(0);
+  });
+
+  it('a refused send is retried on the backoff: about a minute, then two, then the sweep (#784)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 2);
+    const sendJob = async () =>
+      (await app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_SEND_KIND)).all())[0]!;
+    fake!.submitError = new BatchRefusedError('submit', 529, 'Anthropic');
+    vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
+    await app.jobs.drain();
+    let job = await sendJob();
+    expect(job).toMatchObject({ status: 'pending', attempts: 1 });
+    // The runner's backoff for a first failure: 2 * 30 s, plus up to 10 s of jitter.
+    expect(job.runAt - job.updatedAt).toBeGreaterThanOrEqual(60_000);
+    expect(job.runAt - job.updatedAt).toBeLessThanOrEqual(70_000);
+    expect(job.result).toEqual({ status: 'provider_error', returned: 2, answered: true });
+    // Not before then.
+    await app.jobs.drain();
+    expect(fake!.sent).toEqual([]);
+    // Refused again when due: the second backoff, 4 * 30 s plus up to 10 s (tl on #820).
+    vi.setSystemTime(job.runAt + 1);
+    await app.jobs.drain();
+    job = await sendJob();
+    expect(job).toMatchObject({ status: 'pending', attempts: 2 });
+    expect(job.runAt - job.updatedAt).toBeGreaterThanOrEqual(120_000);
+    expect(job.runAt - job.updatedAt).toBeLessThanOrEqual(130_000);
+    expect(fake!.sent).toEqual([]);
+    // Then sent, once the provider answers again.
+    fake!.submitError = null;
+    vi.setSystemTime(job.runAt + 1);
+    await app.jobs.drain();
+    expect(fake!.sent).toHaveLength(1);
+    job = await sendJob();
+    expect(job).toMatchObject({ status: 'done', lastError: null });
+  });
+
+  // tl on #820: only a refusal on the create call is an answer. A timeout, a stalled read or a body
+  // cut short after a 2xx may have left a batch made: not resent sooner, or it is paid twice.
+  for (const [what, make] of [
+    [
+      'timed out',
+      () =>
+        Object.assign(new Error('The operation was aborted due to timeout'), {
+          name: 'TimeoutError',
+        }),
+    ],
+    ['stalled reading the answer', () => new Error('Anthropic batch: the answer stopped arriving')],
+    ['cut short after a 2xx', () => new SyntaxError('Unexpected end of JSON input')],
+    ['refused on a later call', () => new BatchRefusedError('state', 500, 'Anthropic')],
+  ] as const) {
+    it(`a send that ${what} is not retried sooner: the provider may hold it (#784, tl)`, async () => {
+      const { app, a } = await boot();
+      await batching(app, a);
+      await discover(app, a, 1);
+      fake!.submitError = make();
+      vi.setSystemTime(Date.now() + 5 * 60_000 + 1_000);
+      await app.jobs.drain();
+      const [job] = await app.db
+        .select()
+        .from(jobs)
+        .where(eq(jobs.kind, RANK_BATCH_SEND_KIND))
+        .all();
+      expect(job).toMatchObject({ status: 'done' });
+      expect(job!.result).toEqual({ status: 'provider_error', returned: 1, answered: false });
+    });
+  }
+
+  // tl on #820: a batch still being sent when its row goes (the demo reset deleted the account, or
+  // the stale sweep failed it) has no row to be collected by. Its create answered, so the
+  // provider holds it: a cancel and a delete are queued, as for a deleted account's batch.
+  it("a create that answers after its batch row is gone queues the batch's cancel and removal (#784)", async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    setRaceHook(async (p) => {
+      if (p === 'rankBatch.provider_answered') {
+        await app.db.delete(rankBatches).where(eq(rankBatches.userId, a.userId)).run();
+      }
+    });
+    const out = await submit(app, a);
+    setRaceHook(undefined);
+    const providerId = fake!.sent[0]!.batchId;
+    expect(out).toMatchObject({ status: 'unclaimed', providerBatchId: providerId });
+    const [cleanup] = await app.db
+      .select()
+      .from(jobs)
+      .where(eq(jobs.kind, RANK_BATCH_CLEANUP_KIND))
+      .all();
+    expect(cleanup).toMatchObject({ status: 'pending', userId: null });
+    expect(cleanup!.payload).toMatchObject({
+      userId: a.userId,
+      providerBatchId: providerId,
+      refs: [],
+      cancel: true,
+    });
+    await app.jobs.drain();
+    expect(fake!.cancelled).toEqual([providerId]);
+    expect(fake!.cleaned).toEqual([providerId]);
   });
 
   it('a send queued before batching was turned off hands the wait to live ranking', async () => {
@@ -1150,7 +1444,7 @@ describe('the rules tl found untested (blocking 6)', () => {
     await submit(app, a);
     fake!.end(1, succeeded(95));
     await collect(app, a);
-    const { MULTI_POSTED_SCORE_CAP } = await import('../src/jobs/discoveryKinds');
+    const { MULTI_POSTED_SCORE_CAP } = await import('../src/lib/jobKinds');
     expect((await getResult(app.db, ctxOf(a), r!.id)).aiScore).toBe(MULTI_POSTED_SCORE_CAP);
   });
 
@@ -1317,5 +1611,160 @@ describe('two users batching (sec)', () => {
     const [batchA] = await batchRows(app, a);
     await app.db.delete(rankBatches).where(eq(rankBatches.id, batchA!.id)).run();
     expect((await results(app, a))[0]!.rankBatchId).toBeNull();
+  });
+});
+
+// #634: once a batch's results are applied, what the provider keeps of it is removed, by a job of
+// its own: a refused removal is retried later and never holds up or undoes the results.
+describe("the provider's copy of a collected batch (#634)", () => {
+  async function collected(app: FastifyInstance, c: TestClient) {
+    await batching(app, c);
+    await discover(app, c, 1);
+    expect(await submit(app, c)).toMatchObject({ status: 'submitted' });
+    fake!.end(1, succeeded(77));
+    expect(await collect(app, c)).toMatchObject({ status: 'collected', ranked: 1 });
+    return fake!.sent[0]!.batchId;
+  }
+  const cleanupJobs = (app: FastifyInstance) =>
+    app.db.select().from(jobs).where(eq(jobs.kind, RANK_BATCH_CLEANUP_KIND)).all();
+
+  it('the collect queues a cleanup, which removes the batch at the provider', async () => {
+    const { app, a } = await boot();
+    const providerId = await collected(app, a);
+    const [job] = await cleanupJobs(app);
+    // #686: an instance job (no user, so no user delete takes it), naming everything the delete
+    // needs: whose key, the policy, the provider's id and what it holds. No key, no posting text.
+    expect(job).toMatchObject({
+      status: 'pending',
+      userId: null,
+      payload: {
+        userId: a.userId,
+        providerBatchId: providerId,
+        refs: [`file-of-${providerId}`],
+        policy: expect.objectContaining({ provider: expect.any(String) }),
+      },
+    });
+    expect(fake!.cleaned).toEqual([]);
+    await app.jobs.drain();
+    expect(fake!.cleaned).toEqual([providerId]);
+    expect(fake!.cleanedRefs).toEqual([[`file-of-${providerId}`]]);
+    expect((await cleanupJobs(app))[0]).toMatchObject({ status: 'done' });
+  });
+
+  it('a cleanup refused at its insert rolls the collect back, so a later collect queues it (#686)', async () => {
+    // qa's repro: the cleanup's INSERT refused once. Before #686 the batch was already collected
+    // by then, so no sweep ever came back to it and the provider kept its copy.
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    fake!.end(1, succeeded(77));
+    const undo = await withFailingInsert(app, 'jobs', `NEW.kind = '${RANK_BATCH_CLEANUP_KIND}'`);
+    await expect(collect(app, a)).rejects.toThrow(/injected/);
+    await undo();
+    expect(await cleanupJobs(app)).toEqual([]);
+    // Still in flight: the next collect applies the results again (each once) and queues it.
+    expect(await collect(app, a)).toMatchObject({ status: 'collected' });
+    expect(await cleanupJobs(app)).toHaveLength(1);
+    await app.jobs.drain();
+    expect(fake!.cleaned).toEqual([fake!.sent[0]!.batchId]);
+  });
+
+  // #784 (qa's regression pass): the retried collect said ranked: 0, though the first attempt's
+  // rankings had landed. The counts are the batch's, kept with each result as it is applied.
+  it('a collect retried after a refused cleanup insert reports the rankings that landed (#784)', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 3);
+    await submit(app, a);
+    const [first, second] = fake!.sent[0]!.requests;
+    // Two ranked; the third has no result and waits again.
+    fake!.end(1, (r) =>
+      r.customId === first!.customId || r.customId === second!.customId ? succeeded(70)(r) : null,
+    );
+    const undo = await withFailingInsert(app, 'jobs', `NEW.kind = '${RANK_BATCH_CLEANUP_KIND}'`);
+    await expect(collect(app, a)).rejects.toThrow(/injected/);
+    await undo();
+    expect(await collect(app, a)).toMatchObject({
+      status: 'collected',
+      ranked: 2,
+      returned: 1,
+      errors: 0,
+    });
+  });
+
+  it('a collect that runs twice queues one cleanup (sec on #686)', async () => {
+    const { app, a } = await boot();
+    const providerId = await collected(app, a);
+    const [job] = await cleanupJobs(app);
+    await enqueueRankBatchCleanup(app.db, job!.payload as never);
+    expect(await cleanupJobs(app)).toHaveLength(1);
+    expect(job!.dedupeKey).toContain(providerId);
+  });
+
+  it('its user gone, a cleanup fails closed: no provider call, no other key (sec on #686)', async () => {
+    const { app, a } = await boot();
+    await collected(app, a);
+    // The user is deleted while the cleanup waits (today only the demo reset deletes users).
+    await app.db.delete(users).where(eq(users.id, a.userId)).run();
+    const [before] = await cleanupJobs(app);
+    expect(before, 'the job outlives its user').toMatchObject({ status: 'pending' });
+    await app.jobs.drain();
+    expect(fake!.cleaned).toEqual([]);
+    const [job] = await cleanupJobs(app);
+    expect(job).toMatchObject({ status: 'pending', attempts: 1 });
+    expect(job!.lastError).toMatch(/its user is gone/);
+  });
+
+  it("an account's pending cleanups run before it is deleted: cleanupPendingRankBatches (sec on #686)", async () => {
+    const { app, a } = await boot();
+    const providerId = await collected(app, a);
+    expect(await cleanupPendingRankBatches(app.db, a.userId, app.jobs.services)).toEqual({
+      removed: 1,
+      failed: 0,
+    });
+    expect(fake!.cleaned).toEqual([providerId]);
+    expect((await cleanupJobs(app))[0]).toMatchObject({ status: 'done' });
+  });
+
+  it('a cleanup is tried six times over about half an hour, as the discovery guide says (#686)', () => {
+    expect(rankBatchCleanupJob.maxAttempts).toBe(6);
+    // The waits after the first five tries, with no jitter: 1, 2, 4, 8 and 16 minutes.
+    const waits = [1, 2, 3, 4, 5].map((attempts) => backoffMs(attempts, () => 0));
+    expect(waits).toEqual([1, 2, 4, 8, 16].map((m) => m * 60_000));
+    expect(waits.reduce((a, b) => a + b, 0)).toBe(31 * 60_000);
+  });
+
+  it('cleanups run one at a time (tl on #686)', () => {
+    expect(DEFAULT_KIND_LIMITS[RANK_BATCH_CLEANUP_KIND]).toBe(1);
+  });
+
+  it('a refused removal is retried later, and the applied results stay as they are', async () => {
+    const { app, a } = await boot();
+    const providerId = await collected(app, a);
+    const [r] = await results(app, a);
+    fake!.cleanupError = new Error('OpenAI batch delete: HTTP 500');
+    await app.jobs.drain();
+    const [job] = await cleanupJobs(app);
+    expect(job).toMatchObject({ status: 'pending', attempts: 1 });
+    expect(job!.runAt).toBeGreaterThan(Date.now());
+    expect(job!.lastError).toMatch(/HTTP 500/);
+    // The ranking it applied is untouched.
+    expect(await getResult(app.db, ctxOf(a), r!.id)).toMatchObject({ aiScore: 77 });
+    // Later, the provider answers again: removed.
+    fake!.cleanupError = null;
+    vi.setSystemTime(job!.runAt + 1);
+    await app.jobs.drain();
+    expect(fake!.cleaned).toEqual([providerId]);
+  });
+
+  it('a batch the provider no longer has queues no cleanup', async () => {
+    const { app, a } = await boot();
+    await batching(app, a);
+    await discover(app, a, 1);
+    await submit(app, a);
+    fake!.forget(1);
+    expect(await collect(app, a)).toMatchObject({ status: 'gone' });
+    expect(await cleanupJobs(app)).toEqual([]);
   });
 });

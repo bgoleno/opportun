@@ -55,16 +55,93 @@ function setup(routes: Record<string, unknown>) {
 }
 
 describe('Find posting', () => {
-  it('offers Find posting only while the description is empty', async () => {
+  // #756 (tl): offered until the posting is confirmed, a described one included, since Find
+  // posting is what confirms it; a confirmed posting with a description has nothing to find.
+  it('offers Find posting while the description is empty or the posting is not confirmed', async () => {
     setup({});
     const { unmount } = renderWithProviders(<DetailsPanel opp={BARE} />);
     expect(await screen.findByRole('button', { name: /find posting/i })).toBeInTheDocument();
     unmount();
 
     setup({});
-    renderWithProviders(<DetailsPanel opp={{ ...BARE, descriptionMd: 'already here' }} />);
+    const described = renderWithProviders(
+      <DetailsPanel opp={{ ...BARE, descriptionMd: 'my own notes', postingState: null }} />,
+    );
+    expect(await screen.findByText('my own notes')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /find posting/i })).toBeInTheDocument();
+    described.unmount();
+
+    setup({});
+    renderWithProviders(
+      <DetailsPanel opp={{ ...BARE, descriptionMd: 'already here', postingState: 'confirmed' }} />,
+    );
     expect(await screen.findByText('already here')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /find posting/i })).not.toBeInTheDocument();
+  });
+
+  // #852 (qa; tl on #865): while a background check is reading the board, the server refuses a
+  // second search, and the panel says why. The button stays enabled: a 'searching' left by a
+  // check that died must not take Find posting away, and the server knows which it is.
+  it('a Find posting refused while a check runs says why (#852)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: { error: { code: 'posting_searching' } },
+      }),
+    });
+    renderWithProviders(<DetailsPanel opp={{ ...BARE, postingState: 'searching' }} />);
+    const button = await screen.findByRole('button', { name: /find posting/i });
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    expect(await screen.findByText(/still checking this posting/i)).toBeInTheDocument();
+  });
+
+  // qa on #865: a click as a background check ends. The click says what state the page saw, and
+  // a posting confirmed since is answered as it is, said so, with nothing attached again.
+  it('a click says the state it saw, and a posting confirmed meanwhile is said so (#852)', async () => {
+    const api = setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'already_confirmed',
+        opportunity: { ...BARE, postingState: 'confirmed' },
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={{ ...BARE, postingState: 'searching' }} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await screen.findByText('Already confirmed')).toBeInTheDocument();
+    const call = api.calls.find((c: ApiCall) => c.path === '/opportunities/opp-1/find-posting');
+    expect(call?.search).toContain('seen=searching');
+  });
+
+  // #835 (qa on #830): a board that could not be read says so and offers a retry; it is never
+  // "no close match".
+  it('a board that cannot be read says so, with Try again (#835)', async () => {
+    const api = setup({ 'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' } });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+
+    expect(await screen.findByText(/couldn't read the company's board/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no close match/i)).not.toBeInTheDocument();
+    const finds = () =>
+      api.calls.filter((c: ApiCall) => c.path === '/opportunities/opp-1/find-posting').length;
+    expect(finds()).toBe(1);
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(finds()).toBe(2));
+  });
+
+  it('a Refetch that changes nothing says so, not "Posting attached" (#835)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        unchanged: true,
+        opportunity: BARE,
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await screen.findByText('Nothing changed')).toBeInTheDocument();
+    expect(screen.queryByText('Posting attached')).not.toBeInTheDocument();
   });
 
   it('attaches a single match without opening the picker', async () => {
@@ -172,6 +249,26 @@ describe('Find posting', () => {
 
     expect(within(dialog).getByText('Senior Product Manager, SOC Experience')).toBeInTheDocument();
     expect(within(dialog).queryByText('Staff Product Manager, SIEM')).not.toBeInTheDocument();
+  });
+
+  // #812 (qa on #804): one candidate is not "more than one"; the server's note says why it is
+  // offered rather than attached.
+  it('one candidate is offered as one, with the reason the server gives', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'candidates',
+        candidates: [CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003')],
+        board: [CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003')],
+        note: "The job this opportunity names isn't on the company's board now.",
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByText(/more than one posting/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/one posting on the .* board may match/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/isn't on the company's board now/i)).toBeInTheDocument();
   });
 
   it('says a referenced posting needs checking when it is not the company board', async () => {

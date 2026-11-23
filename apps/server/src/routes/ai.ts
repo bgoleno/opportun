@@ -48,7 +48,7 @@ import { enqueueRankWaiting } from '../jobs/discoveryRankWaiting';
 import { rankBudgetHasRoom } from '../jobs/rankBudget';
 import { rankBudgetSkips, usageRollup } from '../repos/taskRuns';
 import { IdParams } from './common';
-import { DISCOVERY_RANK_KIND } from '../jobs/discoveryKinds';
+import { DISCOVERY_RANK_KIND } from '../lib/jobKinds';
 import { resumeAfterKeyChange } from '../jobs/discoveryRankWaiting';
 
 const TaskKeySchema = z.enum(TASK_KEYS);
@@ -219,6 +219,8 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
           409,
           'proposal_use_accept',
           'Accept or discard the proposed refinement instead of activating it.',
+          undefined,
+          { userFacing: true },
         );
       }
       const activated = await activatePrompt(db, ctx, req.params.id);

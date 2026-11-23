@@ -9,6 +9,355 @@ when the milestone's work was merged.
 
 ## Unreleased
 
+## 0.5.0 (2026-11-22)
+
+This release includes everything in
+[v0.4.0](https://github.com/bgoleno/opportun/releases/tag/v0.4.0), tagged on 2026-11-14, and what
+merged after it.
+
+### Upgrading
+
+- **A job that was running when the server stopped is no longer run again on every restart.** At
+  its last attempt it is marked dead, with "orphaned: the process ended while its last attempt
+  (n of max) ran" as its error; with attempts left, it waits out the usual retry delay first. A job
+  allowed a single attempt (`maxAttempts: 1`) is therefore dead after one crash. A job left waiting
+  at its attempt limit by an earlier version is marked dead on the first start after upgrading,
+  and a schedule it belonged to runs again
+  ([#588](https://github.com/bgoleno/opportun/issues/588); PR
+  [#720](https://github.com/bgoleno/opportun/pull/720)).
+- **Two new database indexes, added on boot like any migration.** One on the jobs table (SQLite
+  migration 0073, Postgres 0055) keeps **Settings > Jobs** quick as the job history grows, and the
+  dashboard no longer counts the whole timeline it does not show. One on the observability metric
+  points (SQLite 0074, Postgres 0056) serves the point cap
+  ([#592](https://github.com/bgoleno/opportun/issues/592),
+  [#594](https://github.com/bgoleno/opportun/issues/594); PRs
+  [#795](https://github.com/bgoleno/opportun/pull/795),
+  [#797](https://github.com/bgoleno/opportun/pull/797)).
+- **The Apple Mail connector's `init` handles a change of server.** Given a server address other
+  than the saved one, it resets its sync position, so the new server gets the whole lookback
+  window, and it no longer offers the saved device token: it asks for a token for the new server
+  and says why. `init` can also read the token from a file (`--token-file`, which must be readable
+  by you only) or from standard input (`--token-stdin`), so it stays out of shell history
+  ([#650](https://github.com/bgoleno/opportun/issues/650),
+  [#702](https://github.com/bgoleno/opportun/issues/702),
+  [#655](https://github.com/bgoleno/opportun/issues/655),
+  [#699](https://github.com/bgoleno/opportun/issues/699); PRs
+  [#673](https://github.com/bgoleno/opportun/pull/673),
+  [#745](https://github.com/bgoleno/opportun/pull/745),
+  [#695](https://github.com/bgoleno/opportun/pull/695),
+  [#740](https://github.com/bgoleno/opportun/pull/740)).
+
+### Opportunities, posting links and the board
+
+- **Find posting stays available until a posting is confirmed, and confirming one keeps a
+  description you wrote yourself.** A posting you described but never checked is confirmed from
+  the company's board with your text kept
+  ([#756](https://github.com/bgoleno/opportun/issues/756); PR
+  [#804](https://github.com/bgoleno/opportun/pull/804)).
+- **Refetch on a posting you described yourself checks the company's board again and keeps your
+  description.** Only the link and the job's identity are updated, and the timeline says your
+  description was kept ([#812](https://github.com/bgoleno/opportun/issues/812); PR
+  [#830](https://github.com/bgoleno/opportun/pull/830)).
+- **Find posting says when a company's board couldn't be read, and offers to try again.** That is
+  no longer reported as "no close match". A Refetch that finds nothing new says "Nothing changed",
+  and the timeline says what each check did
+  ([#835](https://github.com/bgoleno/opportun/issues/835); PR
+  [#860](https://github.com/bgoleno/opportun/pull/860)).
+- **Find posting waits while Opportun is already checking the company's board for that
+  posting**, and says why, so a posting is never attached twice. A click that lands just after
+  that check confirmed the posting says "Already confirmed" and changes nothing, and the page
+  shows the check's result on its own once it lands
+  ([#852](https://github.com/bgoleno/opportun/issues/852); PR
+  [#865](https://github.com/bgoleno/opportun/pull/865)).
+- **A background posting check no longer overwrites a description you save while it runs.** It
+  leaves your text as it is, marks the posting for review and says why
+  ([#851](https://github.com/bgoleno/opportun/issues/851); PR
+  [#855](https://github.com/bgoleno/opportun/pull/855)).
+- **Find posting writes a timeline entry when it recognises a job from its own careers-page link**
+  ([#813](https://github.com/bgoleno/opportun/issues/813); PR
+  [#847](https://github.com/bgoleno/opportun/pull/847)).
+- **Posting-link saves: the company's own boards, the later of two saves, and a check that runs
+  out of time.** Changing an opportunity's company and posting link together checks the new
+  company's Greenhouse boards, newest first, within 5 seconds in all, and a careers-page job link
+  is re-checked against the new company. Of two quick saves the later one is kept, a slow board no
+  longer stops the others being checked, and a check that ran out of time finishes in the
+  background. Cancelling the link editor while a save is still running says how the save ended,
+  naming its link ([#598](https://github.com/bgoleno/opportun/issues/598),
+  [#685](https://github.com/bgoleno/opportun/issues/685),
+  [#737](https://github.com/bgoleno/opportun/issues/737),
+  [#785](https://github.com/bgoleno/opportun/issues/785); PRs
+  [#633](https://github.com/bgoleno/opportun/pull/633),
+  [#714](https://github.com/bgoleno/opportun/pull/714),
+  [#787](https://github.com/bgoleno/opportun/pull/787),
+  [#805](https://github.com/bgoleno/opportun/pull/805)).
+
+- **On the pipeline board, with Dismissed expanded, a keyboard drag names the right column** and
+  steps left and right through every column
+  ([#833](https://github.com/bgoleno/opportun/issues/833); PR
+  [#844](https://github.com/bgoleno/opportun/pull/844)).
+
+### Inbox
+
+- **A tab with more than 200 messages pages through all of them**, and says how many are shown of
+  the total ([#646](https://github.com/bgoleno/opportun/issues/646); PR
+  [#700](https://github.com/bgoleno/opportun/pull/700)).
+- **After Sync now, new mail, the tab counts and the sync time appear without a reload**
+  ([#645](https://github.com/bgoleno/opportun/issues/645); PR
+  [#668](https://github.com/bgoleno/opportun/pull/668)).
+- **Reject asks first and never takes a message you did not see.** Bulk Reject says how many
+  messages it will remove for good, takes only rows on screen, and its Confirm waits while the list
+  loads a new filter. A reject leaves alone a message that was linked or moved in another tab or
+  session since you selected it, and says how many were left as they are. A single reject always
+  says whether it worked, and a refusal explains itself. A failed refresh keeps your selection,
+  and a confirmation closes with a message when a refresh changes what it would reject
+  ([#647](https://github.com/bgoleno/opportun/issues/647),
+  [#666](https://github.com/bgoleno/opportun/issues/666),
+  [#678](https://github.com/bgoleno/opportun/issues/678),
+  [#758](https://github.com/bgoleno/opportun/issues/758),
+  [#841](https://github.com/bgoleno/opportun/issues/841); PRs
+  [#659](https://github.com/bgoleno/opportun/pull/659),
+  [#672](https://github.com/bgoleno/opportun/pull/672),
+  [#712](https://github.com/bgoleno/opportun/pull/712),
+  [#838](https://github.com/bgoleno/opportun/pull/838),
+  [#864](https://github.com/bgoleno/opportun/pull/864)).
+- **A failed Ignore says so, and a filter that matches nothing says "No messages match these
+  filters"** instead of reading as an empty inbox
+  ([#652](https://github.com/bgoleno/opportun/issues/652); PR
+  [#706](https://github.com/bgoleno/opportun/pull/706)).
+
+### Referrals and contacts
+
+- **The AI ranking of who could refer you is kept until something it depends on changes**: a
+  contact who could match, the opportunity or its company, the prompt or the model. The list shows
+  when it was ranked, with a **Re-rank** button for a fresh one, and only contacts that can match
+  are read ([#590](https://github.com/bgoleno/opportun/issues/590); PR
+  [#640](https://github.com/bgoleno/opportun/pull/640)).
+- **The Referrals tab keeps up with your contacts.** It shows a contact you just added, renamed or
+  deleted the next time it opens, and a LinkedIn or contacts import followed to the end on
+  **Settings > Import/Export** refreshes it and the network list at once. A referral ask shows the
+  contact's current name, or marks them removed. A used-up AI budget says so instead of "AI is
+  unavailable"
+  ([#651](https://github.com/bgoleno/opportun/issues/651),
+  [#694](https://github.com/bgoleno/opportun/issues/694); PRs
+  [#688](https://github.com/bgoleno/opportun/pull/688),
+  [#734](https://github.com/bgoleno/opportun/pull/734)).
+- **Deleting a contact drops each kept referral ranking that names them**, and the list is
+  ranked again the next time it opens
+  ([#710](https://github.com/bgoleno/opportun/issues/710); PR
+  [#718](https://github.com/bgoleno/opportun/pull/718)).
+- **A contact's LinkedIn link must be a linkedin.com address**
+  ([#655](https://github.com/bgoleno/opportun/issues/655); PR
+  [#695](https://github.com/bgoleno/opportun/pull/695)).
+
+### Browser extension, assisted apply and the Mail connector
+
+- **The extension's buttons say what they are doing, and give up after 30 seconds** with a clear
+  message when the server does not answer. Focus comes back to the button, the fill report is
+  announced, an invalid settings field is marked, and a timeout is announced once. It says the
+  server may still have saved something only when something was sent
+  ([#648](https://github.com/bgoleno/opportun/issues/648),
+  [#783](https://github.com/bgoleno/opportun/issues/783); PRs
+  [#713](https://github.com/bgoleno/opportun/pull/713),
+  [#798](https://github.com/bgoleno/opportun/pull/798)).
+- **The fill report says why the resume was not attached** (still being prepared, could not be
+  downloaded, or not a usable PDF), and when it left a matching list option alone because of
+  where it sits on the form. After a capture, the extension links to the opportunity or contact
+  it saved
+  ([#653](https://github.com/bgoleno/opportun/issues/653),
+  [#738](https://github.com/bgoleno/opportun/issues/738); PRs
+  [#717](https://github.com/bgoleno/opportun/pull/717),
+  [#761](https://github.com/bgoleno/opportun/pull/761)).
+- **The extension checks a device token's shape exactly as the server does, and warns when a
+  plain-http server address would carry the token unencrypted.** Only loopback names count as
+  local for that warning ([#655](https://github.com/bgoleno/opportun/issues/655),
+  [#699](https://github.com/bgoleno/opportun/issues/699); PRs
+  [#695](https://github.com/bgoleno/opportun/pull/695),
+  [#740](https://github.com/bgoleno/opportun/pull/740)).
+- **Assisted apply fills "How did you hear about this role?" with your reviewed answer** when you
+  gave one, and pages for application systems the extension does not fill no longer read your
+  device tokens ([#595](https://github.com/bgoleno/opportun/issues/595); PR
+  [#674](https://github.com/bgoleno/opportun/pull/674)).
+- **At handoff, assisted apply opens only a page that names the job in its own path, exactly as
+  checked, and the form filler never clicks a list option inside a link or a label**
+  (PR [#641](https://github.com/bgoleno/opportun/pull/641)).
+- **The Apply panel says what to do, or why it can't apply yet, for each posting state**
+  ([#738](https://github.com/bgoleno/opportun/issues/738); PR
+  [#761](https://github.com/bgoleno/opportun/pull/761)).
+- **The Apple Mail connector no longer stops syncing for good when the server refuses one
+  message.** It skips that message, says which, and sends the rest
+  ([#649](https://github.com/bgoleno/opportun/issues/649); PR
+  [#680](https://github.com/bgoleno/opportun/pull/680)).
+
+### Sign-in, settings and errors
+
+- **About sixty refusals explain themselves in words**, instead of "Request failed (code)",
+  including a step refused because your password changed during it
+  ([#743](https://github.com/bgoleno/opportun/issues/743),
+  [#750](https://github.com/bgoleno/opportun/issues/750); PRs
+  [#753](https://github.com/bgoleno/opportun/pull/753),
+  [#774](https://github.com/bgoleno/opportun/pull/774),
+  [#832](https://github.com/bgoleno/opportun/pull/832)).
+- **A sign-in that cannot finish lands on an Opportun page.** Signing in with two-factor
+  authentication says when the password was changed during the sign-in, and a sign-in, link or
+  Google connect that fails at its last step lands on an app page with an error, not an error page
+  ([#662](https://github.com/bgoleno/opportun/issues/662),
+  [#853](https://github.com/bgoleno/opportun/issues/853); PRs
+  [#741](https://github.com/bgoleno/opportun/pull/741),
+  [#873](https://github.com/bgoleno/opportun/pull/873)).
+- **Changing a sign-in provider asks for the admin's password**, as turning registration on or off
+  does, and switching registration is audited
+  ([#853](https://github.com/bgoleno/opportun/issues/853); PRs
+  [#731](https://github.com/bgoleno/opportun/pull/731),
+  [#873](https://github.com/bgoleno/opportun/pull/873)).
+- **Two-factor setup and an admin's password reset take effect only while the password you just
+  entered is still current** (PR [#643](https://github.com/bgoleno/opportun/pull/643)).
+- **A credential or settings change whose audit record cannot be written now changes nothing,
+  and a removal or switch-off still takes effect, recorded right after.** That covers sign-in,
+  registration, password resets (from the command line and by an admin), device tokens, stored
+  secrets, Google, sign-in providers, telemetry export, the Collect switch and the Reactive Resume
+  key. A sign-in cookie is set only once its session is recorded, and an audit or settings event
+  is reported only once its change has committed
+  ([#661](https://github.com/bgoleno/opportun/issues/661),
+  [#779](https://github.com/bgoleno/opportun/issues/779),
+  [#802](https://github.com/bgoleno/opportun/issues/802),
+  [#807](https://github.com/bgoleno/opportun/issues/807),
+  [#819](https://github.com/bgoleno/opportun/issues/819),
+  [#824](https://github.com/bgoleno/opportun/issues/824),
+  [#846](https://github.com/bgoleno/opportun/issues/846); PRs
+  [#723](https://github.com/bgoleno/opportun/pull/723),
+  [#801](https://github.com/bgoleno/opportun/pull/801),
+  [#815](https://github.com/bgoleno/opportun/pull/815),
+  [#822](https://github.com/bgoleno/opportun/pull/822),
+  [#826](https://github.com/bgoleno/opportun/pull/826),
+  [#836](https://github.com/bgoleno/opportun/pull/836),
+  [#854](https://github.com/bgoleno/opportun/pull/854)).
+- **Export and import keep a closed opportunity's closed reason**, an export from an older version
+  still imports, and the Settings guide says what an import brings back and what stays only in the
+  export ([#736](https://github.com/bgoleno/opportun/issues/736); PR
+  [#755](https://github.com/bgoleno/opportun/pull/755)).
+- **The command-line pepper refusal, for a database whose server has not recorded its version,
+  says to restart the server first** ([#635](https://github.com/bgoleno/opportun/issues/635); PR
+  [#746](https://github.com/bgoleno/opportun/pull/746)).
+
+### AI, jobs and fetching
+
+- **The daily AI duplicate check no longer gets stuck.** Pairs it passes over go behind the rest,
+  an error on one pair skips that pair and the pass goes on, and a pair whose check keeps failing,
+  at the provider or with a malformed answer, stops being sent to the AI after three tries and
+  stays as it is ([#593](https://github.com/bgoleno/opportun/issues/593),
+  [#687](https://github.com/bgoleno/opportun/issues/687),
+  [#742](https://github.com/bgoleno/opportun/issues/742); PRs
+  [#644](https://github.com/bgoleno/opportun/pull/644),
+  [#701](https://github.com/bgoleno/opportun/pull/701),
+  [#751](https://github.com/bgoleno/opportun/pull/751)).
+- **Each user gets a fair share of a job board host.** One user's burst of board lookups no longer
+  makes other users' lookups to the same board time out. The nightly board probe no longer stops a
+  vendor for everyone because of a wait on this server, and one user's failing companies can stop
+  it for everyone at most once a week
+  ([#617](https://github.com/bgoleno/opportun/issues/617); PR
+  [#667](https://github.com/bgoleno/opportun/pull/667)).
+- **Observability: a long workflow's trace keeps its root span, and a failed metrics write is
+  counted as dropped** ([#594](https://github.com/bgoleno/opportun/issues/594); PR
+  [#797](https://github.com/bgoleno/opportun/pull/797)).
+- **Moving an installation onto Postgres (`copyToPostgres.ts`) keeps a JSON key named
+  `__proto__`** instead of dropping it
+  ([#587](https://github.com/bgoleno/opportun/issues/587); PR
+  [#669](https://github.com/bgoleno/opportun/pull/669)).
+- **Batch ranking, still behind the hidden setting.** It gains an Anthropic batch client, written
+  from the API reference with no real call. The provider's copy of a batch is removed once its
+  results are applied, even after a crash or an account reset, each provider call has its own
+  time limit and the results answer is read within a size and time bound. A refused batch is sent
+  again within minutes and stops after nine tries, with the postings saying why, and a retried
+  collect reports the rankings that landed
+  ([#509](https://github.com/bgoleno/opportun/issues/509),
+  [#634](https://github.com/bgoleno/opportun/issues/634),
+  [#686](https://github.com/bgoleno/opportun/issues/686),
+  [#784](https://github.com/bgoleno/opportun/issues/784),
+  [#827](https://github.com/bgoleno/opportun/issues/827); PRs
+  [#534](https://github.com/bgoleno/opportun/pull/534),
+  [#657](https://github.com/bgoleno/opportun/pull/657),
+  [#715](https://github.com/bgoleno/opportun/pull/715),
+  [#735](https://github.com/bgoleno/opportun/pull/735),
+  [#820](https://github.com/bgoleno/opportun/pull/820),
+  [#840](https://github.com/bgoleno/opportun/pull/840)).
+
+### Demo
+
+- **On a demo server, an AI call stops after 40 seconds, and ends before its request's hold on the
+  nightly reset runs out**, so a request that began before the reset writes nothing after it. The
+  demo deployment page says what the reset's protection covers, and that the 20 s and 40 s limits
+  apply to dedicated accounts too ([#656](https://github.com/bgoleno/opportun/issues/656),
+  [#684](https://github.com/bgoleno/opportun/issues/684); PRs
+  [#670](https://github.com/bgoleno/opportun/pull/670),
+  [#704](https://github.com/bgoleno/opportun/pull/704)).
+- **On the demo's shared accounts, the attachment upload and two-factor setup say what they mean
+  on a shared login, and the invented candidate has a phone number that is refused in any field**,
+  however it is typed: with or without the country code, the 011 prefix or an extension. The demo
+  deployment and acceptance pages list the notices, the phone and checks for the reset gate and
+  the 40 s limit ([#671](https://github.com/bgoleno/opportun/issues/671),
+  [#681](https://github.com/bgoleno/opportun/issues/681),
+  [#682](https://github.com/bgoleno/opportun/issues/682),
+  [#726](https://github.com/bgoleno/opportun/issues/726),
+  [#782](https://github.com/bgoleno/opportun/issues/782); PRs
+  [#676](https://github.com/bgoleno/opportun/pull/676),
+  [#721](https://github.com/bgoleno/opportun/pull/721),
+  [#725](https://github.com/bgoleno/opportun/pull/725),
+  [#762](https://github.com/bgoleno/opportun/pull/762),
+  [#806](https://github.com/bgoleno/opportun/pull/806)).
+
+### Docs, security policy and supply chain
+
+- **`SECURITY.md` says that a message pushed through `mail:push` can mark an application confirmed
+  by email**, that Opportun verifies no SPF, DKIM or DMARC result, and how to undo it, and its
+  threat model covers what shipped since 0.4.0. It also says how audit records commit with what
+  they record, which error text reaches a client, that the test-support switches are refused in
+  production, and what CI pins and scans
+  ([#522](https://github.com/bgoleno/opportun/issues/522),
+  [#703](https://github.com/bgoleno/opportun/issues/703),
+  [#845](https://github.com/bgoleno/opportun/issues/845); PRs
+  [#548](https://github.com/bgoleno/opportun/pull/548),
+  [#708](https://github.com/bgoleno/opportun/pull/708),
+  [#848](https://github.com/bgoleno/opportun/pull/848)).
+- **Guides: the Inbox's Reject, filters and bulk reject, the Referrals ranking and Re-rank, the
+  review limit, and Tailor again after a copy is marked Submitted.** The Inbox guide covers
+  Reject, Not spam, the filter bar and bulk reject, and the token step names the required
+  **Name**. The Network guide describes the kept ranking. The Settings guide says the review limit
+  is any whole number from 1 up to the server's limit, and the Pipeline guide's **Tailor again**
+  covers a copy marked Submitted. The guide's previous and next links follow its contents, and the
+  connector's `init` help and the install guide say which questions `init` asks
+  ([#541](https://github.com/bgoleno/opportun/issues/541),
+  [#637](https://github.com/bgoleno/opportun/issues/637),
+  [#654](https://github.com/bgoleno/opportun/issues/654),
+  [#709](https://github.com/bgoleno/opportun/issues/709); PRs
+  [#543](https://github.com/bgoleno/opportun/pull/543),
+  [#658](https://github.com/bgoleno/opportun/pull/658),
+  [#660](https://github.com/bgoleno/opportun/pull/660),
+  [#711](https://github.com/bgoleno/opportun/pull/711)).
+- **A new `docs/architecture.md`**: diagrams of the system, its packages, the server's layers and
+  its trust boundaries, an assessment of the layering, and what a multi-tenant hosted service would
+  need ([#757](https://github.com/bgoleno/opportun/issues/757); PR
+  [#759](https://github.com/bgoleno/opportun/pull/759)).
+- **Supply chain and CI.** Dependabot keeps the pinned actions current and proposes only digest,
+  minor or patch updates of the image's Node 22 base. pnpm is installed at a hash-checked release,
+  the image's OS packages are scanned weekly, and the image's base, the lockfile scanner and CI's
+  Postgres and Playwright images are pinned by digest, with a test that every image a workflow
+  runs is. CI checkouts no longer keep a token, and a pull request's `security` label is decided by
+  the main branch's own workflow, so a pull request can't remove its own label
+  ([#619](https://github.com/bgoleno/opportun/issues/619),
+  [#663](https://github.com/bgoleno/opportun/issues/663),
+  [#683](https://github.com/bgoleno/opportun/issues/683),
+  [#728](https://github.com/bgoleno/opportun/issues/728),
+  [#733](https://github.com/bgoleno/opportun/issues/733),
+  [#800](https://github.com/bgoleno/opportun/issues/800); PRs
+  [#642](https://github.com/bgoleno/opportun/pull/642),
+  [#689](https://github.com/bgoleno/opportun/pull/689),
+  [#705](https://github.com/bgoleno/opportun/pull/705),
+  [#730](https://github.com/bgoleno/opportun/pull/730),
+  [#796](https://github.com/bgoleno/opportun/pull/796),
+  [#818](https://github.com/bgoleno/opportun/pull/818)).
+
+### Earlier in this release
+
 - **Changing your password can also sign out your devices, and does so by default.** In
   **Settings > Security**, the password form has a checkbox, **Also sign out the browser extension
   and the Mail connector**, checked by default. It revokes your device tokens as part of the
@@ -119,10 +468,13 @@ when the milestone's work was merged.
   and starting again after an expired review carries nothing over. A value that came with the
   demo is refused by field name, for example "Email: this value came with the demo. Enter your
   own, or leave the field empty. Nothing was opened.", with a link back to the details step.
+  On the review step of an application with no resume, the tick no longer mentions one: "I have
+  read my answers, and I will press Submit myself on _host_."
   Dedicated demo accounts and instances that are not the demo see none of this
-  ([#546](https://github.com/bgoleno/opportun/issues/546); PR
-  [#575](https://github.com/bgoleno/opportun/pull/575)).
-
+  ([#546](https://github.com/bgoleno/opportun/issues/546),
+  [#577](https://github.com/bgoleno/opportun/issues/577); PRs
+  [#575](https://github.com/bgoleno/opportun/pull/575),
+  [#600](https://github.com/bgoleno/opportun/pull/600)).
 - **The extension's Greenhouse filler never clicks a list option inside a link or button, and it
   stops if the page moves.** An option with a link, button, label, area or summary between it
   and its list is now refused, since a click there would follow the link or press the control
@@ -141,6 +493,99 @@ when the milestone's work was merged.
   `invalid_credentials`) and the audit entry records `password_changed`
   ([#561](https://github.com/bgoleno/opportun/issues/561); PR
   [#571](https://github.com/bgoleno/opportun/pull/571)).
+- **A password reset also unlinks the account's sign-in providers.** The administrator's reset
+  (**Settings > Users**) and the command-line reset now unlink every Google, GitHub and LinkedIn
+  sign-in linked to the account, and say which ones: the temporary-password dialog names them,
+  and the command prints them on stderr (stdout is still the password alone), so a provider
+  someone else linked cannot sign in after the reset. Changing your own password keeps your
+  providers. A provider link, or a provider sign-in, that was in flight when the reset ran now
+  writes nothing ([#573](https://github.com/bgoleno/opportun/issues/573); PR
+  [#602](https://github.com/bgoleno/opportun/pull/602)).
+- **On the demo, an account made for one person gets the normal welcome tour and the "Get set
+  up" checklist.** The demo's shared accounts keep the view-only tour
+  ([#576](https://github.com/bgoleno/opportun/issues/576); PR
+  [#586](https://github.com/bgoleno/opportun/pull/586)).
+- **The security policy and the design documents now describe the demo's shared accounts.**
+  `SECURITY.md` lists what assisted apply allows on them and the trade-offs the owner accepted,
+  as a deliberate deviation, and the assisted apply design documents, the ADR and
+  `docs/design.md` no longer say it is off on the demo
+  ([#585](https://github.com/bgoleno/opportun/issues/585); PR
+  [#601](https://github.com/bgoleno/opportun/pull/601)).
+- **Resume flow: forms opened in place take focus and can be cancelled, every step change is
+  announced, and finished steps link to what they made.** The forms for registering a base resume
+  and for recording that you sent something focus their first field, and **Cancel** closes one and
+  returns focus to the button that opened it. A change of place is announced once, a repeat of
+  the same message included, and the message clears after a few seconds. A finished step links to
+  what it made
+  ([#596](https://github.com/bgoleno/opportun/issues/596); PR
+  [#609](https://github.com/bgoleno/opportun/pull/609)).
+- **Moving or reordering a card on the pipeline board no longer downloads every opportunity
+  again, so drags stay quick on a large board.** A stage change or a reorder now refreshes the
+  other lists and leaves the board's own list as it is
+  ([#589](https://github.com/bgoleno/opportun/issues/589); PR
+  [#621](https://github.com/bgoleno/opportun/pull/621)).
+- **Companies: the network list is paged on the server, and a running board check refreshes only
+  its own row instead of the whole list.** `GET /discovery/network-companies` takes `limit` (default
+  50, at most 200) and `offset` and returns `items` and `total`, and the screen walks the pages. The
+  order is unchanged ([#591](https://github.com/bgoleno/opportun/issues/591); PR
+  [#624](https://github.com/bgoleno/opportun/pull/624)).
+- **The password-reset and demo-account commands refuse, changing nothing, when their pepper
+  version is not the one the server last started with.** Before, after a pepper rotation, a run with
+  only the new secret set printed a password that could not sign in, having already ended the
+  user's sessions and revoked their device tokens. The refusal names the variables to set and says
+  a rotation needs a server restart first. The server records the version it runs with on every
+  start ([#606](https://github.com/bgoleno/opportun/issues/606); PR
+  [#627](https://github.com/bgoleno/opportun/pull/627)).
+- **On the Metrics page, choosing "Last 30 days" and then a custom range no longer refuses that
+  range with "Points are kept 30 days" when it was picked late in a minute.** A start the page
+  filled in is clamped to the last 30 days, and a start you typed past 30 days is still refused
+  ([#614](https://github.com/bgoleno/opportun/issues/614); PR
+  [#628](https://github.com/bgoleno/opportun/pull/628)).
+- **Run now on a paused board source that follows a company says to follow the company.** Following
+  a company is what switches its source on, so the message now says to follow it on the Companies
+  tab (or, if you already do, to turn on the source's Enabled box). Other sources keep the old
+  message ([#599](https://github.com/bgoleno/opportun/issues/599); PR
+  [#629](https://github.com/bgoleno/opportun/pull/629)).
+- **On the demo, stdio MCP discovery sources cannot be configured or run.** Creating one, or
+  changing a source to one, is refused (403 `mcp_stdio_unavailable_on_demo`), and a stored one stops
+  with "stdio MCP sources do not run on the demo" before anything starts. An https MCP source is
+  unchanged, and so is everything off the demo (PR
+  [#631](https://github.com/bgoleno/opportun/pull/631)).
+- **On a demo server, a shared demo account's data export leaves the request address out of its
+  audit rows** (PR [#636](https://github.com/bgoleno/opportun/pull/636)).
+- **The guide and the demo page walk a demo visitor through trying assisted apply with their own
+  details.** The acceptance checks and design section 7.8 describe it as built, and a browser test
+  runs it on a seeded demo server up to the handoff
+  ([#547](https://github.com/bgoleno/opportun/issues/547); PR
+  [#622](https://github.com/bgoleno/opportun/pull/622)).
+- **On the demo's shared accounts, the Google and Reactive Resume cards say what connecting means
+  there, and nothing that began before the nightly reset can write into the reseeded accounts.**
+  The notices and docs for resumes, backups and two-factor sign-in on shared accounts are updated to
+  match ([#618](https://github.com/bgoleno/opportun/issues/618); PR
+  [#638](https://github.com/bgoleno/opportun/pull/638)).
+- **The security label on pull requests also catches** changes to assisted apply submissions, the
+  extension's filler and popup, deployment files, the board probe, the AI clients, the demo
+  boundary, export and import, file storage and the observability settings, and `CONTRIBUTING.md`
+  names them all ([#610](https://github.com/bgoleno/opportun/issues/610); PR
+  [#639](https://github.com/bgoleno/opportun/pull/639)).
+- **The timing-attack and unsafe-regex lint rules are now errors, after the existing warnings were
+  triaged** ([#587](https://github.com/bgoleno/opportun/issues/587); PR
+  [#612](https://github.com/bgoleno/opportun/pull/612)).
+- **Batch ranking gains an OpenAI client, still behind the hidden setting.** Nothing is visible yet:
+  it was written from OpenAI's documentation with no real call, and stays hidden until the owner's
+  check ([#510](https://github.com/bgoleno/opportun/issues/510); PR
+  [#632](https://github.com/bgoleno/opportun/pull/632)).
+- **Docs: a Jobs section in the Settings guide, nine retaken screenshots, and a statement that only
+  the latest release is supported.** The Jobs section explains the Jobs card's statuses and
+  retries. The screenshots show the Settings side menu with Metrics and Telemetry and the tailored
+  copy's header. `SECURITY.md` and `CONTRIBUTING.md` say that fixes land on `main` first and only
+  the latest tagged release is supported
+  ([#604](https://github.com/bgoleno/opportun/issues/604),
+  [#608](https://github.com/bgoleno/opportun/issues/608),
+  [#611](https://github.com/bgoleno/opportun/issues/611); PRs
+  [#607](https://github.com/bgoleno/opportun/pull/607),
+  [#613](https://github.com/bgoleno/opportun/pull/613),
+  [#616](https://github.com/bgoleno/opportun/pull/616)).
 
 ## 0.4.0 (2026-11-14)
 

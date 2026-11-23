@@ -2,13 +2,13 @@
 // the three tables and jobs.trace_context exist on both engines, rows go with their user, the
 // data export leaves them out, the job claim returns trace_context, and enqueue writes it only
 // when asked to continue the caller's trace.
+import { enqueue } from '../src/lib/jobQueue';
 import { newId } from '@opportun/core';
 import { context, trace, TraceFlags } from '@opentelemetry/api';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
 import { claimNextJob } from '../src/db/dialect';
 import { jobs, obsMetricPoints, obsSpans, obsTraces, users } from '../src/db/schema';
-import { enqueue } from '../src/jobs/runner';
 import { EXPORT_EXCLUDED_TABLES } from '../src/lib/exporter';
 import { setCollecting } from '../src/obs';
 import { useApi } from './api';

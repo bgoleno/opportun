@@ -4,6 +4,7 @@
 // board was read twice at once, and nothing told the user. Now a run that finds another of its
 // source in progress records a Skipped run and reads nothing, and Run now during a run is refused
 // with 409 run_in_progress. Every posting is made up.
+import { enqueue } from '../src/lib/jobQueue';
 import type { NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -15,13 +16,14 @@ import {
 } from '../src/adapters/discoverySource';
 import { discoveryRuns, jobs } from '../src/db/schema';
 import { DISCOVERY_RUN_KIND, sourceScheduleName } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import { newId } from '@opportun/core';
 import type { UserCtx } from '../src/repos/base';
 import { createSource, getSourceRow, hasSucceededRun, listResults } from '../src/repos/discovery';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { holdAt } from './race';
+import { holdInstanceSchedules } from './runQueuedJob';
 
 const boot = useApi();
 const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false });
@@ -60,7 +62,11 @@ function slowBoard() {
   return { state, firstStarted, release };
 }
 
-const runOne = (app: FastifyInstance) => runNextJob(app.db, { services: app.jobs.services });
+// The test's own job, not a seeded schedule come due on the real clock (#615).
+const runOne = async (app: FastifyInstance) => {
+  await holdInstanceSchedules(app);
+  return await runNextJob(app.db, { services: app.jobs.services });
+};
 
 /** The source's schedule queues its occurrence under this key (runner materializeSchedules). */
 const scheduled = (app: FastifyInstance, c: TestClient, sourceId: string) =>

@@ -7,19 +7,24 @@
 // 2FA (the recovery of last resort for a lost phone with no recovery codes: the user re-enrolls
 // after signing in), and prints the temporary password to stdout. Nothing else goes to stdout, so
 // a script can read the password from it; which providers were unlinked goes to stderr. The
-// password never goes to a log, a file, the audit trail or stderr. Exits nonzero (touching nothing) when the email
-// is unknown. Run it against the same DATA_DIR (and, on Postgres, the same DB_DIALECT and
-// DATABASE_URL) as the server (in Docker: docker compose exec).
+// password never goes to a log, a file, the audit trail or stderr. Exits nonzero (touching
+// nothing) when the email is unknown, and when its pepper version is not the one the server last
+// started with (#606: the password would never sign in). Run it against the same DATA_DIR (and, on
+// Postgres, the same DB_DIALECT and DATABASE_URL) and the same pepper variables as the server:
+// OPPORTUN_PEPPER, OPPORTUN_PEPPER_VERSION and every OPPORTUN_PEPPER_V<N> (in Docker, docker
+// compose exec inherits them). After changing them for a rotation, restart the server before
+// running this: the check compares version numbers only, so a new secret under the same version
+// as the server's last start is not caught (#635).
 // First, before anything that loads the AI SDK: see unsetEmptyAiBaseUrls.ts for why.
 import '../unsetEmptyAiBaseUrls';
-import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { eq } from 'drizzle-orm';
-import { loadDbConfig, loadPeppers, loadSqliteDir } from '../config';
+import { loadDbConfig, loadPeppers, loadSqliteDir, loadDataDir } from '../config';
 import { closeDatabase, connectDatabase, type Db } from '../db/client';
 import { users } from '../db/schema';
 import { audit } from '../lib/audit';
 import { resetUserPassword } from '../lib/passwordReset';
+import { stalePepperProblem } from '../lib/pepperVersion';
 import { NO_PEPPERS, type PepperSet } from '../lib/passwords';
 
 export { temporaryPassword } from '../lib/passwordReset';
@@ -68,11 +73,26 @@ export async function main({
     io.stderr(`No user with email ${normalized}; nothing changed.`);
     return 1;
   }
-  const { password, unlinkedProviders } = await resetUserPassword(db, user.id, peppers);
-  await audit(db, 'auth.password_reset_cli', {
-    userId: user.id,
-    ...(unlinkedProviders.length === 0 ? {} : { detail: { unlinkedProviders } }),
-  });
+  // Before anything is hashed or written: a run whose pepper version is not the server's would
+  // print a password that never signs in, after ending the sessions and tokens (#606).
+  const stale = await stalePepperProblem(db, peppers);
+  if (stale !== null) {
+    io.stderr(`${stale} Nothing changed.`);
+    return 1;
+  }
+  // The audit row is written in the reset's transaction (#661): a failed write changes nothing and
+  // this exits nonzero with no password printed, so the account is never left reset with a
+  // password nobody saw. Printed only once the reset and its row have committed together.
+  const { password, unlinkedProviders } = await resetUserPassword(
+    db,
+    user.id,
+    peppers,
+    async (tx, unlinked) =>
+      await audit(tx, 'auth.password_reset_cli', {
+        userId: user.id,
+        ...(unlinked.length === 0 ? {} : { detail: { unlinkedProviders: unlinked } }),
+      }),
+  );
   io.stdout(password);
   if (unlinkedProviders.length > 0) {
     io.stderr(
@@ -85,22 +105,21 @@ export async function main({
 
 const entry = process.argv[1];
 if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
-  const dataDir = resolve(
-    process.env.DATA_DIR === undefined || process.env.DATA_DIR === ''
-      ? './data'
-      : process.env.DATA_DIR,
-  );
+  const dataDir = loadDataDir();
   const run = async (): Promise<number> => {
     // The server's database: DATA_DIR/SQLITE_DIR for SQLite, DB_DIALECT/DATABASE_URL for
     // Postgres. SQLITE_DIR must resolve the same way here as it does for the server
     // (config.ts's loadConfig), or the CLI and server open different files on a
     // split-volume install (issue #179).
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     const sqliteDir = loadSqliteDir(process.env, dataDir);
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     const handle = await connectDatabase({ dataDir, sqliteDir, db: loadDbConfig(process.env) });
     const { db } = handle;
     try {
       // The same peppers the server hashes with, current version included, or the temporary
       // password would be stamped with a version whose secret the server does not hold (#568).
+      // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
       return await main({ db, email: process.argv[2], peppers: loadPeppers(process.env) });
     } finally {
       await closeDatabase(handle);

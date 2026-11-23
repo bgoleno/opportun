@@ -3,11 +3,11 @@
 // not asked about. The route refuses anything that is not the user's own, not a candidate (status
 // none or suggested), or already checked (tl's answers on #301), and is limited to 30 clicks per
 // user per hour (sec's ruling on #301). Every company is made up.
+import { ATS_DETECT_KIND } from '../src/lib/atsDetect';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { companies, jobs } from '../src/db/schema';
-import { ATS_DETECT_KIND } from '../src/jobs/atsDetect';
 import { BOARD_PROBE_KIND } from '../src/jobs/companyBoardProbe';
 import { createCompany } from '../src/repos/companies';
 import { useApi } from './api';

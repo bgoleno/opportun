@@ -1,6 +1,7 @@
 // Discovery sources, runs and results (FR-D1..D3). Every function is scoped to the caller: a
 // source, run or result of another user is a 404, and a reference (role target, company,
 // source, run) must be the caller's own.
+import { removeSchedule, setSchedule, userCronProblem } from '../lib/jobQueue';
 import {
   newId,
   type Disposition,
@@ -41,9 +42,9 @@ import { descNullsLast, jsonText, likePrefix } from '../db/dialect';
 import { HttpError, notFound } from '../lib/errors';
 import { isBoardSource, prefilter, prefilterHolds, type PrefilterVerdict } from '../lib/prefilter';
 import { PREFILTER_ON_POSITIVES, PREFILTER_ON_RECALL_PERCENT } from '../lib/prefilter';
-import { DISCOVERY_RUN_KIND } from '../jobs/discoveryKinds';
-import { removeSchedule, setSchedule, userCronProblem } from '../jobs/runner';
+import { DISCOVERY_RUN_KIND } from '../lib/jobKinds';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { getOpportunity } from './opportunities';
 import { countWhere, orderBy, sortColumns, type ListOpts, type Page } from './list';
 import { startOfUtcDay } from './taskRuns';
@@ -122,30 +123,46 @@ function validConfig(kind: SourceKind, config: Record<string, unknown>): Record<
   const parsed = SOURCE_CONFIG_SCHEMAS[kind].safeParse(config);
   if (!parsed.success) {
     const message = z.prettifyError(parsed.error).slice(0, 500);
-    throw new HttpError(422, 'invalid_config', message, { message });
+    // The caller's own config, described by zod: a sentence about what they sent (#750).
+    throw new HttpError(422, 'invalid_config', message, undefined, { userFacing: true });
   }
   return parsed.data;
 }
 
+/** Where a source is being configured: on the demo server (OPPORTUN_DEMO=1) or not. */
+export interface SourceWriteOpts {
+  demo?: boolean;
+}
+
 /**
  * An MCP stdio source runs a command the user typed on the server (ADR-12). In a shared install
- * only the administrator may configure one; any user may use an https MCP server.
+ * only the administrator may configure one; any user may use an https MCP server. On the demo,
+ * whose administrator is a shared login, none is configured at all; jobs/discoveryRun.ts refuses
+ * to run one there too.
  */
-function assertMayConfigure(ctx: UserCtx, kind: SourceKind, config: Record<string, unknown>): void {
-  if (kind === 'mcp' && config.transport === 'stdio' && !ctx.isAdmin) {
-    throw new HttpError(403, 'mcp_stdio_admin_only');
-  }
+function assertMayConfigure(
+  ctx: UserCtx,
+  kind: SourceKind,
+  config: Record<string, unknown>,
+  opts: SourceWriteOpts,
+): void {
+  if (kind !== 'mcp' || config.transport !== 'stdio') return;
+  if (opts.demo === true) throw new HttpError(403, 'mcp_stdio_unavailable_on_demo');
+  if (!ctx.isAdmin) throw new HttpError(403, 'mcp_stdio_admin_only');
 }
 
 function assertCron(cron: string | null | undefined): void {
   if (cron === null || cron === undefined) return;
   if (cron.length > 100) {
-    throw new HttpError(422, 'invalid_cron', undefined, {
-      message: 'must be at most 100 characters',
+    throw new HttpError(422, 'invalid_cron', 'must be at most 100 characters', undefined, {
+      userFacing: true,
     });
   }
   const problem = userCronProblem(cron);
-  if (problem !== null) throw new HttpError(422, 'invalid_cron', undefined, { message: problem });
+  // userCronProblem's own sentences about the caller's cron (#750).
+  if (problem !== null) {
+    throw new HttpError(422, 'invalid_cron', problem, undefined, { userFacing: true });
+  }
 }
 
 async function assertOwned(exec: Exec, ctx: UserCtx, input: SourcePatch): Promise<void> {
@@ -153,7 +170,7 @@ async function assertOwned(exec: Exec, ctx: UserCtx, input: SourcePatch): Promis
     const row = await exec
       .select({ id: roleTargets.id })
       .from(roleTargets)
-      .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, input.roleTargetId)))
+      .where(and(ownedBy(roleTargets.userId, ctx), eq(roleTargets.id, input.roleTargetId)))
       .get();
     if (row === undefined) throw notFound();
   }
@@ -161,14 +178,14 @@ async function assertOwned(exec: Exec, ctx: UserCtx, input: SourcePatch): Promis
     const row = await exec
       .select({ id: companies.id })
       .from(companies)
-      .where(and(eq(companies.userId, ctx.userId), eq(companies.id, input.companyId)))
+      .where(and(ownedBy(companies.userId, ctx), eq(companies.id, input.companyId)))
       .get();
     if (row === undefined) throw notFound();
   }
 }
 
 function ownedSource(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(discoverySources.userId, ctx.userId), eq(discoverySources.id, id));
+  return and(ownedBy(discoverySources.userId, ctx), eq(discoverySources.id, id));
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +214,7 @@ export async function listSources(
   opts: ListOpts & { kind?: SourceKind | undefined },
 ): Promise<Page<DiscoverySourceRow>> {
   const where = and(
-    eq(discoverySources.userId, ctx.userId),
+    ownedBy(discoverySources.userId, ctx),
     opts.kind === undefined ? undefined : eq(discoverySources.kind, opts.kind),
   );
   const items = await db
@@ -215,9 +232,10 @@ export async function createSource(
   db: Exec,
   ctx: UserCtx,
   input: SourceInput,
+  opts: SourceWriteOpts = {},
 ): Promise<DiscoverySourceRow> {
   const config = validConfig(input.kind, input.config ?? {});
-  assertMayConfigure(ctx, input.kind, config);
+  assertMayConfigure(ctx, input.kind, config, opts);
   assertCron(input.scheduleCron);
   const created = await withTransaction(db, async (tx) => {
     await assertOwned(tx, ctx, input);
@@ -266,7 +284,7 @@ export async function ensureChannelSource(
   const existing = await db
     .select()
     .from(discoverySources)
-    .where(and(eq(discoverySources.userId, ctx.userId), eq(discoverySources.kind, kind)))
+    .where(and(ownedBy(discoverySources.userId, ctx), eq(discoverySources.kind, kind)))
     .orderBy(asc(discoverySources.createdAt), asc(discoverySources.id))
     .get();
   return existing ?? (await createSource(db, ctx, { kind, config: {}, enabled: true }));
@@ -278,11 +296,12 @@ export async function updateSource(
   ctx: UserCtx,
   id: string,
   patch: SourcePatch,
+  opts: SourceWriteOpts = {},
 ): Promise<DiscoverySourceRow> {
   const updated = await withTransaction(db, async (tx) => {
     const current = await getSourceRow(tx, ctx, id);
     const config = patch.config === undefined ? undefined : validConfig(current.kind, patch.config);
-    if (config !== undefined) assertMayConfigure(ctx, current.kind, config);
+    if (config !== undefined) assertMayConfigure(ctx, current.kind, config, opts);
     assertCron(patch.scheduleCron);
     await assertOwned(tx, ctx, patch);
     await tx
@@ -366,7 +385,7 @@ export function splitConfig(source: DiscoverySourceRow): {
 export const RUN_SORTS = sortColumns({ startedAt: discoveryRuns.startedAt });
 
 function ownedRun(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(discoveryRuns.userId, ctx.userId), eq(discoveryRuns.id, id));
+  return and(ownedBy(discoveryRuns.userId, ctx), eq(discoveryRuns.id, id));
 }
 
 export async function getRun(exec: Exec, ctx: UserCtx, id: string): Promise<DiscoveryRunRow> {
@@ -426,7 +445,7 @@ export async function listRuns(
   sourceId: string,
   opts: ListOpts,
 ): Promise<Page<DiscoveryRunRow>> {
-  const where = and(eq(discoveryRuns.userId, ctx.userId), eq(discoveryRuns.sourceId, sourceId));
+  const where = and(ownedBy(discoveryRuns.userId, ctx), eq(discoveryRuns.sourceId, sourceId));
   const items = await db
     .select()
     .from(discoveryRuns)
@@ -485,7 +504,7 @@ function selectResults(exec: Exec) {
 }
 
 function ownedResult(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.id, id));
+  return and(ownedBy(discoveryResults.userId, ctx), eq(discoveryResults.id, id));
 }
 
 function toView(
@@ -514,7 +533,7 @@ export async function listResults(
   opts: ListOpts & ResultFilters,
 ): Promise<Page<DiscoveryResultView>> {
   const where = and(
-    eq(discoveryResults.userId, ctx.userId),
+    ownedBy(discoveryResults.userId, ctx),
     opts.disposition === undefined ? undefined : eq(discoveryResults.disposition, opts.disposition),
     opts.sourceId === undefined ? undefined : eq(discoveryRuns.sourceId, opts.sourceId),
   );
@@ -630,7 +649,7 @@ export async function findChainTarget(
     .innerJoin(opportunities, eq(opportunities.id, discoveryResults.opportunityId))
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         likePrefix(discoveryResults.dedupeKey, `${groupKey}|`),
         inArray(opportunities.stage, CHAINABLE_STAGES),
       ),
@@ -780,14 +799,12 @@ export async function prefilterRecall(exec: Exec, ctx: UserCtx): Promise<Prefilt
     .from(discoveryResults)
     .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
     .innerJoin(discoverySources, eq(discoverySources.id, discoveryRuns.sourceId))
-    .where(
-      and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.disposition, 'accepted')),
-    )
+    .where(and(ownedBy(discoveryResults.userId, ctx), eq(discoveryResults.disposition, 'accepted')))
     .all();
   const targets = await exec
     .select()
     .from(roleTargets)
-    .where(eq(roleTargets.userId, ctx.userId))
+    .where(ownedBy(roleTargets.userId, ctx))
     .all();
   const active = targets.filter((t) => t.active);
   let positives = 0;
@@ -809,9 +826,7 @@ export async function prefilterRecall(exec: Exec, ctx: UserCtx): Promise<Prefilt
   const verdicts = await exec
     .select({ outcome: discoveryResults.prefilterOutcome, n: count() })
     .from(discoveryResults)
-    .where(
-      and(eq(discoveryResults.userId, ctx.userId), isNotNull(discoveryResults.prefilterOutcome)),
-    )
+    .where(and(ownedBy(discoveryResults.userId, ctx), isNotNull(discoveryResults.prefilterOutcome)))
     .groupBy(discoveryResults.prefilterOutcome)
     .all();
   const tally = (outcome: string) => Number(verdicts.find((v) => v.outcome === outcome)?.n ?? 0);
@@ -928,7 +943,7 @@ export async function listWaitingResultIds(
   const rows = await exec
     .select({ id: discoveryResults.id })
     .from(discoveryResults)
-    .where(and(eq(discoveryResults.userId, ctx.userId), waitingForBudget))
+    .where(and(ownedBy(discoveryResults.userId, ctx), waitingForBudget))
     .orderBy(
       sql`case when ${and(inLineForBudget(now), isNull(discoveryResults.aiScore))} then 0 else 1 end`,
       verdictOrder,
@@ -961,7 +976,7 @@ export async function hasOlderWaitingResult(
     .from(discoveryResults)
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         waitingForBudget,
         inLineForBudget(now),
         or(
@@ -1022,7 +1037,7 @@ export async function setWaitingNoKey(exec: Exec, ctx: UserCtx): Promise<void> {
     .set({ rankSkipReason: 'no_key' })
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         waitingForBudget,
         isNull(discoveryResults.aiScore),
       ),
@@ -1049,7 +1064,7 @@ export async function clearWaitingKeyReasons(
     .set({ rankDeferredAt: now })
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         isNull(discoveryResults.rankDeferredAt),
         isNull(discoveryResults.aiScore),
         eq(discoveryResults.rankSkipReason, 'no_key'),
@@ -1066,7 +1081,7 @@ export async function clearWaitingKeyReasons(
     .set({ rankSkipReason: null })
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         or(
           eq(discoveryResults.rankSkipReason, 'no_key'),
           and(
@@ -1090,7 +1105,7 @@ export async function setWaitingKeyRejected(exec: Exec, ctx: UserCtx): Promise<v
     .set({ rankSkipReason: 'key_rejected' })
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         waitingForBudget,
         isNull(discoveryResults.aiScore),
       ),
@@ -1124,7 +1139,7 @@ export async function countWaitingResults(exec: Exec, ctx: UserCtx): Promise<num
   const row = await exec
     .select({ n: count() })
     .from(discoveryResults)
-    .where(and(eq(discoveryResults.userId, ctx.userId), waitingForBudget))
+    .where(and(ownedBy(discoveryResults.userId, ctx), waitingForBudget))
     .get();
   return Number(row?.n ?? 0);
 }
@@ -1173,7 +1188,7 @@ export async function hasRunInProgress(
       and(
         eq(jobs.kind, DISCOVERY_RUN_KIND),
         eq(jobs.status, 'running'),
-        eq(jobs.userId, ctx.userId),
+        ownedBy(jobs.userId, ctx),
         eq(jsonText(jobs.payload, 'sourceId'), sourceId),
         ...(exceptJobId === undefined ? [] : [ne(jobs.id, exceptJobId)]),
       ),
@@ -1194,7 +1209,7 @@ export async function hasUnfinishedRun(
     .from(discoveryRuns)
     .where(
       and(
-        eq(discoveryRuns.userId, ctx.userId),
+        ownedBy(discoveryRuns.userId, ctx),
         eq(discoveryRuns.sourceId, sourceId),
         isNull(discoveryRuns.finishedAt),
       ),
@@ -1219,7 +1234,7 @@ export async function hasSucceededRun(
     .from(discoveryRuns)
     .where(
       and(
-        eq(discoveryRuns.userId, ctx.userId),
+        ownedBy(discoveryRuns.userId, ctx),
         eq(discoveryRuns.sourceId, sourceId),
         isNotNull(discoveryRuns.finishedAt),
         isNull(discoveryRuns.error),
@@ -1253,7 +1268,7 @@ export async function listBelowCut(
     .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         eq(discoveryRuns.sourceId, sourceId),
         eq(discoveryResults.disposition, 'pending'),
         eq(discoveryResults.rankSkipReason, 'below_cut'),

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { Button } from '@/components/ui/button';
 import {
@@ -9,13 +9,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { toast } from '@/components/ui/toast';
 import { errorMessage } from '@/lib/api';
 
 /**
  * "Are you sure?" for destructive actions, and for any other that needs a yes first (say so with
  * confirmVariant, so it does not read as a warning). Closes only on success: a rejected `onConfirm`
  * leaves the dialog open with the failure shown in it, rather than closing as if it had
- * worked and leaving the outcome to a toast the person may not connect to this dialog.
+ * worked and leaving the outcome to a toast the person may not connect to this dialog. It can
+ * always be left, even with the action in flight (a request has no time limit, so a dialog that
+ * could not be left could trap the person: tl on #678); a failure that lands after it was left is
+ * reported in a toast instead, so it is never shown nowhere (#678).
  */
 export function ConfirmDialog(props: {
   open: boolean;
@@ -24,10 +28,24 @@ export function ConfirmDialog(props: {
   description: string;
   confirmLabel: string;
   confirmVariant?: 'default' | 'destructive';
+  /** Confirm waits while this holds (#758): what it would act on is still being loaded. */
+  confirmDisabled?: boolean;
   onConfirm: () => Promise<void> | void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Whether the dialog is still open when the action settles: read then, not when it started.
+  const open = useRef(props.open);
+  open.current = props.open;
+  // And whether it is still mounted (tl on #712): a parent can take it away mid-request, as the bulk
+  // bar goes when its rows leave, and a failure then has no dialog left to be shown in.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   return (
     <Dialog
       open={props.open}
@@ -48,7 +66,7 @@ export function ConfirmDialog(props: {
           </Button>
           <Button
             variant={props.confirmVariant ?? 'destructive'}
-            disabled={busy}
+            disabled={busy || props.confirmDisabled === true}
             onClick={async () => {
               setBusy(true);
               setError(null);
@@ -56,7 +74,14 @@ export function ConfirmDialog(props: {
                 await props.onConfirm();
                 props.onOpenChange(false);
               } catch (err) {
-                setError(errorMessage(err));
+                if (open.current && mounted.current) setError(errorMessage(err));
+                else {
+                  toast({
+                    title: `${props.confirmLabel} failed`,
+                    description: errorMessage(err),
+                    variant: 'destructive',
+                  });
+                }
               } finally {
                 setBusy(false);
               }

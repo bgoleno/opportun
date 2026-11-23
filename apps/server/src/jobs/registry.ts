@@ -1,6 +1,7 @@
 // Job handlers by kind (design section 8). Handlers register once at module load; the
 // runner looks them up when it claims a job.
 import type { BatchProvider, batchProviderFor } from '@opportun/ai';
+import type { DemoResetGate } from '../lib/demoResetGate';
 import type { FastifyBaseLogger } from 'fastify';
 import type { z } from 'zod';
 import type { DocumentStore } from '../adapters/documentStore';
@@ -8,6 +9,8 @@ import type { MailProvider } from '../adapters/mailProvider';
 import type { Db } from '../db/client';
 import type { safeFetch } from '../lib/safeFetch';
 import type { Storage } from '../lib/storage';
+import { provideHandlerLookup } from '../lib/jobHandlerLookup';
+import { provideJobKinds } from '../obs/catalog';
 
 /** App services a handler may need; the runner passes what the app was built with. */
 export interface JobServices {
@@ -28,11 +31,16 @@ export interface JobServices {
   /** The demo reset job's credentials source (issue #280); real process.env in production,
    *  a literal object in tests (#292). */
   env: NodeJS.ProcessEnv;
+  /** The nightly reset's gate (#618, lib/demoResetGate.ts): on a demo server only. A shared demo
+   *  account's job holds it around its run; the reset holds it exclusively. */
+  demoResetGate?: DemoResetGate;
   /** Assisted apply is on (config submissionsEnabled: on unless OPPORTUN_SUBMISSIONS=0, never on
    *  the demo, #455); mail ingest matches confirmations only then (#119). */
   submissions: boolean;
-  /** Finds a provider's ranking batch client (#441): batchProviderFor, which has none yet, or a
-   *  fake in tests. Absent means batchProviderFor. */
+  /** OPPORTUN_DEMO=1: this is the demo server, whose administrator is a shared login. */
+  demo: boolean;
+  /** Finds a provider's ranking batch client (#441): batchProviderFor (Anthropic's, #509, and
+   *  OpenAI's, #510), or a fake in tests. Absent means batchProviderFor. */
   rankBatchProvider: (target: Parameters<typeof batchProviderFor>[0]) => BatchProvider | null;
 }
 
@@ -65,6 +73,11 @@ export interface JobHandler<P> {
    * it. The rest of the payload stays, because the job row is the record that it ran.
    */
   transientPayloadKeys?: readonly string[];
+  /**
+   * The demo reset itself (#618): it takes the reset gate exclusively, so it must not hold its
+   * shared side as every other instance job does on a demo server (jobs/runner.ts).
+   */
+  takesDemoResetGateItself?: true;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- handlers carry their own payload types
@@ -85,9 +98,15 @@ export function registeredJobKinds(): string[] {
   return [...handlers.keys()].sort();
 }
 
+// The catalog's opportun.job.kind values are these, read at each use (#764).
+provideJobKinds(registeredJobKinds);
+
 export function getJobHandler(kind: string): JobHandler<unknown> | undefined {
   return handlers.get(kind);
 }
+
+// enqueue (lib/jobQueue.ts) parses a kind's payload and takes its attempts from here (#788).
+provideHandlerLookup(getJobHandler);
 
 /** A service the handler cannot run without; throws (so the job retries) when missing. */
 export function requireService<K extends keyof JobServices>(

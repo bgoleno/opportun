@@ -49,7 +49,6 @@ import {
   isOperatorFile,
   removeOperatorFile,
 } from '../lib/storage';
-import { observeStatement, observeStatementAsync } from '../obs/database';
 import {
   armGateWatchdog,
   dbLog,
@@ -302,6 +301,7 @@ function isPgError(e: unknown): e is Error & Record<string, unknown> {
  */
 export function scrubPgError(err: unknown): unknown {
   if (!isPgError(err)) return err;
+  // eslint-disable-next-line security/detect-object-injection -- a field name from the PG_VALUE_FIELDS constant
   for (const field of PG_VALUE_FIELDS) delete err[field];
   if (String(err.code).startsWith('22')) {
     const original = err.message;
@@ -314,6 +314,31 @@ export function scrubPgError(err: unknown): unknown {
   }
   return err;
 }
+
+/**
+ * What observes each statement (the database metric, design.md 14.2, #343). obs/database hands it
+ * over when it loads (https://github.com/bgoleno/opportun/issues/803), so db/client imports nothing
+ * from obs/ and obs/ can depend on db/ without an import cycle. obs/config imports obs/database, so
+ * every boot that starts observability has it, and test/obsDbRegistration.test.ts checks the booted
+ * app does. Until then a statement just runs: the default is a plain passthrough that records
+ * nothing, as a database opened before observability (a migration, a CLI, a test that never
+ * collects) has nowhere to record into.
+ */
+export interface StatementObserver {
+  sync<T>(system: 'sqlite' | 'postgresql', text: string, run: () => T): T;
+  async<T>(system: 'sqlite' | 'postgresql', text: string, run: () => Promise<T>): Promise<T>;
+}
+
+let statementObserver: StatementObserver = {
+  sync: (_system, _text, run) => run(),
+  async: (_system, _text, run) => run(),
+};
+
+/** Called by obs/database at its load: the handover above. */
+export function provideStatementObserver(observer: StatementObserver): void {
+  statementObserver = observer;
+}
+
 /**
  * Both drivers' prepared queries funnel through queryWithCache, which wraps the driver error
  * (SQLite: sqlite-proxy's RemotePreparedQuery; Postgres: pg-core's PgPreparedQuery, shared
@@ -334,7 +359,7 @@ function unwrapQueryErrors(prototype: object, observe: boolean): void {
     // this layer, so it is not counted here as well. args[0] is the statement's text.
     const text = args[0];
     return observe && typeof text === 'string'
-      ? observeStatementAsync('postgresql', text, run)
+      ? statementObserver.async('postgresql', text, run)
       : run();
   };
   proto.__opportunUnwrapped = true;
@@ -346,7 +371,9 @@ type Method = Parameters<AsyncRemoteCallback>[2];
 
 function execute(sqlite: Sqlite, text: string, params: unknown[], method: Method) {
   // Synchronous, so the write-gate invariant below is unchanged (design.md 14.2, #343).
-  return observeStatement('sqlite', text, () => executeStatement(sqlite, text, params, method));
+  return statementObserver.sync('sqlite', text, () =>
+    executeStatement(sqlite, text, params, method),
+  );
 }
 
 function executeStatement(sqlite: Sqlite, text: string, params: unknown[], method: Method) {
@@ -808,6 +835,7 @@ export function collationProblem(
   if (row === undefined) return `database collation is unknown: ${fix}`;
   const provider = row.datlocprovider ?? 'c';
   if (provider !== 'c') {
+    // eslint-disable-next-line security/detect-object-injection -- a read of a fixed lookup by the server's locale-provider code
     return `database locale provider is ${LOCALE_PROVIDERS[provider] ?? provider}, not libc: names and titles sort differently than on SQLite (${fix})`;
   }
   const isC = (v: string) => v === 'C' || v === 'POSIX';
@@ -860,6 +888,7 @@ export interface ConnectOptions {
     pollMs?: number;
     pageSize?: number;
     unreadableMs?: number;
+    retryMs?: number;
   };
 }
 
@@ -1068,7 +1097,9 @@ export interface TransactionOptions {
 /** The first stack frame outside db/client.ts: who opened the transaction. */
 function callSite(): string | undefined {
   const limit = Error.stackTraceLimit;
-  Error.stackTraceLimit = 4;
+  // Deep enough to get past this file's own frames to the caller: at most callSite, the
+  // Postgres or SQLite path, runTransaction and withTransaction (#807 added runTransaction).
+  Error.stackTraceLimit = 5;
   const stack = new Error().stack;
   Error.stackTraceLimit = limit;
   return stack
@@ -1079,6 +1110,7 @@ function callSite(): string | undefined {
 }
 
 function isTestRun(): boolean {
+  // eslint-disable-next-line no-restricted-properties -- test-run detection, not a setting (#773)
   return process.env.NODE_ENV === 'test' || process.env.VITEST !== undefined;
 }
 
@@ -1090,10 +1122,66 @@ function isTestRun(): boolean {
  * independent transaction. The body must not do external I/O (fetch, AI, files, argon2, timers): every
  * other request waits while it runs.
  */
+/**
+ * What runs once a transaction commits (#807), per open transaction's executor: the `tx` that
+ * withTransaction handed its callback. A savepoint's list moves to its parent's when it is
+ * released, and the outermost one's runs after the commit. A rollback, of either, drops it.
+ */
+const afterCommitQueues = new WeakMap<object, (() => void)[]>();
+
+/**
+ * Runs `fn` once the transaction `exec` belongs to has committed, or now when `exec` is no
+ * transaction withTransaction opened (a plain statement on `db` commits as it runs). Dropped when
+ * that transaction rolls back. For effects that must not report a change that did not happen,
+ * such as an audit row's telemetry event (lib/audit.ts). Outside a transaction `fn` runs as any
+ * call does, so what it throws reaches the caller. After a commit, a throw cannot undo the change,
+ * so in production it is dropped; under the test runner it is rethrown (tl on #822), as obs/gate.ts
+ * does, so a telemetry key missing from the catalog still fails CI.
+ */
+export function afterCommit(exec: Exec, fn: () => void): void {
+  const queue = afterCommitQueues.get(exec as object);
+  if (queue === undefined) fn();
+  else queue.push(fn);
+}
+
+function runAfterCommit(fn: () => void): void {
+  try {
+    fn();
+  } catch (err) {
+    if (isTestRun()) throw err;
+    // Production: telemetry, never a reason to fail a change that has committed.
+  }
+}
+
+/**
+ * Runs `fn` in a transaction on `exec` (a savepoint when `exec` is a transaction), and, once the
+ * outermost one has committed, what afterCommit queued in it (#807).
+ */
 export async function withTransaction<T>(
   exec: Exec,
   fn: (tx: Exec) => Promise<T>,
   opts: TransactionOptions = {},
+): Promise<T> {
+  const queue: (() => void)[] = [];
+  const parent = afterCommitQueues.get(exec as object);
+  const result = await runTransaction(
+    exec,
+    async (tx) => {
+      afterCommitQueues.set(tx as object, queue);
+      return await fn(tx);
+    },
+    opts,
+  );
+  // Committed (or, for a savepoint, released into its parent, which may still roll back).
+  if (parent !== undefined) parent.push(...queue);
+  else for (const queued of queue) runAfterCommit(queued);
+  return result;
+}
+
+async function runTransaction<T>(
+  exec: Exec,
+  fn: (tx: Exec) => Promise<T>,
+  opts: TransactionOptions,
 ): Promise<T> {
   const body =
     opts.scope === undefined
@@ -1338,7 +1426,7 @@ async function onConnection<T>(
   // Same invariant as proxyCallback: the last mustWait() check and the statement share one
   // synchronous step (no await between the loop condition and run()).
   while (conn.gate.mustWait()) await conn.gate.idleFor();
-  return observeStatement('sqlite', text, () => run(conn.sqlite.prepare(text), params));
+  return statementObserver.sync('sqlite', text, () => run(conn.sqlite.prepare(text), params));
 }
 
 /** Postgres: the statement on the exec's connection (a transaction's own, or the pool). */
@@ -1389,6 +1477,7 @@ export type LibpqEnv = Record<string, string>;
 export function libpqEnvFor(
   url: string,
   ssl: DbSsl,
+  // eslint-disable-next-line no-restricted-properties -- a child process's own environment, passed on, not a setting (#773)
   processEnv: Record<string, string | undefined> = process.env,
 ): LibpqEnv {
   // A socket URL (postgres://user@/db?host=/run/postgresql) has an empty host, which the
@@ -1404,6 +1493,7 @@ export function libpqEnvFor(
   const q = u.searchParams;
   const env: LibpqEnv = {};
   const set = (key: string, value: string | null | undefined) => {
+    // eslint-disable-next-line security/detect-object-injection -- set() is only called with literal PG* variable names
     if (value !== null && value !== undefined && value !== '') env[key] = value;
   };
   set('PGHOST', q.get('host') ?? (hostless ? undefined : u.hostname.replace(/^\[(.*)\]$/, '$1')));

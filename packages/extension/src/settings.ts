@@ -1,6 +1,8 @@
 // The popup's two settings, the user's own Opportun server and a capture:push device token,
 // kept in chrome.storage.local (this browser profile only, never synced). Pure apart from the
 // injected storage; unit-tested.
+// The server's exact device token shape (#655), shared with the server's parity test.
+import { TOKEN_SHAPE } from './tokenShape';
 
 export interface Settings {
   /** The server's base URL without a trailing slash (https, or http on this computer). */
@@ -43,6 +45,30 @@ function isPrivateIpv4(host: string): boolean {
 }
 
 /**
+ * Whether a saved server address sends the token in the clear across a network (#655, sec): plain
+ * http to anything but this computer. http is only accepted for private hosts (parseServerUrl), so
+ * this is the local-network case, which the popup saves with a warning rather than refuses.
+ */
+export function travelsUnencrypted(serverUrl: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(serverUrl);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'http:') return false;
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  // This computer by any of its names (#699): localhost and its subdomains (which resolve to
+  // loopback, RFC 6761), 127/8 and the IPv6 loopback.
+  const loopback =
+    host === 'localhost' ||
+    host.endsWith('.localhost') ||
+    host === '[::1]' ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  return !loopback;
+}
+
+/**
  * Hosts allowed over plain http (ADR-14, design D17). The canonical deployment is one machine
  * in a household reached from its phones and laptops, on a network with no certificate
  * authority and no public name, so refusing plain http there would refuse the product's normal
@@ -69,8 +95,6 @@ export function isPrivateHost(hostname: string): boolean {
     !host.includes('.')
   );
 }
-/** apps/server/src/lib/deviceTokens.ts: 'odt_' + base64url. */
-const TOKEN_SHAPE = /^odt_[A-Za-z0-9_-]{16,200}$/;
 const CAPTURE_PATH = '/api/v1/connector/capture';
 
 export function parseServerUrl(

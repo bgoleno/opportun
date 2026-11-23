@@ -1,6 +1,8 @@
 // Lead resolution (Task 8, FR-D7): partial leads matched against the ATS boards of known
 // companies, from cached results or a live lookup through the registered adapter; the lead's
 // own URL (often linkedin.com) is never fetched.
+import { enqueue } from '../src/lib/jobQueue';
+import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../src/lib/titleMatch';
 import type { NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -13,13 +15,7 @@ import {
 import { jobs } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import {
-  LEAD_RESOLVE_KIND,
-  resolveLead,
-  TITLE_MATCH_THRESHOLD,
-  titleOverlap,
-} from '../src/jobs/leadResolve';
-import { enqueue } from '../src/jobs/runner';
+import { LEAD_RESOLVE_KIND, resolveLead } from '../src/jobs/leadResolve';
 import type { safeFetch } from '../src/lib/safeFetch';
 import { createCompany } from '../src/repos/companies';
 import { createSource, getResult, listResults } from '../src/repos/discovery';

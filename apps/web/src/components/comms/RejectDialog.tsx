@@ -36,10 +36,17 @@ export function RejectDialog(props: {
           sender={sender}
           pending={reject.isPending}
           onReject={(input) =>
-            reject.mutate(
-              { id: props.comm.id, input },
-              {
-                onSuccess: (result) => {
+            // The promise, not mutate()'s callbacks (#678): the rejected row leaves the list on
+            // the refetch, taking this dialog with it, and callbacks passed to mutate() are dropped
+            // once the component is gone. A promise's handlers run whatever has unmounted.
+            void reject
+              .mutateAsync({
+                id: props.comm.id,
+                input,
+                expectedOpportunityId: props.comm.opportunityId ?? null,
+              })
+              .then(
+                (result) => {
                   // "Removed" and "removed and blocked" are different promises; this message
                   // reports the one the server actually confirmed, not the one asked for (#145).
                   if (result.blocked === false) {
@@ -59,14 +66,13 @@ export function RejectDialog(props: {
                   }
                   props.onOpenChange(false);
                 },
-                onError: (err) =>
+                (err: unknown) =>
                   toast({
                     title: 'Not rejected',
                     description: errorMessage(err),
                     variant: 'destructive',
                   }),
-              },
-            )
+              )
           }
         />
       </DialogContent>

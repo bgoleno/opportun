@@ -4,6 +4,7 @@
 // header, quoted fields holding commas and doubled quotes, and connections without an email.
 // The export ZIP upload is the only LinkedIn data path: nothing here (or in the app) fetches
 // linkedin.com (C-1).
+import { enqueue } from '../src/lib/jobQueue';
 import { randomBytes } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,7 @@ import type { FastifyInstance } from 'fastify';
 import { zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
 import { communications, companies, networkContacts, jobs } from '../src/db/schema';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import {
   LINKEDIN_IMPORT_JOB_KIND,
   legacyMessageExternalId,
@@ -206,6 +207,20 @@ describe('connections LinkedIn itself stripped of every identity field (issue #1
     expect(rows).toEqual([]);
     expect(stripped).toBe(0);
     expect(errors).toEqual([{ line: 2, message: 'Connections.csv: a name is required' }]);
+  });
+});
+
+describe('a connection URL on another host (#655)', () => {
+  it('keeps the connection with no LinkedIn link: only linkedin.com links are stored', () => {
+    const csv =
+      'First Name,Last Name,URL,Email Address,Company,Position,Connected On\r\n' +
+      'Jordan,Example,https://example.com/in/jordan,,Initech,,01 Jan 2024\r\n' +
+      'Sam,Example,https://uk.linkedin.com/in/sam,,Initech,,01 Jan 2024\r\n';
+    const { rows } = parseConnections(csv);
+    expect(rows.map((r) => [r.name, r.linkedinUrl])).toEqual([
+      ['Jordan Example', null],
+      ['Sam Example', 'https://uk.linkedin.com/in/sam'],
+    ]);
   });
 });
 

@@ -22,6 +22,7 @@ import {
   EXIT,
   maskTokens,
   redact,
+  TOKEN_FILE_LIMIT,
   VERSION,
   type ConnectorIo,
   type ExitCode,
@@ -36,10 +37,18 @@ Commands:
   sync     Push new mail once
   watch    Sync every few minutes until interrupted (Ctrl-C)
 
-Options for init (anything left out is asked for):
+Options for init. With none of --server, --token, --mailbox or --days, every value is
+asked for except the interval. If you give any of them, a value you leave out is asked
+for only when it is the server, the token or the mailboxes; the days and the interval keep
+their saved value, or the default:
   --server <url>      Opportun server address, https://...
-  --token <token>     Device token with the mail:push scope (odt_...). Prefer the
-                      prompt: a flag can end up in shell history.
+  --token-file <path> Read the device token (odt_..., mail:push scope) from a file
+                      only you can read (chmod 600). The way to pass it in a script.
+  --token-stdin       Read the device token from standard input, for example
+                      pbpaste | opportun-connector init --server <url> --token-stdin
+                      (needs --server; mailboxes default to the saved ones or Inbox)
+  --token <token>     The token itself, kept for older scripts. A token in a flag
+                      stays in your shell history: prefer the prompt or the two above.
   --mailbox <name>    Mailbox to read; repeat for several. "Inbox" (all inboxes),
                       a mailbox name, or "Account/Mailbox". Default: Inbox
   --days <n>          How far back the first sync reaches (default ${DEFAULT_LOOKBACK_DAYS})
@@ -74,11 +83,54 @@ function widens(prev: ConnectorConfig, next: ConnectorConfig): boolean {
   );
 }
 
+/**
+ * Whether two saved server addresses are the same server: compared as the connector stores them
+ * (normalizeServerUrl), so a trailing slash or the host's case is not a new server. A stored
+ * address that no longer normalizes counts as different.
+ */
+function sameServer(prev: string, next: string): boolean {
+  try {
+    return normalizeServerUrl(prev) === next;
+  } catch {
+    return false;
+  }
+}
+
 const mailboxList = (s: string): string[] =>
   s
     .split(',')
     .map((m) => m.trim())
     .filter((m) => m !== '');
+
+/**
+ * The token from `--token-file` (#655, sec): a file only its owner can read, as the config itself
+ * is, since a token there is as good as a password for pushing mail.
+ */
+async function tokenFromFile(io: ConnectorIo, path: string): Promise<string> {
+  // One open for both (#699, sec on #695): the mode checked is the mode of the file read.
+  const file = await io.fs.readTextAndMode(path);
+  if (file === null) throw new ConnectorError(`No token file at ${path}.`, EXIT.USAGE);
+  // Bounded as --token-stdin is (tl and sec on #740): a FIFO or a huge file would hang init.
+  if (!file.isFile) {
+    throw new ConnectorError(`${path} is not a regular file.`, EXIT.USAGE);
+  }
+  if (file.size > TOKEN_FILE_LIMIT) {
+    throw new ConnectorError(
+      `${path} is larger than a device token file can be (${TOKEN_FILE_LIMIT} bytes).`,
+      EXIT.USAGE,
+    );
+  }
+  const { mode } = file;
+  const text = file.text ?? '';
+  if ((mode & 0o077) !== 0) {
+    throw new ConnectorError(
+      `${path} can be read by others (mode ${mode.toString(8)}). A token file must be yours ` +
+        `alone: chmod 600 ${path}`,
+      EXIT.USAGE,
+    );
+  }
+  return text;
+}
 
 async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
   const { values } = parseArgs({
@@ -87,16 +139,30 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
     options: {
       server: { type: 'string' },
       token: { type: 'string' },
+      'token-file': { type: 'string' },
+      'token-stdin': { type: 'boolean' },
       mailbox: { type: 'string', multiple: true },
       days: { type: 'string' },
       interval: { type: 'string' },
     },
   });
+  const tokenFile = values['token-file'];
+  const fromStdin = values['token-stdin'] === true;
+  const sources = [values.token !== undefined, tokenFile !== undefined, fromStdin];
+  if (sources.filter(Boolean).length > 1) {
+    throw usageError('Give one of --token, --token-file or --token-stdin.');
+  }
+  if (fromStdin && values.server === undefined) {
+    // The prompts read standard input too, and it holds the token.
+    throw usageError('--token-stdin needs --server: standard input carries the token.');
+  }
   // A corrupt or missing config just means there are no defaults to offer.
   const existing = await readConfig(io).catch(() => null);
   const interactive =
     values.server === undefined &&
     values.token === undefined &&
+    tokenFile === undefined &&
+    !fromStdin &&
     values.mailbox === undefined &&
     values.days === undefined;
   const ask = async (question: string, fallback: string, opts: { secret?: boolean } = {}) => {
@@ -111,11 +177,21 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
     throw new ConnectorError('A server address is required.', EXIT.USAGE);
   const serverUrl = normalizeServerUrl(serverInput);
 
+  // The saved token belongs to the saved server (#702, sec on #673): with another address, Enter
+  // must not send the old server's token to it. As the extension does (a blank token keeps the
+  // saved one only on the same origin).
+  const sameAsSaved = existing !== null && sameServer(existing.serverUrl, serverUrl);
+  const tokenFlag = values.token !== undefined || tokenFile !== undefined || fromStdin;
+  if (existing !== null && !sameAsSaved && !tokenFlag) {
+    io.stdout('The server changed, so the saved token is not reused: paste a token for this one.');
+  }
   const tokenInput =
     values.token ??
+    (tokenFile !== undefined ? await tokenFromFile(io, tokenFile) : undefined) ??
+    (fromStdin ? await io.readStdin() : undefined) ??
     (await ask(
       'Device token (Settings > Integrations > Extensions and Connectors)',
-      existing?.token ?? '',
+      sameAsSaved ? (existing?.token ?? '') : '',
       { secret: true },
     ));
   const token = checkToken(tokenInput);
@@ -123,12 +199,14 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
   const mailboxes =
     values.mailbox !== undefined
       ? values.mailbox.flatMap(mailboxList)
-      : mailboxList(
-          await ask(
-            'Mailboxes to read, comma-separated',
-            existing?.mailboxes.join(', ') ?? 'Inbox',
-          ),
-        );
+      : fromStdin
+        ? (existing?.mailboxes ?? ['Inbox'])
+        : mailboxList(
+            await ask(
+              'Mailboxes to read, comma-separated',
+              existing?.mailboxes.join(', ') ?? 'Inbox',
+            ),
+          );
   if (mailboxes.length === 0) throw new ConnectorError('Name at least one mailbox.', EXIT.USAGE);
 
   const daysInput =
@@ -148,14 +226,20 @@ async function init(io: ConnectorIo, args: string[]): Promise<ExitCode> {
   const config: ConnectorConfig = { serverUrl, token, mailboxes, lookbackDays, intervalMinutes };
   await saveConfig(io, config);
   io.stdout(`Saved ${configFiles(io.configDir).config} (readable only by you).`);
-  if (existing !== null && widens(existing, config)) {
+  // The cursor is how far the old server got (#650): another server has none of that mail.
+  const otherServer = existing !== null && !sameServer(existing.serverUrl, config.serverUrl);
+  if (existing !== null && (otherServer || widens(existing, config))) {
     // The cursor only covers what was read before: older mail in a new mailbox, or in the
-    // longer window, would never be reached from it.
+    // longer window, or anything at all for a server that was never sent it, would never be
+    // reached from it.
     await saveState(io, { cursor: null });
     io.stdout(
-      'You added a mailbox or lengthened the lookback window, so the sync position was ' +
-        'reset: the next sync re-reads the whole lookback window (the server skips ' +
-        'messages it already has).',
+      (otherServer
+        ? 'The server address changed, so the sync position was reset: the next sync ' +
+          're-reads the whole lookback window and sends it to the new server.'
+        : 'You added a mailbox or lengthened the lookback window, so the sync position was ' +
+          'reset: the next sync re-reads the whole lookback window') +
+        ' (the server skips messages it already has).',
     );
   }
 

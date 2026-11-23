@@ -16,13 +16,13 @@
 // convenient lie. No SOURCE_KINDS enum migration.
 //
 // C-1: nothing here fetches anything. The posting URL is provenance metadata.
+import { enqueue } from './jobQueue';
 import { dedupeKey, type NormalizedPosting, type OpportunityStage } from '@opportun/core';
 import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import { isLockTimeout, lockScope, withTransaction, type Db, type Exec } from '../db/client';
 import { ilike, jsonText } from '../db/dialect';
 import { discoveryResults, opportunities } from '../db/schema';
-import { POSTING_RECONCILE_KIND } from '../jobs/discoveryKinds';
-import { enqueue } from '../jobs/runner';
+import { POSTING_RECONCILE_KIND } from './jobKinds';
 import { sanitizePosting } from './postingSanitize';
 import { CAPTURE_SLOT } from './captureLimit';
 import { racePoint } from './racePoints';

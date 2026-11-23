@@ -2,8 +2,7 @@
 // than the screen (a tab strip, a table) scrolls inside its own container instead. A screen
 // that is wider than the viewport clips its right edge on a phone with no way to reach it.
 import { expect, test, type Page } from '@playwright/test';
-import { ADMIN } from './global-setup';
-import { createCaptureToken, createOpportunity, registerUser } from './helpers';
+import { createCaptureToken, createOpportunity, registerUser, signInAsAdmin } from './helpers';
 import { ADMIN_ROUTES, USER_ROUTES } from './routes';
 
 const WIDTHS = [390, 320] as const;
@@ -250,11 +249,7 @@ for (const width of WIDTHS) {
     });
 
     test('administrator views fit the screen', async ({ page }) => {
-      await page.goto('/login');
-      await page.getByLabel('Email').fill(ADMIN.email);
-      await page.getByLabel('Password', { exact: true }).fill(ADMIN.password);
-      await page.getByRole('button', { name: 'Sign in' }).click();
-      await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+      await signInAsAdmin(page);
       const failures: string[] = [];
       for (const path of ADMIN_ROUTES) {
         await page.goto(path);
@@ -581,7 +576,8 @@ async function stubCompanies(page: Page): Promise<void> {
     if (new URL(route.request().url()).searchParams.get('showDenied') === 'true') {
       items.push(row('stub-net-d', { status: 'denied', atsKind: 'none' }, 'not_found'));
     }
-    await route.fulfill({ json: { items } });
+    // Paged since #591, as the server answers: one page holds them all.
+    await route.fulfill({ json: { items, total: items.length } });
   });
   // One confirmed industry, its reason unbroken: the fit line on the rows above (#300).
   await page.route(/\/api\/v1\/discovery\/industry-profile$/, async (route) => {
@@ -841,11 +837,7 @@ for (const width of WIDTHS) {
 
     test('an admin metric broken down by long routes fits, with its table', async ({ page }) => {
       await stubMetricSeries(page);
-      await page.goto('/login');
-      await page.getByLabel('Email').fill(ADMIN.email);
-      await page.getByLabel('Password', { exact: true }).fill(ADMIN.password);
-      await page.getByRole('button', { name: 'Sign in' }).click();
-      await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+      await signInAsAdmin(page);
       await page.goto('/settings/metrics?metric=http.server.request.duration');
       await page.getByLabel('Break down by').selectOption('http.route');
       await expect(page.getByRole('list', { name: 'Legend' }).getByRole('listitem')).toHaveCount(9);

@@ -14,13 +14,17 @@
 // prohibited hosts refused), bounded in size and count. The posting text is extracted with the
 // capture.extract task when an AI key exists, else the raw page text becomes the description.
 // When nothing can be found the job leaves a note on the opportunity naming what to do.
+import { atsDetectDedupeKey, ATS_DETECT_KIND, scanCareersHtml } from '../lib/atsDetect';
+import { enqueue } from '../lib/jobQueue';
+import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../lib/titleMatch';
+import { boardConfig, boardFromUrl } from '../lib/atsBoard';
 import { AiUnavailableError, CaptureOutputSchema, renderPrompt, runStructured } from '@opportun/ai';
-import { decodeEntities, newId } from '@opportun/core';
+import { decodeEntities, greenhouse, type HostRule, newId } from '@opportun/core';
 import { and, asc, eq, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { htmlToText } from '../adapters/gmail';
 import { ASHBY_HOST } from '../adapters/sources/ashby';
-import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
+import { greenhouseModule } from '../sites/greenhouse';
 import { LEVER_HOST } from '../adapters/sources/lever';
 import { fetchWorkdayDetail, workdayBoard } from '../adapters/sources/workday';
 import type { Db } from '../db/client';
@@ -38,15 +42,6 @@ import { getActivePrompt } from '../repos/prompts';
 import { updateOpportunity } from '../repos/opportunities';
 import { sanitizeDescriptionText } from '../lib/postingSanitize';
 import { workdayPosting } from '../lib/atsJobRef';
-import {
-  atsDetectDedupeKey,
-  ATS_DETECT_KIND,
-  boardConfig,
-  boardFromUrl,
-  scanCareersHtml,
-} from './atsDetect';
-import { TITLE_MATCH_THRESHOLD, titleOverlap } from './leadResolve';
-import { enqueue } from './runner';
 import { requireService, type JobContext, type JobHandler } from './registry';
 import { continuesTrace } from '../obs/workflow';
 
@@ -174,6 +169,7 @@ function asciiWords(name: string): string[] {
 }
 
 function sameWords(a: string[], b: string[]): boolean {
+  // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
   return a.length > 0 && a.length === b.length && a.every((w, i) => w === b[i]);
 }
 
@@ -239,6 +235,7 @@ export function pageNamesCompany(html: string, companyName: string): boolean {
     }
   }
   if (words.join('').length < 3) return false;
+  // eslint-disable-next-line security/detect-non-literal-regexp -- built from asciiWords, which yields only [a-z0-9]+, so no metacharacter reaches it
   const phrase = new RegExp(`\\b${words.join('\\W+')}\\b`);
   if (phrase.test(fold(sanitizeDescriptionText(html) ?? ''))) return true;
   return declaredNames(html).some((d) => phrase.test(fold(d)));
@@ -415,16 +412,26 @@ export async function workdayPostingText(
   }
 }
 
+function greenhouseListingUrl(slug: string): string | null {
+  try {
+    return greenhouseModule.api!.urls.board(slug);
+  } catch {
+    return null;
+  }
+}
+
 /** Public board APIs of the three known ATS providers, as title+url anchors. */
 export async function boardAnchors(
   fetch: typeof safeFetch,
   board: { kind: string; slug: string },
 ): Promise<PageAnchor[]> {
+  // Greenhouse's URL is its site module's (#769), which refuses a slug no board has: no anchors.
+  const greenhouseUrl = board.kind === 'ats_greenhouse' ? greenhouseListingUrl(board.slug) : null;
   const spec =
-    board.kind === 'ats_greenhouse'
+    greenhouseUrl !== null
       ? {
-          host: GREENHOUSE_HOST,
-          url: `https://${GREENHOUSE_HOST}/v1/boards/${board.slug}/jobs`,
+          host: greenhouse.fetchHosts[0]! as string | HostRule,
+          url: greenhouseUrl,
           pick: (body: unknown): PageAnchor[] => {
             const jobs = (body as { jobs?: unknown[] })?.jobs ?? [];
             return jobs.flatMap((j) => {

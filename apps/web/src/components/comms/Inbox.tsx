@@ -1,7 +1,8 @@
 import type { CommChannel } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { ArrowDownWideNarrow, ArrowUpWideNarrow, RefreshCw } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { PageHeader } from '@/components/PageHeader';
 import { Button } from '@/components/ui/button';
@@ -15,7 +16,9 @@ import {
   channelLabel,
   useBulkTriage,
   useGmailStatus,
+  useGmailSyncRefresh,
   useGmailSync,
+  INBOX_PAGE,
   useInbox,
   type InboxFilters,
   type InboxTab,
@@ -77,7 +80,14 @@ const BULK_REASONS: { value: RejectionReason; label: string }[] = [
   { value: 'other', label: 'Other' },
 ];
 
-export function Inbox({ initialTab }: { initialTab?: InboxTab }) {
+/** `pageSize` is INBOX_PAGE for everyone who uses the app; a test passes a small one (#646). */
+export function Inbox({
+  initialTab,
+  pageSize = INBOX_PAGE,
+}: {
+  initialTab?: InboxTab;
+  pageSize?: number;
+}) {
   return (
     <section>
       <PageHeader
@@ -99,7 +109,7 @@ export function Inbox({ initialTab }: { initialTab?: InboxTab }) {
           // row's min-content, so a long sender address widened every row past the phone screen.
           <TabsContent key={t.tab} value={t.tab} className="grid grid-cols-1 gap-3 pt-2">
             {t.note ? <p className="text-sm text-muted-foreground">{t.note}</p> : null}
-            <InboxList tab={t.tab} mode={t.mode} empty={t.empty} />
+            <InboxList tab={t.tab} mode={t.mode} empty={t.empty} pageSize={pageSize} />
           </TabsContent>
         ))}
       </Tabs>
@@ -192,29 +202,98 @@ function FilterBar({
   );
 }
 
-function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
+function BulkBar({
+  rows,
+  loading,
+  onDone,
+}: {
+  rows: { id: string; opportunityId: string | null }[];
+  /** The list is still loading (a new filter or page): the rows shown may be about to go. */
+  loading: boolean;
+  onDone: () => void;
+}) {
+  const ids = rows.map((r) => r.id);
   const bulk = useBulkTriage();
   const [reason, setReason] = useState<RejectionReason>(BULK_REASONS[0]?.value ?? 'other');
-  const reject = () => {
-    bulk.mutate(
-      { ids, action: { kind: 'reject', reason } },
-      {
-        onSuccess: (res) => {
-          toast({
-            title: `${res.succeeded} rejected`,
-            description:
-              res.skipped > 0 ? `${res.skipped} skipped (not yours or already gone).` : undefined,
-          });
-          onDone();
-        },
-        onError: (err) =>
-          toast({
-            title: 'Bulk reject failed',
-            description: errorMessage(err),
-            variant: 'destructive',
-          }),
-      },
-    );
+  // Asked first (#647): a reject wipes the messages' subject, snippet and body for good.
+  const [confirming, setConfirming] = useState(false);
+  const count = `${ids.length} message${ids.length === 1 ? '' : 's'}`;
+  // What the confirmation was opened on (#841). A reload that changes it closes the confirmation
+  // with a message, so it never acts on a count the user did not see; null while it is closed.
+  const openedOn = useRef<readonly string[] | null>(null);
+  // While the reject is in flight its own outcome is reported (ConfirmDialog), not the list's.
+  const inFlight = useRef(false);
+  const idsKey = [...ids].sort().join(',');
+  useEffect(() => {
+    const seen = openedOn.current;
+    if (!confirming || seen === null || inFlight.current) return;
+    if ([...seen].sort().join(',') === idsKey) return;
+    const gone = seen.filter((id) => !ids.includes(id)).length;
+    openedOn.current = null;
+    setConfirming(false);
+    toast({
+      title: 'Nothing was rejected',
+      description: `${gone} of the ${seen.length} selected messages ${gone === 1 ? 'is' : 'are'} no longer listed. Check the selection and reject again.`,
+    });
+    // ids is read through idsKey, its contents.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey, confirming]);
+  // A reload that leaves none of them takes this bar, and its confirmation, away: say so then.
+  useEffect(
+    () => () => {
+      const seen = openedOn.current;
+      if (seen === null || inFlight.current) return;
+      toast({
+        title: 'Nothing was rejected',
+        description:
+          seen.length === 1
+            ? 'The selected message is no longer listed.'
+            : `None of the ${seen.length} selected messages are listed any more.`,
+      });
+    },
+    [],
+  );
+  // Escape or Cancel returns focus to the button that opened the confirmation (#841). A native
+  // <dialog> does that itself, but not to a disabled button, so the button is never disabled
+  // while the confirmation can be open, only marked so (aria-disabled), and focus is put back
+  // here too when the browser has left it on the page body.
+  const opener = useRef<HTMLButtonElement>(null);
+  const wasConfirming = useRef(false);
+  useEffect(() => {
+    if (wasConfirming.current && !confirming) {
+      const active = document.activeElement;
+      if (active === null || active === document.body) opener.current?.focus();
+    }
+    wasConfirming.current = confirming;
+  }, [confirming]);
+  const blocked = bulk.isPending || loading;
+  const reject = async () => {
+    // mutateAsync: the dialog stays open with the failure in it (ConfirmDialog), not a toast.
+    // Each message goes with the link it was seen under (#666): a changed one is left alone.
+    inFlight.current = true;
+    let res: Awaited<ReturnType<typeof bulk.mutateAsync>>;
+    try {
+      res = await bulk.mutateAsync({
+        items: rows.map((r) => ({ id: r.id, opportunityId: r.opportunityId })),
+        action: { kind: 'reject', reason },
+      });
+    } finally {
+      inFlight.current = false;
+    }
+    // Done: the bar goes with its rows (onDone), and that is not the list changing under it.
+    openedOn.current = null;
+    const notes = [
+      res.skipped > 0 ? `${res.skipped} skipped (not yours or already gone).` : null,
+      // Linked or moved in another tab or session since they were selected (#666).
+      res.changed > 0
+        ? `${res.changed} ${res.changed === 1 ? 'was' : 'were'} changed elsewhere and left as ${res.changed === 1 ? 'it is' : 'they are'}.`
+        : null,
+    ].filter((n): n is string => n !== null);
+    toast({
+      title: `${res.succeeded} rejected`,
+      description: notes.length === 0 ? undefined : notes.join(' '),
+    });
+    onDone();
   };
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm">
@@ -231,9 +310,36 @@ function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
           </option>
         ))}
       </Select>
-      <Button type="button" size="sm" onClick={reject} disabled={bulk.isPending}>
+      {/* Not while the list loads (#678): a row the new filter hides still looks selected. */}
+      <Button
+        ref={opener}
+        type="button"
+        size="sm"
+        aria-disabled={blocked}
+        className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+        onClick={() => {
+          if (blocked) return;
+          openedOn.current = ids;
+          setConfirming(true);
+        }}
+      >
         {bulk.isPending ? 'Rejecting...' : `Reject ${ids.length}`}
       </Button>
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={(o) => {
+          if (!o) openedOn.current = null;
+          setConfirming(o);
+        }}
+        title={`Reject ${count}?`}
+        description={`Rejecting removes the subject, snippet and body of ${ids.length === 1 ? 'this message' : `these ${count}`} for good. This cannot be undone.`}
+        confirmLabel={`Reject ${ids.length}`}
+        confirmVariant="destructive"
+        // As the button that opened it (#758): a confirmation opened before a new filter applied
+        // waits for its list, so it never rejects a row that filter is about to hide.
+        confirmDisabled={loading}
+        onConfirm={reject}
+      />
       <Button type="button" variant="ghost" size="sm" onClick={onDone} disabled={bulk.isPending}>
         Clear
       </Button>
@@ -241,12 +347,70 @@ function BulkBar({ ids, onDone }: { ids: string[]; onDone: () => void }) {
   );
 }
 
-function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: string }) {
+/** "Showing 201–400 of 523", and the way to the pages before and after (#646). */
+function Pager({
+  page,
+  pageSize,
+  shown,
+  total,
+  onPage,
+}: {
+  page: number;
+  pageSize: number;
+  shown: number;
+  total: number;
+  onPage: (page: number) => void;
+}) {
+  // Never past the total: while the next page loads, the page before is still on screen, and
+  // its rows counted from the new page read ahead ("401–600 of 450": #646's review).
+  const last = Math.min(page * pageSize + shown, total);
+  const first = Math.min(page * pageSize + 1, last);
+  return (
+    <nav aria-label="Message pages" className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="tabular-nums text-muted-foreground">
+        Showing {first}–{last} of {total}
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Previous page"
+        disabled={page === 0}
+        onClick={() => onPage(page - 1)}
+      >
+        Previous
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        aria-label="Next page"
+        disabled={last >= total}
+        onClick={() => onPage(page + 1)}
+      >
+        Next
+      </Button>
+    </nav>
+  );
+}
+
+function InboxList({
+  tab,
+  mode,
+  empty,
+  pageSize,
+}: {
+  tab: InboxTab;
+  mode: RowMode;
+  empty: string;
+  pageSize: number;
+}) {
   const [q, setQ] = useState('');
   const [sender, setSender] = useState('');
   const [channel, setChannel] = useState<CommChannel | ''>('');
   const [order, setOrder] = useState<'newest' | 'oldest'>('newest');
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [page, setPage] = useState(0);
 
   const filters: InboxFilters = {
     q: useDebounced(q),
@@ -254,13 +418,51 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
     channel: channel === '' ? undefined : channel,
     order,
   };
-  const { data, error, isPending } = useInbox(tab, filters);
-
-  // Clear the selection whenever the filters change: a row that scrolls out of the filtered
-  // view must not stay selected and get rejected while the user can no longer see it.
+  const { data: fresh, error, isPlaceholderData } = useInbox(tab, filters, page, pageSize);
+  // A reload that fails keeps the list that last loaded on screen (#841), and with it the
+  // selection made from it, with a note that the list could not refresh. Without it the rows,
+  // the selection and an open confirmation all went at once.
+  const [lastLoaded, setLastLoaded] = useState(fresh);
   useEffect(() => {
-    setSelected(new Set());
+    if (fresh !== undefined) setLastLoaded(fresh);
+  }, [fresh]);
+  const data = fresh ?? (error ? lastLoaded : undefined);
+  // What was asked for, not what is being typed: the list on screen answers the debounced values.
+  const filtered =
+    (filters.q ?? '').trim() !== '' ||
+    (filters.sender ?? '').trim() !== '' ||
+    filters.channel !== undefined;
+
+  // A new filter starts again from its first page (#646). The selection is not cleared with it
+  // (#678): the pruning below drops a row the filter hides, and keeps one still listed.
+  useEffect(() => {
+    setPage(0);
   }, [filters.q, filters.sender, filters.channel, filters.order]);
+  // A page left empty (its last messages rejected or linked away) steps back to the last page
+  // that has any, rather than showing the tab's empty message with messages still in it.
+  // Only on the page's own answer, never on the page before still shown while it loads (tl).
+  useEffect(() => {
+    if (isPlaceholderData) return;
+    if (fresh !== undefined && page > 0 && fresh.items.length === 0 && fresh.total > 0) {
+      setPage(Math.max(0, Math.ceil(fresh.total / pageSize) - 1));
+    }
+  }, [fresh, isPlaceholderData, page, pageSize]);
+  // A row that leaves the list leaves the selection (#647): only rows on screen are ever selected.
+  // That covers a filter change too, a row the new filter hides is dropped, so a row still listed
+  // stays selected, and a confirmation open for it stays open (#678).
+  const onScreen = useMemo(() => new Set((data?.items ?? []).map((c) => c.id)), [data]);
+  useEffect(() => {
+    setSelected((prev) => {
+      const kept = [...prev].filter((id) => onScreen.has(id));
+      return kept.length === prev.size ? prev : new Set(kept);
+    });
+  }, [onScreen]);
+  // What the bar acts on is filtered too, so not even the render before the effect can reject a
+  // row that is gone.
+  // Each with the link it is shown under, which the reject is checked against (#666).
+  const actOn = (data?.items ?? [])
+    .filter((c) => selected.has(c.id))
+    .map((c) => ({ id: c.id, opportunityId: c.opportunityId ?? null }));
 
   // The blocked view has no message content and no row-level actions, so it is not selectable
   // and shows no triage controls.
@@ -275,8 +477,27 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
     });
   const clear = () => setSelected(new Set());
 
+  // When the bulk bar goes (its reject done, or its rows gone), focus that was in it or in its
+  // dialog would fall to the page body (#678): it moves to this list instead.
+  const bulkShown = actOn.length > 0;
+  const root = useRef<HTMLDivElement>(null);
+  const wasShown = useRef(false);
+  useEffect(() => {
+    if (wasShown.current && !bulkShown) {
+      const active = document.activeElement;
+      if (active === null || active === document.body) root.current?.focus();
+    }
+    wasShown.current = bulkShown;
+  }, [bulkShown]);
+
   return (
-    <div className="grid grid-cols-1 gap-3">
+    <div
+      ref={root}
+      tabIndex={-1}
+      role="region"
+      aria-label={`${TABS.find((t) => t.tab === tab)?.label ?? 'Inbox'} messages`}
+      className="grid grid-cols-1 gap-3 outline-none"
+    >
       {selectable ? (
         <FilterBar
           q={q}
@@ -290,14 +511,36 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
         />
       ) : null}
 
-      {selectable && selected.size > 0 ? <BulkBar ids={[...selected]} onDone={clear} /> : null}
+      {selectable && bulkShown ? (
+        <BulkBar rows={actOn} loading={isPlaceholderData} onDone={clear} />
+      ) : null}
 
-      {error ? (
+      {/* Not over an empty page: during a step-back that page stands in for the next (#678). */}
+      {data !== undefined && data.items.length > 0 && data.total > data.items.length ? (
+        <Pager
+          page={page}
+          pageSize={pageSize}
+          shown={data.items.length}
+          total={data.total}
+          onPage={setPage}
+        />
+      ) : null}
+
+      {error && data !== undefined ? (
+        <FormError message={`The list couldn't refresh. ${errorMessage(error)}`} />
+      ) : null}
+      {error && data === undefined ? (
         <FormError message={errorMessage(error)} />
-      ) : isPending ? (
+      ) : data === undefined ? (
+        <p className="text-sm text-muted-foreground">Loading...</p>
+      ) : data.items.length === 0 && data.total > 0 ? (
+        // An empty page of a tab that has messages: a step-back to a page not cached yet (#678).
         <p className="text-sm text-muted-foreground">Loading...</p>
       ) : data.items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{empty}</p>
+        <p className="text-sm text-muted-foreground">
+          {/* With a filter set, an empty list is about the filter, not the tab (#652). */}
+          {filtered ? 'No messages match these filters.' : empty}
+        </p>
       ) : (
         <ul className="grid grid-cols-1 gap-3" aria-label="Messages">
           {data.items.map((c) =>
@@ -320,6 +563,8 @@ function InboxList({ tab, mode, empty }: { tab: InboxTab; mode: RowMode; empty: 
 }
 
 function SyncControl() {
+  // The one place the lists follow the status (#645): not in useGmailStatus, which every row reads.
+  useGmailSyncRefresh();
   const status = useGmailStatus();
   const sync = useGmailSync();
   if (status.isPending || status.isError) return null;

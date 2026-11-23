@@ -20,6 +20,7 @@ import { companies, opportunities, resumes, resumeSends } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import type { ResumeRow } from './resumes';
 
 export type ResumeSendRow = typeof resumeSends.$inferSelect;
@@ -87,7 +88,7 @@ export async function latestSends(
     .from(resumeSends)
     .innerJoin(opportunities, eq(opportunities.id, resumeSends.opportunityId))
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
-    .where(and(eq(resumeSends.userId, ctx.userId), inArray(resumeSends.resumeId, [...resumeIds])))
+    .where(and(ownedBy(resumeSends.userId, ctx), inArray(resumeSends.resumeId, [...resumeIds])))
     .orderBy(desc(resumeSends.sentAt), desc(resumeSends.createdAt), desc(resumeSends.id))
     .all();
   for (const r of rows) {
@@ -102,7 +103,7 @@ export async function hasSend(exec: Exec, ctx: UserCtx, resumeId: string): Promi
   const row = await exec
     .select({ id: resumeSends.id })
     .from(resumeSends)
-    .where(and(eq(resumeSends.userId, ctx.userId), eq(resumeSends.resumeId, resumeId)))
+    .where(and(ownedBy(resumeSends.userId, ctx), eq(resumeSends.resumeId, resumeId)))
     .limit(1)
     .get();
   return row !== undefined;
@@ -148,7 +149,7 @@ async function listWhere(
     .innerJoin(resumes, eq(resumes.id, resumeSends.resumeId))
     .where(
       and(
-        eq(resumeSends.userId, ctx.userId),
+        ownedBy(resumeSends.userId, ctx),
         'opportunityId' in by
           ? eq(resumeSends.opportunityId, by.opportunityId)
           : eq(resumeSends.resumeId, by.resumeId),
@@ -180,7 +181,7 @@ async function ownedOpportunity(exec: Exec, ctx: UserCtx, id: string): Promise<v
   const row = await exec
     .select({ id: opportunities.id })
     .from(opportunities)
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, id)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, id)))
     .get();
   // Another user's opportunity reads exactly like a missing one.
   if (row === undefined) throw notFound();
@@ -190,7 +191,7 @@ async function ownedResume(exec: Exec, ctx: UserCtx, id: string): Promise<Resume
   const row = await exec
     .select()
     .from(resumes)
-    .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
+    .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
     .get();
   if (row === undefined) throw notFound();
   return row;
@@ -216,7 +217,9 @@ export async function recordResumeSend(
   const now = Date.now();
   const sentAt = input.sentAt ?? now;
   if (sentAt > now + CLOCK_SKEW_MS) {
-    throw new HttpError(422, 'sent_at_in_future', 'That time has not happened yet.');
+    throw new HttpError(422, 'sent_at_in_future', 'That time has not happened yet.', undefined, {
+      userFacing: true,
+    });
   }
   // Ownership first, outside any lock: another user's resume is a 404 and takes no lock in
   // their scope (sec on #164; #129's rule for the submission routes).
@@ -226,7 +229,13 @@ export async function recordResumeSend(
     // Read under the lock: a delete that went first has removed it, and this is a 404.
     const resume = await ownedResume(tx, ctx, input.resumeId);
     if (resume.archivedAt !== null) {
-      throw new HttpError(422, 'resume_archived', 'An archived resume cannot be recorded as sent.');
+      throw new HttpError(
+        422,
+        'resume_archived',
+        'An archived resume cannot be recorded as sent.',
+        undefined,
+        { userFacing: true },
+      );
     }
     await ownedOpportunity(tx, ctx, opportunityId);
     await racePoint('resumeSends.record.locked');
@@ -272,7 +281,7 @@ export async function removeResumeSend(
     .delete(resumeSends)
     .where(
       and(
-        eq(resumeSends.userId, ctx.userId),
+        ownedBy(resumeSends.userId, ctx),
         eq(resumeSends.opportunityId, opportunityId),
         eq(resumeSends.id, sendId),
       ),

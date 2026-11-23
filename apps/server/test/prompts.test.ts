@@ -38,7 +38,6 @@ describe('seeded system prompts', () => {
       expect(seeds, key).toHaveLength(1);
       const seed = seeds[0]!;
       expect(seed).toMatchObject({ version: 1, isActive: true, parentId: null, name: 'default' });
-      // eslint-disable-next-line security/detect-object-injection -- key is a TaskKey
       expect(promptVariables(seed.body).sort(), key).toEqual([...TASK_PROMPT_VARS[key]].sort());
       expect(seed.body).not.toContain(String.fromCharCode(0x2014));
     }

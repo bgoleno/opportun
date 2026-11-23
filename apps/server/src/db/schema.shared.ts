@@ -133,6 +133,7 @@ export const TABLE_EXPORTS = [
   'mailFilterRules',
   'taskRuns',
   'networkContacts',
+  'referralRankings',
   'communications',
   'applicationSubmissions',
   'resumeSends',

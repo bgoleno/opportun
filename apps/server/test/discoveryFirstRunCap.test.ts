@@ -1,6 +1,8 @@
 // A board's first run ranks at most 25 postings; the rest wait below the cut until the user sends
 // them through the budget (https://github.com/bgoleno/opportun/issues/215, #190 N1b). The provider
 // is mocked and every posting is made up.
+import { enqueue } from '../src/lib/jobQueue';
+import { insertLeads, rankBelowCut } from '../src/lib/discoveryIngest';
 import { runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
@@ -14,14 +16,9 @@ import {
 } from '../src/adapters/discoverySource';
 import { discoveryResults, discoveryRuns, jobs, taskRuns } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
-import {
-  DISCOVERY_RUN_KIND,
-  FIRST_RUN_RANK_CAP,
-  insertLeads,
-  rankBelowCut,
-} from '../src/jobs/discoveryRun';
+import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
 import { LEAD_RESOLVE_KIND } from '../src/jobs/leadResolve';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';
@@ -30,6 +27,7 @@ import { discoveryCostFigures } from '../src/repos/discoveryFigures';
 import { writeDiscoveryBudget } from '../src/repos/discoveryBudget';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { holdInstanceSchedules, runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -90,8 +88,13 @@ async function board(app: FastifyInstance, c: TestClient) {
  * later run goes ahead of the rank jobs an earlier one left queued.
  */
 async function runOnce(app: FastifyInstance, c: TestClient, sourceId: string): Promise<void> {
-  await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId }, { userId: c.userId, runAt: 0 });
-  await runNextJob(app.db, { services: app.jobs.services });
+  const queued = await enqueue(
+    app.db,
+    DISCOVERY_RUN_KIND,
+    { sourceId },
+    { userId: c.userId, runAt: 0 },
+  );
+  await runQueuedJob(app, queued);
 }
 
 /** The titles of the postings that have a pending job of `kind`. */
@@ -321,6 +324,8 @@ describe('#215 criterion 1: the cap on a first run', () => {
       seen.push({ rankJobs: rankJobs.length, finishedAt: run?.finishedAt ?? null });
     });
     try {
+      // The run queued above, not a seeded schedule come due on the real clock (#615).
+      await holdInstanceSchedules(app);
       await runNextJob(app.db, { services: app.jobs.services });
     } finally {
       setRaceHook(undefined);

@@ -10,7 +10,7 @@ import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
-import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+import { DEMO_USERS } from '../src/lib/demo/fixture';
 import type { Config } from '../src/config';
 import { jobs, settings, users } from '../src/db/schema';
 import { writeDedicatedMark } from '../src/lib/demoDedicated';
@@ -224,10 +224,18 @@ const NOT_ALLOWED: {
   {
     method: 'PUT',
     url: '/api/v1/admin/oauth-providers/google',
-    payload: { clientId: 'an id', clientSecret: 'a secret' },
+    payload: { clientId: 'an id', clientSecret: 'a secret', password: PASSWORD },
   },
-  { method: 'POST', url: '/api/v1/admin/oauth-providers/google/import' },
-  { method: 'DELETE', url: '/api/v1/admin/oauth-providers/google' },
+  {
+    method: 'POST',
+    url: '/api/v1/admin/oauth-providers/google/import',
+    payload: { password: PASSWORD },
+  },
+  {
+    method: 'DELETE',
+    url: '/api/v1/admin/oauth-providers/google',
+    payload: { password: PASSWORD },
+  },
   { method: 'GET', url: '/api/v1/backups' },
   { method: 'POST', url: '/api/v1/backups' },
   { method: 'PUT', url: '/api/v1/obs/settings', payload: { collect: true } },
@@ -307,7 +315,9 @@ const KNOWN: Record<string, string> = {
   'lib/exporter.ts': 'copies the column into an export; not a gate',
   'lib/registration.ts': 'writes the column; not a gate',
   'lib/sessions.ts': 'reads the column into the session context the plugin narrows',
+  'repos/base.ts': 'requireAdmin, the one check the admin routes below call (#767)',
   'repos/discovery.ts': 'NOT_ALLOWED: POST /discovery/sources',
+  'repos/users.ts': 'lists the column for Settings > Users (#766); not a gate',
   'routes/auth.ts': 'NOT_ALLOWED: /admin/registration; allowlist: users, peppers, reset',
   'routes/backups.ts': 'NOT_ALLOWED: /backups',
   'routes/jobs.ts': 'allowlist: /jobs and its retry',

@@ -1,5 +1,7 @@
 // Discovery API (FR-D1, D3, FR-O7, FR-O10): the review queue (list, accept or attach, dismiss),
 // opportunity merge, and the user's discovery sources (CRUD, run now, run history).
+import { enqueue } from '../lib/jobQueue';
+import { rankAnyway, rankBelowCut } from '../lib/discoveryIngest';
 import {
   dedupeGroupKey,
   DISCOVERY_SOURCE_KINDS,
@@ -17,10 +19,8 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { hasSource } from '../adapters/discoverySource';
-import { DISCOVERY_RUN_KIND } from '../jobs/discoveryKinds';
-import { rankAnyway, rankBelowCut } from '../jobs/discoveryRun';
+import { DISCOVERY_RUN_KIND } from '../lib/jobKinds';
 import { resumeAfterUndo } from '../jobs/discoveryRankWaiting';
-import { enqueue } from '../jobs/runner';
 import { HttpError, duplicate } from '../lib/errors';
 import { createActivity } from '../repos/activities';
 import {
@@ -773,7 +773,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     '/discovery/sources',
     { schema: { body: SourceCreate, response: { 201: SourceSchema } } },
     async (req, reply) =>
-      reply.code(201).send(await createSource(db, app.requireUser(req), req.body)),
+      reply
+        .code(201)
+        .send(await createSource(db, app.requireUser(req), req.body, { demo: app.config.demo })),
   );
 
   api.get(
@@ -785,7 +787,10 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   api.patch(
     '/discovery/sources/:id',
     { schema: { params: IdParams, body: SourcePatch, response: { 200: SourceSchema } } },
-    async (req) => await updateSource(db, app.requireUser(req), req.params.id, req.body),
+    async (req) =>
+      await updateSource(db, app.requireUser(req), req.params.id, req.body, {
+        demo: app.config.demo,
+      }),
   );
 
   api.delete(

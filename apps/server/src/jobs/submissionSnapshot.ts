@@ -42,13 +42,12 @@ import { applicationSubmissions, attachments, resumes } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import { requireService, type JobContext, type JobHandler, type JobServices } from './registry';
-import { enqueue } from './runner';
-
-export const SNAPSHOT_JOB_KIND = 'submission.snapshot';
-
-/** One unfinished snapshot job per attempt and chosen resume (jobs_unfinished_dedupe_uq). */
-export const snapshotJobKey = (submissionId: string, resumeId: string | null): string =>
-  `${SNAPSHOT_JOB_KIND}:${submissionId}:${resumeId ?? 'none'}`;
+import { resumeStoreFor } from '../lib/resumeStores';
+import {
+  enqueueSnapshot,
+  SnapshotPayload,
+  SNAPSHOT_JOB_KIND,
+} from '../lib/submissionSnapshotQueue';
 
 /** Design 6.3: three tries with the runner's backoff, then the attempt shows the failure. */
 export const SNAPSHOT_MAX_ATTEMPTS = 3;
@@ -58,24 +57,6 @@ export const SNAPSHOT_MAX_ATTEMPTS = 3;
  * job runs, before it lets the runner try later. Nobody re-chooses faster than an export.
  */
 const MAX_ROUNDS = 3;
-
-const Payload = z
-  .object({ submissionId: z.string().min(1), resumeId: z.string().min(1).nullable() })
-  .strict();
-type Payload = z.infer<typeof Payload>;
-
-/** Queues the snapshot of `resumeId` for an attempt; a no-op while that one is queued or running. */
-export async function enqueueSnapshot(
-  db: Db,
-  userId: string,
-  submissionId: string,
-  resumeId: string | null,
-): Promise<void> {
-  await enqueue(db, SNAPSHOT_JOB_KIND, { submissionId, resumeId } satisfies Payload, {
-    dedupeKey: snapshotJobKey(submissionId, resumeId),
-    userId,
-  });
-}
 
 type Resume = typeof resumes.$inferSelect;
 
@@ -87,11 +68,13 @@ class Superseded extends Error {
   }
 }
 
-/** The store that holds this resume; the same choice routes/resumes.ts storeFor makes. */
+/** The store that holds this resume, through the one registry routes/resumes.ts uses (#771). */
 function storeOf(ctx: JobContext, store: Resume['store']): DocumentStore {
-  if (store === 'reactive_resume') return requireService(ctx, 'reactiveResumeStore');
-  if (store === 'local_file') return requireService(ctx, 'localFileStore');
-  return requireService(ctx, 'documentStore');
+  return resumeStoreFor(store, {
+    documentStore: () => requireService(ctx, 'documentStore'),
+    reactiveResumeStore: () => requireService(ctx, 'reactiveResumeStore'),
+    localFileStore: () => requireService(ctx, 'localFileStore'),
+  });
 }
 
 /** Only a draft whose snapshot is still pending, for the resume this run exported, is written. */
@@ -212,7 +195,7 @@ type SubmissionRow = typeof applicationSubmissions.$inferSelect;
 async function wanted(
   db: Db,
   userId: string,
-  payload: Payload,
+  payload: SnapshotPayload,
 ): Promise<SubmissionRow | undefined> {
   const row = await db
     .select()
@@ -230,9 +213,9 @@ async function wanted(
   return row;
 }
 
-export const submissionSnapshotJob: JobHandler<Payload> = {
+export const submissionSnapshotJob: JobHandler<SnapshotPayload> = {
   kind: SNAPSHOT_JOB_KIND,
-  payloadSchema: Payload,
+  payloadSchema: SnapshotPayload,
   maxAttempts: SNAPSHOT_MAX_ATTEMPTS,
   async run(db, payload, ctx) {
     // Enqueued with the owner's id (repos/submissions.ts); without one there is no user to act for.

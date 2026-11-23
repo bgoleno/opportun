@@ -10,12 +10,13 @@ export const MAX_BODY_CHARS = 500_000;
 const SNIPPET_CHARS = 200;
 /**
  * The server's schema caps (routes/connectorMail.ts): a field over them fails the whole batch
- * with a 400, so they are cut here instead.
+ * with a 400, so they are cut here instead. Exported for the server's parity test
+ * (apps/server/test/clientLimitsParity.test.ts, #649), which fails when either side changes alone.
  */
-const MAX_KEY = 1024;
-const MAX_ADDRESS = 4096;
-const MAX_RECIPIENTS = 500;
-const MAX_SUBJECT = 16_384;
+export const MAX_KEY = 1024;
+export const MAX_ADDRESS = 4096;
+export const MAX_RECIPIENTS = 500;
+export const MAX_SUBJECT = 16_384;
 const EXTERNAL_PREFIX = 'apple-mail:';
 
 /** One line of the JXA script's output. Everything but the id and date is optional. */

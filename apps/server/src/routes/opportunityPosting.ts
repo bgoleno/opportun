@@ -17,14 +17,16 @@
 // capture already on the opportunity's timeline, for a record whose description was corrupted
 // by something else (#238) or whose company never had a readable board for Refetch (#255) to
 // find anything on.
+import { CAPTURE_MAX_TEXT } from '../lib/captureText';
+import { keyedFetch } from '../lib/safeFetch';
 import { buffer } from 'node:stream/consumers';
-import { NormalizedPostingSchema } from '@opportun/core';
+import { NormalizedPostingSchema, POSTING_STATES } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { HttpError } from '../lib/errors';
 import { isSystemWritten, replaceAllowedByFlag } from '../lib/postingFingerprint';
-import { attachPosting } from '../lib/postingAttach';
+import { attachPosting, recordIdentified } from '../lib/postingAttach';
 import { confirmPosting, unconfirmPosting } from '../lib/postingConfirm';
 import { rederivePosting } from '../lib/postingRederive';
 import type { SourceContext } from '../adapters/discoverySource';
@@ -36,12 +38,15 @@ import {
   type BodyReader,
 } from '../lib/postingSearch';
 import type { UserCtx } from '../repos/base';
+import { unfinishedDedupeKeys } from '../repos/jobs';
+import { POSTING_RECONCILE_KIND } from '../lib/jobKinds';
 import {
   getOpportunity,
   recordAtsJobRef,
+  setPostingState,
   type OpportunityView as OpportunityRowView,
 } from '../repos/opportunities';
-import { CAPTURE_MAX_TEXT, extract, fetchPageText, PASTE_TEXT_HINT } from './capture';
+import { extract, fetchPageText, PASTE_TEXT_HINT } from './capture';
 import { HttpsUrl, IdParams } from './common';
 import { OpportunityView } from './opportunities';
 import { workflow } from '../obs/workflow';
@@ -52,10 +57,26 @@ const CandidateView = z.object({
   otherLocations: z.array(z.string()),
 });
 
+/**
+ * The posting state the page saw when Find posting was clicked ('none' for no state yet), so a
+ * click landing after a background check confirmed the posting does not refetch it (#852).
+ */
+const FindQuery = z.object({ seen: z.enum([...POSTING_STATES, 'none']).optional() });
+
 const FindResponse = z.object({
   /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity from
    *  Greenhouse's API; no posting was attached. */
-  outcome: z.enum(['attached', 'identified', 'candidates', 'none', 'no_board']),
+  outcome: z.enum([
+    'attached',
+    'identified',
+    'candidates',
+    'none',
+    'no_board',
+    'unreachable',
+    'already_confirmed',
+  ]),
+  /** An attach that changed nothing: a Refetch that found the same job (#835). */
+  unchanged: z.literal(true).optional(),
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity: OpportunityView.optional(),
   candidate: CandidateView.optional(),
@@ -87,7 +108,7 @@ const AttachBody = z
 const RederiveBody = z.object({ force: z.boolean().optional() }).strict();
 
 const RederiveResponse = z.object({
-  outcome: z.enum(['merged', 'capture_only', 'no_description_found']),
+  outcome: z.enum(['merged', 'capture_only', 'no_description_found', 'left_alone']),
   /** Present unless the outcome is 'no_description_found', which changes nothing. */
   opportunity: OpportunityView.optional(),
 });
@@ -101,6 +122,15 @@ const RederiveResponse = z.object({
 function userWritten(opp: OpportunityRowView): boolean {
   if (replaceAllowedByFlag(opp)) return false;
   return !isSystemWritten(opp.descriptionMd, opp.descriptionFingerprint);
+}
+
+/** Whether two identities name the same job on the same board. */
+function sameRef(
+  a: { kind: string; org: string | null; externalId: string } | null | undefined,
+  b: { kind: string; org: string | null; externalId: string } | null | undefined,
+): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  return a.kind === b.kind && a.org === b.org && a.externalId === b.externalId;
 }
 
 export async function opportunityPostingRoutes(app: FastifyInstance): Promise<void> {
@@ -130,25 +160,85 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
 
   api.post(
     '/opportunities/:id/find-posting',
-    { schema: { params: IdParams, response: { 200: FindResponse } } },
+    { schema: { params: IdParams, querystring: FindQuery, response: { 200: FindResponse } } },
     async (req) => {
       const ctx = app.requireUser(req);
       const { id } = req.params;
-      const sctx = { fetch: app.jobs.services.sourceFetch, log: req.log };
+      const sctx = { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log };
       const current = await getOpportunity(db, ctx, id);
-      // Checked before any board is read: the user's own description has nothing to find. An
-      // embedded Greenhouse link still gets its identity, from Greenhouse's API, with the
-      // description left as it is (#398, tl on #414).
-      if (userWritten(current)) {
-        const identified = await identifyOwnLink(ctx, current, sctx);
-        if (identified !== null) return { outcome: 'identified' as const, opportunity: identified };
+      // The page's click saw the posting not confirmed yet, and a background check has confirmed it
+      // since (#852, qa on #865: a click as the check ends). Not a Refetch the user asked for: the
+      // posting is answered as it now is, and nothing is read or written.
+      const seen = req.query.seen;
+      if (seen !== undefined && seen !== 'confirmed' && current.postingState === 'confirmed') {
+        return { outcome: 'already_confirmed' as const, opportunity: current };
+      }
+      // A background check is reading the board for this posting now (#852, qa): a click then
+      // would be a second search racing it, writing a second attach. Its own result lands soon.
+      // Its unfinished job is the signal, not the state alone (tl on #865): 'searching' left by a
+      // check that died, or whose job is gone, must not take Find posting away.
+      if (
+        current.postingState === 'searching' &&
+        (
+          await unfinishedDedupeKeys(db, ctx, POSTING_RECONCILE_KIND, [
+            `${POSTING_RECONCILE_KIND}:${id}`,
+          ])
+        ).length > 0
+      ) {
         throw new HttpError(
           409,
-          'already_described',
-          'This opportunity already has a description. Edit it instead.',
+          'posting_searching',
+          "Opportun is still checking this posting on the company's board. Try again shortly.",
         );
       }
+      // Checked before any board is read: the user's own description, on a posting already
+      // confirmed, has nothing to find. An embedded Greenhouse link still gets its identity, from
+      // Greenhouse's API, with the description left as it is (#398, tl on #414). Not confirmed
+      // yet, the board is read and a match confirms it, the description kept (#756).
+      if (userWritten(current)) {
+        const identified = await identifyOwnLink(ctx, current, sctx);
+        if (current.postingState === 'confirmed' && identified !== null) {
+          // On the timeline, as every other way a posting is found (#813).
+          await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+            kept: false,
+          });
+          return { outcome: 'identified' as const, opportunity: identified };
+        }
+        // Not confirmed yet (#756, tl): Greenhouse's own answer for its embedded link is the
+        // proof, one request and no listing read (#398, #414). It now confirms the posting too,
+        // user_confirmed so no later pass reads the user's description as the employer's copy.
+        if (identified !== null) {
+          const confirmed = await setPostingState(db, ctx, id, {
+            postingState: 'confirmed',
+            postingStateDetail: 'user_confirmed',
+            atsJobRef: identified.atsJobRef,
+          });
+          await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+            kept: true,
+          });
+          return { outcome: 'identified' as const, opportunity: confirmed };
+        }
+        // Otherwise the board is read, and a match confirms it, the description kept. Confirmed
+        // already (a Refetch, #812, tl): only its own job refreshes it, below.
+      }
       const outcome = await findPosting(db, ctx, id, sctx, { readBody });
+      // A confirmed posting with the user's own description is refreshed only from its own job
+      // (ownJobRef, found on the board): a title match, or another job a message names, never
+      // replaces a confirmed identity by itself. It is offered instead (#812, tl).
+      const ownJobOnly =
+        userWritten(current) &&
+        current.postingState === 'confirmed' &&
+        !(outcome.status === 'exact' && outcome.via === 'posting_link');
+      if (ownJobOnly && (outcome.status === 'exact' || outcome.status === 'single')) {
+        const note = outcome.note === undefined ? {} : { note: outcome.note };
+        return {
+          outcome: 'candidates' as const,
+          candidates: [outcome.candidate],
+          board: [outcome.candidate],
+          needsConfirmation: false,
+          ...note,
+        };
+      }
       if (outcome.status === 'exact' || outcome.status === 'single') {
         // #114: 'single' can carry a large-board truncation note (exact never does, since it
         // only ever comes from an email-linked job id, never a board read). Forwarded onto the
@@ -168,17 +258,40 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           // The board this posting was just read from is the proof an embedded Greenhouse job
           // needs (#398): no further request.
           outcome.readFrom === undefined
-            ? { sctx: { fetch: app.jobs.services.sourceFetch, log: req.log } }
+            ? {
+                sctx: {
+                  fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
+                  log: req.log,
+                },
+              }
             : { readFrom: outcome.readFrom },
+          { keepDescription: true },
         );
         const note = outcome.note === undefined ? {} : { note: outcome.note };
-        return { outcome: 'attached' as const, opportunity, candidate: outcome.candidate, ...note };
+        // A Refetch that found the same job, link and description changed nothing (#835, qa on
+        // #830): said so, instead of "Posting attached".
+        const unchanged =
+          current.postingState === 'confirmed' &&
+          opportunity.postingUrl === current.postingUrl &&
+          opportunity.descriptionMd === current.descriptionMd &&
+          sameRef(opportunity.atsJobRef, current.atsJobRef);
+        return {
+          outcome: 'attached' as const,
+          opportunity,
+          candidate: outcome.candidate,
+          ...(unchanged ? { unchanged: true as const } : {}),
+          ...note,
+        };
       }
       // No board read answered the opportunity's own careers link: its identity can still come
       // from Greenhouse's API, while the posting itself is left to the user to choose (#398).
       const identified = await identifyOwnLink(ctx, current, sctx);
       const note = outcome.note === undefined ? {} : { note: outcome.note };
       if (identified !== null && outcome.status !== 'candidates') {
+        // On the timeline, as the user-described cases above are (#813, tl on #847).
+        await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+          kept: false,
+        });
         return { outcome: 'identified' as const, opportunity: identified, ...note };
       }
       if (outcome.status === 'candidates') {
@@ -193,6 +306,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       if (outcome.status === 'none') {
         return { outcome: 'none' as const, candidates: outcome.candidates, ...note };
       }
+      if (outcome.status === 'unreachable') return { outcome: 'unreachable' as const };
       return {
         outcome: 'no_board' as const,
         needsCareersUrl: outcome.needsCareersUrl,
@@ -213,14 +327,20 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         const { posting, text, url } = req.body;
         // Anything handed over here, a picked board row included, comes from the client: an
         // embedded Greenhouse link in it is checked on Greenhouse's API, never taken on trust (#398).
-        const identity = { sctx: { fetch: app.jobs.services.sourceFetch, log: req.log } };
+        const identity = {
+          sctx: { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
+        };
         if (posting !== undefined) {
           // A Workday board row is listed without its description: fetch it now (FR-D10).
           const described = await describeWorkdayPosting(
-            { fetch: app.jobs.services.sourceFetch, log: req.log },
+            { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
             posting,
           );
-          return attachPosting(db, ctx, id, described, 'board', undefined, identity);
+          // A row picked from the board confirms a posting the user described themselves, the
+          // description kept, as Find posting's own match does (#756).
+          return attachPosting(db, ctx, id, described, 'board', undefined, identity, {
+            keepDescription: true,
+          });
         }
         if (text !== undefined) {
           return attachPosting(
@@ -233,7 +353,10 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             identity,
           );
         }
-        const page = await fetchPageText(app.jobs.services.sourceFetch, url as string);
+        const page = await fetchPageText(
+          keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
+          url as string,
+        );
         const out = await extract(db, ctx, url, page);
         return attachPosting(
           db,
@@ -281,7 +404,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         db,
         ctx,
         req.params.id,
-        { fetch: app.jobs.services.sourceFetch, log: req.log },
+        { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
         { force },
       );
       return outcome.kind === 'no_description_found'

@@ -138,6 +138,58 @@ const FLAGGED_FILES = [
   'apps/web/src/components/ai/api.ts',
   'scripts/merge-when-green.sh',
   'deploy/destroy.sh',
+  // https://github.com/bgoleno/opportun/issues/610 (decision 139), the areas sec confirmed there:
+  // assisted apply submissions, server side and the core rules they enforce
+  'apps/server/src/routes/submissions.ts',
+  'apps/server/src/repos/submissions.ts',
+  'apps/server/src/repos/submissionReview.ts',
+  'apps/server/src/repos/submissionConfirm.ts',
+  'apps/server/src/repos/submissionOutcome.ts',
+  'apps/server/src/lib/submissionDigest.ts',
+  'apps/server/src/lib/submissionMatch.ts',
+  'apps/server/src/jobs/submissionExpire.ts',
+  'apps/server/src/jobs/submissionFollowup.ts',
+  'apps/server/src/jobs/submissionSnapshot.ts',
+  'packages/core/src/submissionStateMachine.ts',
+  'packages/core/src/schemas/submission.ts',
+  // the extension's form filler and its popup
+  'packages/extension/src/greenhouseFill.ts',
+  'packages/extension/src/fillReport.ts',
+  'packages/extension/src/popup.ts',
+  // deployment: Compose, the image and the TLS proxy
+  'deploy/compose.yml',
+  'deploy/compose.demo.yml',
+  'deploy/compose.shared-proxy.yml',
+  'deploy/Dockerfile',
+  'deploy/Caddyfile',
+  // the board probe and ATS detection
+  'apps/server/src/jobs/networkBoardProbe.ts',
+  'apps/server/src/jobs/atsDetect.ts',
+  'apps/server/src/jobs/atsJobRefBackfill.ts',
+  'apps/server/src/lib/atsJobRef.ts',
+  // the AI provider clients and the untrusted-text fence
+  'packages/ai/src/providers.ts',
+  'packages/ai/src/anthropicBatch.ts',
+  'packages/ai/src/batch.ts',
+  'packages/ai/src/keyCheck.ts',
+  'packages/ai/src/router.ts',
+  'packages/ai/src/tasks.ts',
+  // credential-write ordering, the demo boundary, export and import, file storage, admin step-up
+  'apps/server/src/lib/passwordLock.ts',
+  'apps/server/src/lib/demoAccounts.ts',
+  'apps/server/src/lib/demoDedicated.ts',
+  'apps/server/src/lib/demoOwnData.ts',
+  'apps/server/src/lib/demoSharedAdmin.ts',
+  'apps/server/src/cli/seedDemo.ts',
+  'apps/server/src/lib/demo/seed.ts',
+  'apps/server/src/lib/demo/fixture.ts',
+  'apps/server/src/cli/createDemoAccount.ts',
+  'apps/server/src/jobs/demoReset.ts',
+  'apps/server/src/lib/exporter.ts',
+  'apps/server/src/lib/importer.ts',
+  'apps/server/src/routes/importExport.ts',
+  'apps/server/src/lib/storage.ts',
+  'apps/server/src/routes/obsSettings.ts',
 ];
 
 for (const file of FLAGGED_FILES) {
@@ -149,6 +201,19 @@ for (const file of FLAGGED_FILES) {
     assert.deepEqual(matchingSecurityPaths([file]), [file]);
   });
 }
+
+// Files in agreed areas that open PRs add (tl on #610): another provider's batch client, and the
+// pepper version beside the pepper set.
+for (const file of ['packages/ai/src/openaiBatch.ts', 'apps/server/src/lib/pepperVersion.ts']) {
+  test(`a later ${file} is flagged too (#610)`, () => {
+    assert.deepEqual(matchingSecurityPaths([file]), [file]);
+  });
+}
+
+test('a Dockerfile variant added later is flagged too (#610)', () => {
+  const file = 'deploy/Dockerfile.dev';
+  assert.deepEqual(matchingSecurityPaths([file]), [file]);
+});
 
 test('a workflow added later is flagged too', () => {
   const file = '.github/workflows/added-later.yml';
@@ -194,6 +259,17 @@ const NOT_SENSITIVE = [
   // these guard **/config.ts and **/types.ts with names that exist nowhere
   'packages/core/src/config.ts',
   'apps/server/src/lib/types.ts',
+  // #610: neighbours of the new areas, which must stay out. The page that shows a submission, the
+  // extension's page reader, an AI file with no outbound call, the demo notice in the web app, and
+  // the tests that read the Dockerfile.
+  'apps/web/src/components/apply/SubmissionDetail.tsx',
+  'packages/extension/src/extract.ts',
+  'packages/ai/src/pricing.ts',
+  'apps/web/src/components/SharedDemoNotice.tsx',
+  'apps/server/test/dockerfilePgdg.test.ts',
+  // made-up names one step away from the deploy globs
+  'deploy/composeNotes.md',
+  'deploy/Caddyfile.example',
 ];
 
 for (const file of NOT_SENSITIVE) {
@@ -206,7 +282,7 @@ for (const file of NOT_SENSITIVE) {
 // NOT_SENSITIVE: https://github.com/bgoleno/opportun/issues/252 and
 // https://github.com/bgoleno/opportun/issues/254. Changing this is a decision to revisit.
 const OFF_THE_LIST_BY_DECISION = [
-  'apps/server/src/lib/storage.ts',
+  // storage.ts was here until #610, where sec put the filesystem boundary on the list.
   '.github/scripts/security-paths.test.mjs',
 ];
 

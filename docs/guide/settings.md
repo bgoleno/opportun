@@ -27,11 +27,12 @@ with https:// (or http://), and a name one line of plain text.
 Where [assisted apply](pipeline.md#assisted-apply) is on, **Settings > Profile** has an
 **Applications** card with **Reviews allowed per 24 hours**: how many applications you can
 confirm a review for in a rolling 24 hours. Assisted apply is on unless the person running your
-server turned it off, and it is never on the demo; where it is off, the card and the limit do not
-show (the operator's setting is in the [install guide](../install.md#4-configuration-reference)).
+server turned it off, on the demo too (where they can also turn it off for its shared accounts
+only); where it is off, the card and the limit do not show (the operator's setting is in the
+[install guide](../install.md#4-configuration-reference)).
 
-- **The limit** is 10 unless the person running the server set another value, which can be at most 25. You can lower yours up to that value and press **Save limit**; **Use the server's limit**
-  takes yours away. If the server's limit is later set below yours, the server's applies, and the
+- **The limit** is 10 unless the person running the server set another value, which can be at most 25. You can set yours to any whole number from 1 up to the server's limit and press **Save
+  limit**; **Use the server's limit** takes yours away. If the server's limit is later set below yours, the server's applies, and the
   card says so.
 - **What counts:** each application you confirm a review for (**Confirm review and open**), once,
   however many times you confirm it. Deleting an opportunity does not give a place back.
@@ -315,21 +316,58 @@ under **Settings > Integrations > Extensions and Connectors**:
 
 The Extensions and Connectors card is pictured in [Inbox](inbox.md#connect-gmail).
 
+## Jobs
+
+Administrators see **Settings > Jobs**, a read-only list of the background work on the instance:
+Gmail sync, classification, backups, the attachment sweep, discovery runs and the rest all share
+one queue, and this page shows it so you can tell whether something is stuck without reading the
+server's logs. Other users who open the page are told that only an administrator can see the
+queue.
+
+- **The list** shows the 200 most recently changed jobs, newest first, and refreshes itself every
+  five seconds. Each row has the job's kind (and the user it runs for, when it runs for one), its
+  status, its last error if there is one, its attempts out of the most it may make, when it is
+  due and when it last changed.
+- **The status counts** above the list are for those 200 jobs. Press one to show only that
+  status, and press it again to show all.
+  - **Queued**: waiting for its time, not yet tried.
+  - **Running**: a worker has it.
+  - **Retrying**: it has been tried at least once and is waiting to try again.
+  - **Dead**: it failed on every attempt, or was cancelled before it ran; its last error says why.
+  - **Done**: finished.
+- **Overdue** is shown beside the due time of a queued or retrying job whose time has already
+  passed. A worker should have started it by now, so it is the sign that something is stuck, not
+  just waiting its turn.
+- **A failed job tries again by itself.** The wait doubles with each attempt, from about 30
+  seconds up to an hour, and the job is marked Dead once it has used all its attempts.
+- **A dead job has no button on this page.** The server has an administrator-only route,
+  `POST /api/v1/jobs/{id}/retry`, that puts a dead job back in the queue with a fresh set of
+  attempts and records the retry in the audit log. It answers 409 if the job is not dead, or if
+  another queued or running job already has the same key.
+
 ## Import and export
 
 **Settings > Import/Export** has four cards.
 
 - **Import**: a zip or folder with `opportunities.csv` (and optionally `network.csv` and the
   Markdown notes it refers to). A pack made before the Network section was renamed calls that
-  file `contacts.csv`, and it imports the same way; a pack holding both is refused. Importing
-  the same pack again changes nothing: rows match on company, title and location, and stages
-  only move forward.
+  file `contacts.csv`, and it imports the same way; a pack holding both is refused. A pack whose
+  `opportunities.csv` has no `closed_reason` column, from an older build, imports too, its
+  closed opportunities with no reason. Importing the same pack again changes nothing: rows match
+  on company, title and location, and stages only move forward.
 - **LinkedIn export**: see [Network](network.md#import-your-linkedin-export).
 - **Export**: a zip of everything you own (`export.json` with every table, a Markdown summary
   per opportunity, and an `opportunities.csv` you can import again). Stored keys and tokens
   are never included. A CSV cell that would otherwise begin with `=`, `+`, `-` or `@` is
   written with a leading apostrophe, so a spreadsheet shows the text instead of running it as
   a formula; the importer drops that apostrophe again.
+
+  Importing an export brings back only what `opportunities.csv` holds: each opportunity's
+  company, title, stage (with its dismissed or closed reason), posting link, location and
+  source. Everything else stays in the export only, in `export.json` and the summaries: notes,
+  activities and next steps, contacts and referral asks, resumes and attachments, and inbox
+  messages. Keep the zip for those.
+
 - **Backups** (administrators): the server snapshots its database every night at 03:00 server
   time and keeps the 14 newest. **Back up now** takes one immediately. Restoring is done on
   the server: see [install guide section 6](../install.md#6-upgrades-and-backups).
@@ -571,6 +609,7 @@ event and error records as logs, so in practice they stay in the instance.
 | `opportun.count.described`              | whole number             | yes      |
 | `opportun.count.deferred`               | whole number             | yes      |
 | `opportun.count.skipped`                | whole number             | yes      |
+| `opportun.count.holders`                | whole number             | yes      |
 | `opportun.count.truncated`              | whole number             | yes      |
 | `opportun.count.read`                   | whole number             | yes      |
 | `opportun.count.returned`               | whole number             | yes      |

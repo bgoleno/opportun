@@ -7,6 +7,7 @@
 // tested on its own; the queued ones go through the runner and check that the second is skipped
 // and every posting is still stored and ranked once. The provider is mocked and every posting is
 // made up.
+import { enqueue } from '../src/lib/jobQueue';
 import { runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -23,13 +24,14 @@ import {
   MULTI_POSTED_PREFIX,
   runDiscoverySource,
 } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob, startRunner } from '../src/jobs/runner';
+import { runNextJob, startRunner } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import { createSource } from '../src/repos/discovery';
 import { useApi } from './api';
 import { sqliteOnly } from './db';
 import type { TestClient } from './isolation';
 import { settledOrWaiting } from './race';
+import { holdInstanceSchedules } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -148,17 +150,24 @@ const queueRun = (
     { dedupeKey: `${DISCOVERY_RUN_KIND}:${key}:${sourceId}`, userId: c.userId, runAt },
   );
 
-const startRun = (app: FastifyInstance) => runNextJob(app.db, { services: app.jobs.services });
+// The test's own job, not a seeded schedule come due on the real clock (#615).
+const startRun = async (app: FastifyInstance) => {
+  await holdInstanceSchedules(app);
+  return await runNextJob(app.db, { services: app.jobs.services });
+};
 
 /**
  * A run of the source called directly, not through the runner, which since #269 would skip a
  * second one: two of these at once are the overlap #267's ingest lock has to hold against.
  */
 const runDirectly = (app: FastifyInstance, c: TestClient, sourceId: string) =>
-  runDiscoverySource(app.db, ctxOf(c), sourceId, {
-    fetch: app.jobs.services.sourceFetch!,
-    log: app.log,
-  });
+  runDiscoverySource(
+    app.db,
+    ctxOf(c),
+    sourceId,
+    { fetch: app.jobs.services.sourceFetch!, log: app.log },
+    { demo: app.jobs.services.demo === true },
+  );
 
 const statusesOf = async (app: FastifyInstance, ids: string[]) =>
   (await app.db.select().from(jobs).where(inArray(jobs.id, ids)).all()).map((r) => r.result);

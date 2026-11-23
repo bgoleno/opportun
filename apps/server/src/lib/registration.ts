@@ -15,6 +15,8 @@ import { racePoint } from './racePoints';
 export const REGISTRATION_OPEN_KEY = 'registration_open';
 
 export class RegistrationClosedError extends Error {}
+/** A `neverAdmin` registration while no account exists yet: it may not be the first (#776). */
+export class NoUsersYetError extends Error {}
 
 export async function isRegistrationOpen(db: Pick<Exec, 'select'>): Promise<boolean> {
   const row = await db
@@ -43,6 +45,12 @@ export interface RegisterUserInput {
   /** Already hashed (hashPassword with the caller's own peppers); this never hashes. */
   passwordHash: string;
   displayName: string;
+  /**
+   * Never the first account, so never the admin: refused with NoUsersYetError while no account
+   * exists, checked inside the registration lock. For the e2e sign-up shortcut
+   * (testSupport/mockAuth.ts, #776), which must not be able to make an admin.
+   */
+  neverAdmin?: boolean;
   /** Pinned id, for the demo seeder's deterministic accounts. Generated with newId() when
    *  omitted, exactly as the route has always done. */
   id?: string;
@@ -89,10 +97,15 @@ export async function insertUserRow(
  * db.insert throws on a duplicate email (isUniqueViolation), unchanged from before this was
  * extracted: the caller still decides what either means (HTTP 403/409 for the route, nothing
  * special for the seeder beyond letting it propagate).
+ *
+ * `inTransaction` runs in the account's own transaction, after the row is written: what must
+ * commit with the account or not at all (its first session and audit row, #779). Not by wrapping
+ * this in a caller's transaction, which would hold the write gate across the wait before it.
  */
 export async function registerUser(
   db: Exec,
   input: RegisterUserInput,
+  inTransaction?: (tx: Exec, row: typeof users.$inferSelect) => Promise<void>,
 ): Promise<typeof users.$inferSelect> {
   const now = input.now ?? Date.now();
   await racePoint('auth.register');
@@ -103,9 +116,14 @@ export async function registerUser(
     async (tx) => {
       const existing = (await tx.select({ n: count() }).from(users).get())?.n ?? 0;
       const first = existing === 0;
+      if (first && input.neverAdmin === true) throw new NoUsersYetError();
       if (!first && !(await isRegistrationOpen(tx))) throw new RegistrationClosedError();
       await racePoint('auth.register.locked');
-      const row = await insertUserRow(tx, { ...input, isAdmin: first, now });
+      const row = await insertUserRow(tx, {
+        ...input,
+        isAdmin: input.neverAdmin === true ? false : first,
+        now,
+      });
       if (first) {
         // FR-S2: the instance locks after its first account; admins reopen it.
         await tx
@@ -114,6 +132,7 @@ export async function registerUser(
           .onConflictDoUpdate({ target: settings.key, set: { value: false, updatedAt: now } })
           .run();
       }
+      if (inTransaction !== undefined) await inTransaction(tx, row);
       return row;
     },
     { scope: 'registration' },

@@ -1,6 +1,7 @@
 // Registers every job handler. Imported once by the app.
-import { importJob } from '../lib/importer';
-import { linkedInImportJob } from '../lib/linkedinExport';
+import { postingCheckJob } from './postingCheck';
+import { importJob } from './importJob';
+import { linkedInImportJob } from './linkedinImport';
 import { atsDetectJob, atsReverifyJob } from './atsDetect';
 import { attachmentSweepJob } from './attachmentSweep';
 import { backupJob } from './backup';
@@ -18,7 +19,12 @@ import { titleVariantsJob, titleVariantsSweepJob } from './titleVariants';
 import { demoResetJob } from './demoReset';
 import { discoveryRankJob } from './discoveryRank';
 import { rankWaitingJob, rankWaitingSweepJob } from './discoveryRankWaiting';
-import { rankBatchCollectJob, rankBatchSubmitJob, rankBatchSweepJob } from './rankBatch';
+import {
+  rankBatchCleanupJob,
+  rankBatchCollectJob,
+  rankBatchSubmitJob,
+  rankBatchSweepJob,
+} from './rankBatch';
 import { discoveryRunJob } from './discoveryRun';
 import { jobPruneJob } from './jobPrune';
 import { leadResolveJob } from './leadResolve';
@@ -58,11 +64,13 @@ registerJob(rankWaitingJob);
 registerJob(rankWaitingSweepJob);
 registerJob(rankBatchSubmitJob);
 registerJob(rankBatchCollectJob);
+registerJob(rankBatchCleanupJob);
 registerJob(rankBatchSweepJob);
 registerJob(refineDiscoveryPromptJob);
 registerJob(leadResolveJob);
 registerJob(atsDetectJob);
 registerJob(atsReverifyJob);
+registerJob(postingCheckJob);
 registerJob(companySuggestJob);
 registerJob(companyBoardProbeJob);
 registerJob(networkProbeJob);

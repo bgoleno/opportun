@@ -61,7 +61,7 @@ export async function readExport(db: Pick<Exec, 'select'>): Promise<StoredExport
   };
 }
 
-export async function writeExport(db: Db, value: StoredExport): Promise<void> {
+export async function writeExport(db: Exec, value: StoredExport): Promise<void> {
   const now = Date.now();
   await db
     .insert(settings)
@@ -71,7 +71,7 @@ export async function writeExport(db: Db, value: StoredExport): Promise<void> {
 }
 
 /** Turns export off and keeps the destination (Collect turned off, design 14.1). */
-export async function disableExport(db: Db): Promise<void> {
+export async function disableExport(db: Exec): Promise<void> {
   const stored = await readExport(db);
   if (!stored.enabled) return;
   await writeExport(db, { ...stored, enabled: false });

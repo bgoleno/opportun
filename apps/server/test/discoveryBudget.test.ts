@@ -2,6 +2,7 @@
 // decision 2): a budget the user sets, default $1 a day. Over it a posting waits and is ranked on
 // the next budget day, oldest first; nothing is ever skipped for budget. The provider is mocked
 // and every posting is made up.
+import { enqueue, readSchedules, removeSchedule } from '../src/lib/jobQueue';
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -22,13 +23,7 @@ import {
   sweepWaitingResults,
 } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
-import {
-  enqueue,
-  readSchedules,
-  removeSchedule,
-  runNextJob,
-  startRunner,
-} from '../src/jobs/runner';
+import { startRunner } from '../src/jobs/runner';
 import type { UserCtx } from '../src/repos/base';
 import {
   createSource,
@@ -45,6 +40,7 @@ import {
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { holdAt } from './race';
+import { runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -102,13 +98,13 @@ const posting = (i: number): NormalizedPosting => ({
   externalId: `gh-${i}`,
 });
 
-/** Stores `count` postings, and leaves their rank jobs queued. */
-async function discoverQueued(
+/** Queues a board run that finds `count` postings, and returns its job id. Runs nothing. */
+async function queueDiscovery(
   app: FastifyInstance,
   c: TestClient,
   count: number,
   first = 1,
-): Promise<void> {
+): Promise<string> {
   registerSource({
     kind: 'ats_lever',
     async *fetchPostings() {
@@ -120,8 +116,21 @@ async function discoverQueued(
     config: { org: `initech-${first}` },
     roleTargetId: null,
   });
-  await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: c.userId });
-  await runNextJob(app.db, { services: app.jobs.services });
+  return await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: c.userId });
+}
+
+/**
+ * Stores `count` postings, and leaves their rank jobs queued. Only with no runner polling: a live
+ * runner can claim the run first, and runQueuedJob then refuses it (#677). A test with a runner
+ * started queues with queueDiscovery and waits for the runner to run it.
+ */
+async function discoverQueued(
+  app: FastifyInstance,
+  c: TestClient,
+  count: number,
+  first = 1,
+): Promise<void> {
+  await runQueuedJob(app, await queueDiscovery(app, c, count, first));
 }
 
 async function discover(app: FastifyInstance, c: TestClient, count = 1, first = 1): Promise<void> {
@@ -883,7 +892,14 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
       };
       try {
         await inCall;
-        await discoverQueued(app, a, 2, 100);
+        // The runner is polling, so the board run is its to run, not runQueuedJob's: on main's
+        // Postgres leg the runner claimed it first and the helper refused a running job (#677).
+        // Waiting for the runner to finish it is the case that failed, every time.
+        const boardRun = await queueDiscovery(app, a, 2, 100);
+        await until(async () => {
+          const run = await app.db.select().from(jobs).where(eq(jobs.id, boardRun)).get();
+          return run?.status === 'done';
+        });
         // Both rank jobs have run and gone behind the older postings, with the drain still held.
         await until(
           async () =>

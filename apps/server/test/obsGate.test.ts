@@ -22,6 +22,8 @@ import {
   UnknownTelemetryKeyError,
 } from '../src/obs/gate';
 import { ATS_ALLOW_HOSTS } from '../src/lib/safeFetch';
+// The job kinds the gate checks opportun.job.kind against come from the registry as it loads (#764).
+import '../src/jobs/registry';
 
 afterEach(() => setUnknownKeyMode('throw'));
 

@@ -1,16 +1,15 @@
 // Resume tracking API (FR-R1, R2, R3). Documents live in the user's Google Drive; this API
 // keeps the tracking rows (status, opportunity link, parent base) and reads document text.
 import { RESUME_KINDS, RESUME_STATUSES, RESUME_STORES, type ResumeStore } from '@opportun/core';
-import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { DocumentStore } from '../adapters/documentStore';
 import { docUrl, searchDriveDocuments } from '../adapters/googleDocs';
 import { readDocumentStorePref, readRrBaseUrl, rrResumeUrl } from '../adapters/reactiveResume';
-import { users } from '../db/schema';
 import { requireUser, type Db, type UserCtx } from '../repos/base';
 import { getOpportunity } from '../repos/opportunities';
+import { displayNameOf } from '../repos/users';
 import {
   effectiveSubmission,
   latestSends,
@@ -35,6 +34,7 @@ import {
   type ResumeRow,
 } from '../repos/resumes';
 import { IdParams, pageOf } from './common';
+import { resumeStoreFor } from '../lib/resumeStores';
 
 export const ResumeView = z.object({
   id: z.string(),
@@ -59,9 +59,11 @@ export const ResumeView = z.object({
  * preference for new resumes never strands existing ones.
  */
 export function storeFor(app: FastifyInstance, store: ResumeStore): DocumentStore {
-  if (store === 'google_doc') return app.documentStore;
-  if (store === 'reactive_resume') return app.reactiveResumeStore;
-  return app.localFileStore;
+  return resumeStoreFor(store, {
+    documentStore: () => app.documentStore,
+    reactiveResumeStore: () => app.reactiveResumeStore,
+    localFileStore: () => app.localFileStore,
+  });
 }
 
 /** The browser link for a resume; `rrBaseUrl` is the owner's Reactive Resume origin, if any. */
@@ -253,11 +255,8 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
           body.opportunityId === undefined
             ? null
             : await getOpportunity(db, ctx, body.opportunityId);
-        const store =
-          body.store ??
-          ((await readDocumentStorePref(db, ctx)) === 'reactive_resume'
-            ? 'reactive_resume'
-            : 'google_doc');
+        // The preference is a resume store's own name (#771).
+        const store = body.store ?? (await readDocumentStorePref(db, ctx));
         const meta = await storeFor(app, store).registerExisting(ctx, body.docRef);
         const row = await insertResume(db, ctx, {
           kind: opportunity === null ? 'base' : 'tailored',
@@ -274,14 +273,7 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
       const opportunity = await getOpportunity(db, ctx, body.opportunityId);
       // The copy lives where its base lives.
       const docs = storeFor(app, base.store);
-      const displayName =
-        (
-          await db
-            .select({ n: users.displayName })
-            .from(users)
-            .where(eq(users.id, ctx.userId))
-            .get()
-        )?.n ?? '';
+      const displayName = (await displayNameOf(db, ctx.userId)) ?? '';
       const name = renderResumeName(await readNamingTemplate(db, ctx), {
         displayName,
         company: opportunity.companyName,

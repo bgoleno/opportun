@@ -1,5 +1,7 @@
 // Nightly backups (FR-I4): openable snapshots, retention, confinement, the nightly schedule
 // and a restore of a snapshot into a fresh data directory.
+import { verifySnapshot } from '../src/lib/backupSnapshots';
+import { enqueue, nextOccurrence } from '../src/lib/jobQueue';
 import {
   copyFile,
   mkdir,
@@ -26,9 +28,8 @@ import {
   MANUAL_BACKUP_DEDUPE_KEY,
   runBackup,
   snapshotName,
-  verifySnapshot,
 } from '../src/jobs/backup';
-import { cancelJob, enqueue, materializeSchedules, nextOccurrence } from '../src/jobs/runner';
+import { cancelJob, materializeSchedules } from '../src/jobs/runner';
 import { PathEscapeError } from '../src/lib/storage';
 import { checkSqliteFilesystem } from '../src/lib/sqliteFilesystem';
 import { useApi } from './api';

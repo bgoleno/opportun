@@ -21,12 +21,13 @@
 // opportunities.ts; a future AI pass's own "no" would write the same way) is never revisited,
 // and a 'confirmed' pair is never re-scored. Without this, re-running on a later edit to
 // either opportunity's title or company would undo a user's own dismissal.
+import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../lib/titleMatch';
 import { and, eq, isNull, ne, or } from 'drizzle-orm';
 import { companyMatchKey, newId } from '@opportun/core';
 import type { DedupeCandidateDecidedBy, DedupeCandidateDecision } from '../db/schema.shared';
-import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../jobs/leadResolve';
 import { companies, opportunities, opportunityDedupeCandidates } from '../db/schema';
 import type { Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 
 /**
  * Above this, a same-company title match is confident enough to write possibleDuplicateOf
@@ -155,7 +156,7 @@ export async function resolveDedupeCandidateByAi(
     await exec
       .update(opportunities)
       .set({ possibleDuplicateOf: trackedId, updatedAt: now })
-      .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, candidateId)))
+      .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, candidateId)))
       .run();
   }
   return 'confirmed';
@@ -193,7 +194,7 @@ async function findMatches(
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
     .where(
       and(
-        eq(opportunities.userId, ctx.userId),
+        ownedBy(opportunities.userId, ctx),
         ne(opportunities.id, opportunityId),
         ne(opportunities.stage, 'dismissed'),
         or(eq(companies.companyMatchKey, key), isNull(companies.companyMatchKey)),
@@ -247,7 +248,7 @@ export async function detectDedupeCandidates(
         await exec
           .update(opportunities)
           .set({ possibleDuplicateOf: match.id, updatedAt: now })
-          .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, opportunityId)))
+          .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
           .run();
         linked = true;
       }

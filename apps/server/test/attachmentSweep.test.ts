@@ -4,13 +4,14 @@
 // path while a sweep is deciding what to do with it. "Must not delete" is tested first and
 // more thoroughly than "must delete": a sweep that removes a file something still references
 // is worse than the leak it exists to fix.
+import { sweepOrphanedAttachments } from '../src/lib/attachmentSweep';
+import { enqueue } from '../src/lib/jobQueue';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { newId } from '@opportun/core';
 import { attachments, auditLog, communications, jobs } from '../src/db/schema';
-import { ATTACHMENT_SWEEP_JOB_KIND, sweepOrphanedAttachments } from '../src/jobs/attachmentSweep';
-import { enqueue } from '../src/jobs/runner';
+import { ATTACHMENT_SWEEP_JOB_KIND } from '../src/jobs/attachmentSweep';
 import { upsertInbound } from '../src/repos/communications';
 import type { TestClient } from './isolation';
 import { pauseAt } from './race';

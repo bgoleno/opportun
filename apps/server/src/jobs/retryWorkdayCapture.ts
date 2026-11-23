@@ -34,6 +34,7 @@
 //   value and the two web call sites that branch on resolution (QueueRow's chip, QueueDialogs'
 //   manual-capture offer, which capture_failed gets too: the one thing left that can still fill
 //   in a description by hand).
+import { boardFromUrl } from '../lib/atsBoard';
 import { dedupeKey, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
@@ -47,7 +48,6 @@ import type { Db } from '../db/client';
 import { discoveryResults } from '../db/schema';
 import { workdayPosting } from '../lib/atsJobRef';
 import { sanitizePosting } from '../lib/postingSanitize';
-import { boardFromUrl } from './atsDetect';
 import { requireService, type JobHandler } from './registry';
 
 export const RETRY_WORKDAY_CAPTURE_KIND = 'discovery.retry_workday_capture';

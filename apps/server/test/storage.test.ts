@@ -424,4 +424,17 @@ describe('readOperatorTree', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('returns a file named __proto__ as a file of its own, with its bytes', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'opportun-tree-'));
+    try {
+      await writeFile(join(dir, '__proto__'), 'p');
+      await writeFile(join(dir, 'a.txt'), 'a');
+      const tree = readOperatorTree(dir);
+      expect(Object.keys(tree).sort()).toEqual(['__proto__', 'a.txt']);
+      expect(Buffer.from(tree['__proto__']!).toString('utf8')).toBe('p');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

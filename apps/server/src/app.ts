@@ -1,5 +1,7 @@
 import cookie from '@fastify/cookie';
 import Fastify, { type FastifyInstance, LogController } from 'fastify';
+import { ATS_REVERIFY_CRON, ATS_REVERIFY_KIND } from './lib/atsDetect';
+import { removeSchedule, seedSchedule } from './lib/jobQueue';
 import {
   serializerCompiler,
   validatorCompiler,
@@ -12,6 +14,7 @@ import { configureGateWatchdog, gateHeldError } from './db/gate';
 import { SCHEMA_DIALECT } from './db/schema';
 import { obsHttpPlugin } from './plugins/obsHttp';
 import { securityPlugin } from './plugins/security';
+import { AI_CALL_LIMIT_MS, demoResetHoldPlugin } from './plugins/demoResetHold';
 import { sessionPlugin } from './plugins/session';
 import {
   createGoogleConn,
@@ -20,9 +23,11 @@ import {
   type GoogleApi,
   type GoogleConn,
 } from './lib/google';
-import { setAiOverride, type AiOverride } from './lib/ai';
+import { setAiCallLimit, setAiOverride, type AiOverride } from './lib/ai';
 import { bindVaultKey } from './lib/secretBox';
 import { OAUTH_PROVIDERS, oauthCallbackPath } from './lib/oauthProviders';
+import { NO_PEPPERS } from './lib/passwords';
+import { recordPepperVersion } from './lib/pepperVersion';
 import type { DocumentStore } from './adapters/documentStore';
 import { createGoogleDocsStore } from './adapters/googleDocs';
 import { createLocalFileStore } from './adapters/localFile';
@@ -35,7 +40,6 @@ import './adapters/sources/index';
 import './jobs/index';
 import { batchProviderFor } from '@opportun/ai';
 import type { JobServices } from './jobs/registry';
-import { ATS_REVERIFY_CRON, ATS_REVERIFY_KIND } from './jobs/atsDetect';
 import { RANK_WAITING_SWEEP_CRON, RANK_WAITING_SWEEP_KIND } from './jobs/discoveryRankWaiting';
 import { RANK_BATCH_SWEEP_CRON, RANK_BATCH_SWEEP_KIND } from './jobs/rankBatch';
 import { ATTACHMENT_SWEEP_CRON, ATTACHMENT_SWEEP_JOB_KIND } from './jobs/attachmentSweep';
@@ -47,6 +51,7 @@ import { JOB_PRUNE_CRON, JOB_PRUNE_JOB_KIND } from './jobs/jobPrune';
 import { OBS_PRUNE_CRON, OBS_PRUNE_JOB_KIND } from './jobs/obsPrune';
 import { stopObs } from './obs';
 import { startObsFromSettings } from './obs/config';
+import { DemoResetGate } from './lib/demoResetGate';
 import { loggerOptions } from './obs/log';
 import { obsMetricRoutes } from './routes/obsMetrics';
 import { obsSettingsRoutes } from './routes/obsSettings';
@@ -73,14 +78,7 @@ import { enqueueRepairCompanyMatchKeysOnce } from './jobs/companyMatchKeyRepair'
 import { enqueueCompanyDomainBackfillOnce } from './jobs/companyDomainResolve';
 import { OPPORTUNITY_DEDUPE_AI_CRON, OPPORTUNITY_DEDUPE_AI_KIND } from './jobs/opportunityDedupeAi';
 import { RETRY_WORKDAY_CAPTURE_CRON, RETRY_WORKDAY_CAPTURE_KIND } from './jobs/retryWorkdayCapture';
-import {
-  queueLagMs,
-  removeSchedule,
-  runDueJobs,
-  seedSchedule,
-  startRunner,
-  type Runner,
-} from './jobs/runner';
+import { queueLagMs, runDueJobs, startRunner, type Runner } from './jobs/runner';
 import { SNAPSHOT_RECONCILE_CRON, SNAPSHOT_RECONCILE_JOB_KIND } from './jobs/submissionSnapshot';
 import { activityRoutes } from './routes/activities';
 import { aiRoutes } from './routes/ai';
@@ -198,6 +196,15 @@ export interface OAuthWiring {
 
 export interface BuildOptions {
   logStream?: LogStream;
+  /** The demo reset gate's limits (#618): tests set short ones; production uses the defaults. */
+  demoResetLimits?: {
+    startMs?: number;
+    holdMs?: number;
+    streamMs?: number;
+    aiCallMs?: number;
+    /** How long before a hold's bound its stop signal fires (#684). */
+    stopMarginMs?: number;
+  };
   /** Replaces the googleapis-backed client (tests inject a fake: no network). */
   google?: GoogleApi;
   /** Replaces the Google Docs document store. */
@@ -400,6 +407,9 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     createReactiveResumeStore({ fetch: rrFetch, config: (ctx) => readRrConfig(db, ctx) }),
   );
   app.decorate('localFileStore', createLocalFileStore({ storage, db }));
+  // The pepper version this server runs with, on every boot (0 without a pepper), for the CLIs that
+  // set a password: they refuse a different one (#606). The number only, never a secret.
+  await recordPepperVersion(db, (cfg.peppers ?? NO_PEPPERS).current);
   // Nightly backup unless an operator already changed or disabled the schedule.
   await seedSchedule(db, BACKUP_JOB_KIND, BACKUP_CRON);
   // Before that backup, not after (issue #170): a bad result gets a date, not a guess, and
@@ -492,9 +502,21 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     mailProvider: createGmailProvider(opts.google ?? realGoogleApi, googleConn),
     sourceFetch: opts.sourceFetch ?? safeFetch,
     log: app.log,
+    // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
     env: opts.env ?? process.env,
     submissions: submissionsEnabled(cfg),
+    demo: cfg.demo,
     rankBatchProvider: opts.rankBatchProvider ?? batchProviderFor,
+    // The nightly reset's gate (#618): only a demo server resets, so only it has one.
+    ...(cfg.demo
+      ? {
+          demoResetGate: new DemoResetGate(
+            opts.demoResetLimits?.stopMarginMs === undefined
+              ? {}
+              : { stopMarginMs: opts.demoResetLimits.stopMarginMs },
+          ),
+        }
+      : {}),
   };
   app.decorate('jobs', {
     services,
@@ -524,6 +546,25 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
     await stopObs(db);
     await closeDatabase(dbHandle);
   });
+  // Before the session plugin, so a request's session lookup is inside its hold (#618).
+  if (services.demoResetGate !== undefined) {
+    // Every AI request on a demo server has a time limit below the gate's hold bound (#656).
+    setAiCallLimit(db, opts.demoResetLimits?.aiCallMs ?? AI_CALL_LIMIT_MS);
+    await app.register(demoResetHoldPlugin, {
+      gate: services.demoResetGate,
+      ...(opts.demoResetLimits?.startMs === undefined
+        ? {}
+        : { startLimitMs: opts.demoResetLimits.startMs }),
+      ...(opts.demoResetLimits?.holdMs === undefined
+        ? {}
+        : { holdLimitMs: opts.demoResetLimits.holdMs }),
+      ...(opts.demoResetLimits?.streamMs === undefined
+        ? {}
+        : { streamLimitMs: opts.demoResetLimits.streamMs }),
+    });
+  } else {
+    app.decorate('demoStreamLimitMs', undefined);
+  }
   await app.register(sessionPlugin, { demo: cfg.demo });
 
   const typed = app.withTypeProvider<ZodTypeProvider>();
@@ -601,7 +642,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
       await api.register(connectorApplyRoutes);
       await api.register(networkRoutes);
       await api.register(referralRoutes);
-      // Assisted apply (#114): every route 404s with OPPORTUN_SUBMISSIONS=0, and on the demo.
+      // Assisted apply (#114): every route 404s with OPPORTUN_SUBMISSIONS=0, and for a shared demo
+      // account while the operator has it switched off for those (decision 133).
       await api.register(submissionRoutes);
       await api.register(obsSettingsRoutes);
       await api.register(obsTraceRoutes);

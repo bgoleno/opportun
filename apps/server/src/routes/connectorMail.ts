@@ -3,17 +3,19 @@
 // device token. Bearer only (no session, no CSRF), write only. Every message goes through the
 // same ingest as Gmail (mailIngest), so pushed mail is capped, upserted and fenced exactly
 // like synced mail: it is hostile input from the classifier's point of view.
+import { APPLE_MAIL_INTEGRATION } from '../lib/mailStatus';
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, onRequestAsyncHookHandler } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { submissionsEnabled } from '../config';
-import { APPLE_MAIL_INTEGRATION, ingestInbound } from '../jobs/mailIngest';
+import { ingestInbound } from '../jobs/mailIngest';
 import { deviceRoute, requireDevice, requireDeviceToken } from '../lib/deviceTokens';
 import { HttpError } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
 import { putSyncState } from '../repos/communications';
 import { workflow } from '../obs/workflow';
+import { ErrorResponse } from './common';
 
 const MB = 1024 * 1024;
 /** Messages per batch; the connector splits larger syncs. */
@@ -31,8 +33,11 @@ export const MAX_BATCH_BODY_BYTES = 10 * MB;
 /** The request itself: the body cap plus room for JSON escaping and headers of 100 messages. */
 const ROUTE_BODY_LIMIT = 12 * MB;
 
-/** The adapters/mailProvider InboundMessage shape. Long strings are cut by upsertInbound. */
-const InboundMessageSchema = z.object({
+/**
+ * The adapters/mailProvider InboundMessage shape. Long strings are cut by upsertInbound. Exported
+ * for the parity test with the connector's own caps (test/clientLimitsParity.test.ts, #649).
+ */
+export const InboundMessageSchema = z.object({
   externalId: z.string().min(1).max(1024),
   threadKey: z.string().max(1024),
   from: z.string().max(4096),
@@ -94,8 +99,6 @@ export function capBody(body: string, bytes: number): string {
   while (end > 0 && (buf.readUInt8(end) & 0xc0) === 0x80) end -= 1;
   return buf.subarray(0, end).toString('utf8') + TRUNCATED_MARK;
 }
-
-const ErrorResponse = z.object({ error: z.object({ code: z.string() }) });
 
 export async function connectorMailRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();

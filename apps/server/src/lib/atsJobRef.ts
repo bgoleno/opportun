@@ -13,8 +13,8 @@
 // `https://<tenant>.<dc>.myworkdayjobs.com[/<locale>]/<site>/job/<location>/<title>_<reqId>[/apply]`.
 // Requisition ids are not all digits (`1000001`, `1000002-1`, `JR-000001`): the id is whatever
 // follows the last underscore. Reading one needs no network at all.
-import { greenhouseBoardJobUrl, greenhouseJidOf } from '@opportun/core';
-import { boardFromUrl, type AtsBoard, type AtsKind } from '../jobs/atsDetect';
+import { boardFromUrl, type AtsBoard, type AtsKind } from './atsBoard';
+import { ATS_SITES, greenhouse, greenhouseBoardJobUrl, greenhouseJidOf } from '@opportun/core';
 
 export interface AtsJobRef {
   kind: AtsKind;
@@ -44,7 +44,6 @@ export interface AtsJobRef {
 const DEFAULT_MAX = 20;
 /** Provider job ids are opaque; this is the shape a link may carry. */
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-const SLUG = /^[a-z0-9-]{1,100}$/;
 const URLISH = /https?:\/\/[^\s"'<>)\]}]+/g;
 
 function segmentsOf(url: URL): string[] {
@@ -79,10 +78,10 @@ function idFromPath(kind: AtsJobRef['kind'], url: URL): string | null {
   const seg = segmentsOf(url);
   const host = url.hostname.toLowerCase();
   let raw: string | undefined;
-  if (kind === 'ats_greenhouse') {
-    // boards.greenhouse.io/<org>/jobs/<id> and the API's /v1/boards/<org>/jobs/<id>.
-    raw = seg[1] === 'jobs' ? seg[2] : seg[3] === 'jobs' ? seg[4] : undefined;
-  } else if (kind === 'ats_lever' && host === 'jobs.lever.co') {
+  // A site moved to the registry reads its own job links (#769).
+  const site = ATS_SITES.find((s) => s.sourceKind === kind);
+  if (site !== undefined) return site.jobFromUrl(url)?.id ?? null;
+  if (kind === 'ats_lever' && host === 'jobs.lever.co') {
     raw = seg[1];
   } else if (kind === 'ats_ashby' && host === 'jobs.ashbyhq.com') {
     raw = seg[1];
@@ -90,16 +89,13 @@ function idFromPath(kind: AtsJobRef['kind'], url: URL): string | null {
   return raw !== undefined && ID.test(raw) ? raw : null;
 }
 
-/** A `gh_jid` link: a Greenhouse job embedded in a page on any host, so boardFromUrl misses it. */
+/**
+ * A `gh_jid` link: a Greenhouse job embedded in a page on any host, so boardFromUrl misses it.
+ * The rule is the Greenhouse site's (packages/core/src/sites/greenhouse.ts, #769).
+ */
 function fromGreenhouseJid(url: URL): Omit<AtsJobRef, 'url'> | null {
-  const jid = url.searchParams.get('gh_jid');
-  if (jid === null || !ID.test(jid)) return null;
-  const board = url.searchParams.get('board')?.toLowerCase() ?? '';
-  return {
-    kind: 'ats_greenhouse',
-    org: SLUG.test(board) ? board : null,
-    externalId: jid,
-  };
+  const ref = greenhouse.embeddedJobFromUrl!(url);
+  return ref === null ? null : { kind: 'ats_greenhouse', org: ref.board, externalId: ref.id };
 }
 
 /** The job a board URL's own path names (board host and path, never a query parameter). */
@@ -124,7 +120,12 @@ function fromBoardPath(board: AtsBoard, url: URL): Omit<AtsJobRef, 'url'> | null
  * punctuation (`.,;:!?`, and a `)` that closes no `(`, #549) is not part of it, as the text scan
  * always read it (sec at 23f3a37).
  */
-export function atsJobRefOfUrl(address: string): AtsJobRef | null {
+/**
+ * `address` without the punctuation a sentence leaves after a pasted URL: trailing `.,;:!?` and a
+ * `)` that closes no `(`. Exported for the handoff's own check (#620): a destination this would
+ * change is refused, so the address checked is the address opened.
+ */
+export function withoutTrailingPunctuation(address: string): string {
   // Dropped by loops, not a regular expression, so it stays linear whatever the address holds.
   // A `)` is trailing punctuation only when it closes no `(` (#549): a URL pasted out of "(...)"
   // keeps its job id, and a Workday ".../San-Jose-CA-(Remote)/..." or a balanced "(...)" at the
@@ -146,7 +147,30 @@ export function atsJobRefOfUrl(address: string): AtsJobRef | null {
     if ('.,;:!?'.includes(last) || (last === ')' && strayClose.has(end - 1))) end -= 1;
     else break;
   }
-  const raw = address.slice(0, end);
+  return address.slice(0, end);
+}
+
+/**
+ * The job an address names on a board, read only from the board host and its own path: never
+ * from `gh_jid` or another query parameter, and with no punctuation dropped. For the handoff's
+ * destination check (#620, sec): a board root or an embed page that names its job some other way
+ * is not this requisition's page. Other callers keep atsJobRefOfUrl's fallback.
+ */
+export function atsJobRefOfBoardPath(address: string): AtsJobRef | null {
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    return null;
+  }
+  const board = boardFromUrl(address);
+  if (board === null) return null;
+  const ref = fromBoardPath(board, url);
+  return ref === null ? null : { ...ref, url: address };
+}
+
+export function atsJobRefOfUrl(address: string): AtsJobRef | null {
+  const raw = withoutTrailingPunctuation(address);
   let url: URL;
   try {
     url = new URL(raw);

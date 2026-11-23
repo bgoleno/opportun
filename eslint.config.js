@@ -155,6 +155,30 @@ export default defineConfig(
   tseslint.configs.recommended,
   security.configs.recommended,
   {
+    // https://github.com/bgoleno/opportun/issues/587: each eslint-plugin-security rule becomes an
+    // error once its warnings are triaged (fixed, or disabled on the line with the reason it is
+    // safe), so a new hit fails `pnpm verify` instead of joining a pile nobody reads. The other
+    // rules follow as their own triage lands.
+    rules: {
+      'security/detect-possible-timing-attacks': 'error',
+      'security/detect-unsafe-regex': 'error',
+      'security/detect-non-literal-fs-filename': 'error',
+      'security/detect-non-literal-regexp': 'error',
+      'security/detect-object-injection': 'error',
+      // No hits when they were triaged (#587): errors from the start.
+      'security/detect-bidi-characters': 'error',
+      'security/detect-buffer-noassert': 'error',
+      'security/detect-child-process': 'error',
+      'security/detect-disable-mustache-escape': 'error',
+      'security/detect-eval-with-expression': 'error',
+      'security/detect-invisible-characters': 'error',
+      'security/detect-new-buffer': 'error',
+      'security/detect-no-csrf-before-method-override': 'error',
+      'security/detect-non-literal-require': 'error',
+      'security/detect-pseudoRandomBytes': 'error',
+    },
+  },
+  {
     languageOptions: {
       globals: { ...globals.node },
     },
@@ -211,11 +235,81 @@ export default defineConfig(
     },
   },
   {
-    // NFR-SEC11: filesystem access in the server only through the storage module.
+    // NFR-SEC11: filesystem access in the server only through the storage module. The same
+    // options also refuse `env` imported from node:process (https://github.com/bgoleno/opportun/issues/773;
+    // the block below refuses process.env itself): in this block, since a second block setting
+    // no-restricted-imports for these files would replace these options rather than add to them.
     files: ['apps/server/src/**'],
     ignores: ['apps/server/src/lib/storage.ts'],
     rules: {
-      'no-restricted-imports': ['error', fsBan],
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            ...fsBan.paths,
+            ...['node:process', 'process'].map((name) => ({
+              name,
+              importNames: ['env'],
+              message: 'Read environment settings in apps/server/src/config.ts (#773).',
+            })),
+          ],
+        },
+      ],
+    },
+  },
+  {
+    // Environment settings are read in config.ts only (https://github.com/bgoleno/opportun/issues/773),
+    // so each keeps one name, default and validation. A read that is not a setting (an entry point
+    // handing the environment to config's loaders, a child process's own environment, test-run
+    // detection) carries an eslint-disable-next-line with its reason on that line, never a file
+    // ignore, so a new read in the same file still fails. no-restricted-properties also sees
+    // `const { env } = process`; `import { env } from 'node:process'` is the block above's.
+    files: ['apps/server/src/**/*.ts'],
+    ignores: ['apps/server/src/config.ts'],
+    rules: {
+      'no-restricted-properties': [
+        'error',
+        {
+          object: 'process',
+          property: 'env',
+          message: 'Read environment settings in apps/server/src/config.ts (#773).',
+        },
+      ],
+    },
+  },
+  {
+    // Layers (docs/architecture.md sections 3 and 6.2, https://github.com/bgoleno/opportun/issues/763):
+    // repos and lib sit below jobs and routes, so they import neither. Their pure helpers live in
+    // lib/ (lib/atsBoard.ts, lib/titleMatch.ts, lib/triageContext.ts and others), and
+    // apps/server/test/importCycles.test.ts checks that the jobs/repos and mail groups stay free
+    // of cycles. No job module is an exception: the queue API and the kinds (lib/jobQueue.ts,
+    // lib/jobKinds.ts), the enqueue helpers and the helpers repos/ and lib/ used from jobs/ are in
+    // lib/, and the job handlers are defined in jobs/ (https://github.com/bgoleno/opportun/issues/788).
+    // apps/server/test/layerLintRules.test.ts checks the group names none. The rule reads static
+    // imports and re-exports, not import(): today nothing here imports a job or a route that way. @typescript-eslint's rule, not the core one, so the NFR-SEC11 block's
+    // no-restricted-imports (fsBan, all of apps/server/src) still applies: a second block
+    // setting that same rule would replace its options for these files.
+    files: ['apps/server/src/repos/**/*.ts', 'apps/server/src/lib/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['../jobs/*', '../../jobs/*'],
+              allowTypeImports: true,
+              message:
+                'repos/ and lib/ do not import jobs/ (docs/architecture.md 6.2): move the helper to lib/.',
+            },
+            {
+              group: ['../routes/*', '../../routes/*'],
+              allowTypeImports: true,
+              message:
+                'repos/ and lib/ do not import routes/ (docs/architecture.md 6.2): move the helper to lib/.',
+            },
+          ],
+        },
+      ],
     },
   },
   {
@@ -324,10 +418,13 @@ export default defineConfig(
     },
   },
   {
-    // Tests build fixtures in per-test temp dirs; non-literal paths there are expected.
+    // Tests build fixtures in per-test temp dirs; non-literal paths there are expected. And they
+    // index fixture and schema objects by table, column and loop keys the test itself defines,
+    // never by outside input (#587, each hit read when the rule was triaged).
     files: ['**/test/**', '**/*.test.ts', '**/*.test.tsx'],
     rules: {
       'security/detect-non-literal-fs-filename': 'off',
+      'security/detect-object-injection': 'off',
     },
   },
   {

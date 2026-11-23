@@ -32,6 +32,7 @@ import {
   parseServerUrl,
   isDeviceToken,
   saveSettings,
+  travelsUnencrypted,
   type Settings,
   type SettingsStorage,
 } from './settings';
@@ -76,6 +77,11 @@ export interface PopupDeps {
   runReadPage(tabId: number): Promise<ReadPage | null>;
   /** The popup's own timer between resume checks (the page side keeps none). */
   wait(ms: number): Promise<void>;
+  /**
+   * The timer for an action's time limit (#648, ACTION_TIMEOUT_MS), apart from `wait` so tests can
+   * end it on their own. Absent, an action has no limit.
+   */
+  limit?(ms: number): Promise<void>;
   /** permissions.request for one origin pattern; must be called inside the click gesture. */
   requestOrigin(pattern: string): Promise<boolean>;
   /** permissions.contains for one origin pattern. */
@@ -90,6 +96,9 @@ const SERVER_URL_ERRORS = {
 } as const;
 const TOKEN_ERROR = 'Paste a device token (it starts with odt_).';
 const SERVER_CHANGED = 'Server changed: re-enter the token for the new server.';
+// #655: saved, but said plainly, since http on the local network carries the token in the clear.
+const SAVED_UNENCRYPTED =
+  'Settings saved. This address uses plain http: the token travels unencrypted on your network.';
 
 /**
  * The note left while the resume check runs (#191): which tab and posting, and since when. One
@@ -106,6 +115,22 @@ const KEEP_OPEN =
   'Keep this window open until the report shows (up to a few seconds for each list).';
 /** While the filler runs: it waits for each list it chooses in (#402 slice 2, tl's rule 4). */
 export const FILLING = `Filling in the form. ${KEEP_OPEN}`;
+/** An opportunity's or contact's id as the server makes them (UUIDs), for the result link. */
+const RESULT_ID = /^[A-Za-z0-9_-]{1,100}$/;
+/**
+ * How long an action waits for the server before it gives up (#648): Capture, Test connection,
+ * Record and Fill. Until then their requests had no limit, and a server that never answered left
+ * the popup blank with every button disabled.
+ */
+export const ACTION_TIMEOUT_MS = 30_000;
+const TIMED_OUT =
+  'The server did not answer within 30 seconds. Check that it is running and reachable, then try again.';
+/**
+ * For an action that writes (Capture, Record): the request may have reached the server before the
+ * limit, so a retry could save it twice (sec on #713).
+ */
+const TIMED_OUT_MAY_HAVE_SAVED =
+  'The server did not answer within 30 seconds. It may still have saved this: check Opportun before you try again.';
 /**
  * While a fill started by opening the popup runs (#403 slice 2, sec's condition 4): what is being
  * filled, said before the report, with the same advice as FILLING.
@@ -209,12 +234,86 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   const assist = element<HTMLElement>(doc, 'assist');
   const confirm = element<HTMLElement>(doc, 'confirm');
   const report = element<HTMLElement>(doc, 'prefill-report');
+  const openResult = element<HTMLAnchorElement>(doc, 'open-result');
 
+  /**
+   * True from the moment the running action's requests are cut at its time limit until busy shows
+   * the timeout (#783): what the cut request makes the action say meanwhile ("Could not reach the
+   * server…") is not shown, so the live region announces the timeout alone.
+   */
+  let cutOff = false;
   const show = ({ tone, text }: Rendered): void => {
+    if (cutOff) return;
     status.dataset.tone = tone;
     status.textContent = text;
   };
+  /**
+   * Marks the settings field a Save error is about, or clears both (#648): a screen reader then
+   * hears which field is wrong, the status line being its description.
+   */
+  const markInvalid = (field: HTMLInputElement | null): void => {
+    for (const input of [serverInput, tokenInput]) {
+      if (input === field) {
+        input.setAttribute('aria-invalid', 'true');
+        input.setAttribute('aria-describedby', 'status');
+      } else {
+        input.removeAttribute('aria-invalid');
+        input.removeAttribute('aria-describedby');
+      }
+    }
+  };
+  /**
+   * The action running now (#648). Only one runs at a time (every button is held while one does),
+   * so the requests below read it to be cut off at the action's time limit. At the limit, a request
+   * still waiting is aborted; when none is (the filler is running in the page, say), the action is
+   * only marked expired, and the next request it starts is cut at once. So the timeout is shown
+   * only when a request was cut, never over a fill that finished (tl on #713). The lookup a popup
+   * makes as it opens never runs inside an action: it holds every button while it decides, so no
+   * action starts meanwhile, and its own requests go out unlimited here, with its own bound
+   * (OPEN_LOOKUP_MS; sec on #713).
+   */
+  let action:
+    { controller: AbortController; expired: boolean; waiting: number; wrote: boolean } | undefined;
+  const limited = async <T>(call: (signal: AbortSignal | undefined) => Promise<T>): Promise<T> => {
+    const a = action;
+    if (a === undefined) return call(undefined);
+    if (a.expired) a.controller.abort();
+    a.waiting += 1;
+    try {
+      return await call(a.controller.signal);
+    } finally {
+      a.waiting -= 1;
+    }
+  };
+  // Every request on `fetch` is a POST: the action has sent something that could save (#783).
+  const fetch: FetchLike = (url, init) => {
+    if (action !== undefined) action.wrote = true;
+    return limited((signal) => deps.fetch(url, signal === undefined ? init : { ...init, signal }));
+  };
+  const get: GetLike = (url, init) =>
+    limited((signal) => deps.get(url, signal === undefined ? init : { ...init, signal }));
   const showOutcome = (o: Outcome, site?: CaptureSiteId): void => show(renderOutcome(o, site));
+  const hideResultLink = (): void => {
+    openResult.hidden = true;
+    openResult.removeAttribute('href');
+  };
+  /**
+   * "Open in Opportun" after a capture that saved something (#653): its opportunity or contact
+   * page, on the server the capture went to (it serves the app too). Only an id of the server's
+   * own form is put in the address, so nothing it sends can lead the link elsewhere; an older
+   * server that sends no id gets no link.
+   */
+  const showResultLink = (s: Settings, o: Outcome): void => {
+    const target =
+      o.kind === 'job' && o.opportunityId !== undefined
+        ? { path: 'opportunities', id: o.opportunityId }
+        : o.kind === 'profile'
+          ? { path: 'network', id: o.contactId }
+          : null;
+    if (target === null || !RESULT_ID.test(target.id)) return;
+    openResult.href = `${s.serverUrl}/${target.path}/${target.id}`;
+    openResult.hidden = false;
+  };
 
   /** Disables the buttons while `work` runs; a thrown error is shown, never swallowed. */
   /**
@@ -232,16 +331,49 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     working -= 1;
     if (working === 0) for (const b of buttons) b.disabled = false;
   };
-  const busy = async (work: () => Promise<void>): Promise<void> => {
+  /**
+   * Runs one action (#648): its `working` line shows at once, its server requests are cut off after
+   * ACTION_TIMEOUT_MS with an error that says so, and focus goes back to the button that started
+   * it (a disabled button loses focus in Chrome).
+   */
+  const busy = async (
+    work: () => Promise<void>,
+    opts: { working?: string; button?: HTMLButtonElement; writes?: boolean } = {},
+  ): Promise<void> => {
     hold();
-    status.textContent = '';
+    status.dataset.tone = 'info';
+    status.textContent = opts.working ?? '';
     report.replaceChildren();
+    hideResultLink();
+    const controller = new AbortController();
+    const current = { controller, expired: false, waiting: 0, wrote: false };
+    controller.signal.addEventListener('abort', () => {
+      cutOff = true;
+    });
+    action = current;
+    let done = false;
+    void (deps.limit ?? (() => new Promise<void>(() => undefined)))(ACTION_TIMEOUT_MS).then(() => {
+      if (done) return;
+      current.expired = true;
+      if (current.waiting > 0) controller.abort();
+    });
     try {
       await work();
     } catch {
       show({ tone: 'error', text: 'Something went wrong. Try again.' });
     } finally {
+      done = true;
+      action = undefined;
+      if (controller.signal.aborted) {
+        cutOff = false;
+        report.replaceChildren();
+        // "May still have saved" only when this action writes and its write went out: a Record
+        // cut while reading /confirmable sent nothing (#783).
+        const mayHaveSaved = opts.writes === true && current.wrote;
+        show({ tone: 'error', text: mayHaveSaved ? TIMED_OUT_MAY_HAVE_SAVED : TIMED_OUT });
+      }
       release();
+      opts.button?.focus();
     }
   };
 
@@ -286,11 +418,14 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
 
   form.addEventListener('submit', (event) => {
     event.preventDefault();
+    // The last capture's link is not this Save's result, whatever happens next (qa on #717).
+    hideResultLink();
     // Everything is validated synchronously: the permission prompt must open inside the click
     // gesture (no await before it), and it should not open for input that cannot be saved.
     const server = parseServerUrl(serverInput.value);
     if (!server.ok) {
       show({ tone: 'error', text: SERVER_URL_ERRORS[server.error] });
+      markInvalid(serverInput);
       return;
     }
     let token = tokenInput.value.trim();
@@ -305,6 +440,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     }
     if (!isDeviceToken(token)) {
       show({ tone: 'error', text: TOKEN_ERROR });
+      markInvalid(tokenInput);
       return;
     }
     const pattern = originPattern(server.base);
@@ -323,8 +459,10 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
           tone: 'error',
           text: saved.field === 'token' ? TOKEN_ERROR : SERVER_URL_ERRORS[saved.error],
         });
+        markInvalid(saved.field === 'token' ? tokenInput : serverInput);
         return;
       }
+      markInvalid(null);
       stored = saved.settings;
       serverInput.value = saved.settings.serverUrl;
       tokenInput.value = '';
@@ -342,61 +480,73 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         return;
       }
       grantedPattern = pattern;
-      show({ tone: 'success', text: 'Settings saved.' });
+      show(
+        travelsUnencrypted(saved.settings.serverUrl)
+          ? { tone: 'warning', text: SAVED_UNENCRYPTED }
+          : { tone: 'success', text: 'Settings saved.' },
+      );
     });
   });
 
   testButton.addEventListener('click', () => {
-    void busy(async () => {
-      const s = await ready();
-      showOutcome(isOutcome(s) ? s : await testConnection(deps.fetch, s));
-    });
+    void busy(
+      async () => {
+        const s = await ready();
+        showOutcome(isOutcome(s) ? s : await testConnection(fetch, s));
+      },
+      { working: 'Testing the connection…', button: testButton },
+    );
   });
 
   captureButton.addEventListener('click', () => {
-    void busy(async () => {
-      const s = await ready();
-      if (isOutcome(s)) {
-        showOutcome(s);
-        return;
-      }
-      const tab = await deps.activeTab();
-      // Only LinkedIn and Indeed tabs are read, decided from the tab's URL: any other page stays
-      // untouched and unsent.
-      const site = tab?.url === undefined ? null : captureSiteOf(tab.url);
-      if (tab === null || tab.url === undefined || site === null) {
-        showOutcome({ kind: 'unsupported_tab' });
-        return;
-      }
-      // An Indeed tab is read only when its URL names one posting (issue #74): there is no
-      // canonical URL to send otherwise, so the page is left alone.
-      if (site === 'indeed' && indeedJobKey(tab.url) === null) {
-        showOutcome({ kind: 'not_a_posting' }, site);
-        return;
-      }
-      const read = await deps.runExtract(tab.id, site);
-      if (read === null) {
-        showOutcome({ kind: 'inject_failed' }, site);
-        return;
-      }
-      if (!read.ok) {
-        showOutcome({ kind: read.reason }, site);
-        return;
-      }
-      // An Indeed page may have moved on since the click (a link followed in the tab): what is
-      // sent must still be one posting, since its URL is what the server keys the job by.
-      // LinkedIn keeps its behaviour from before Indeed (the server refuses what it cannot read).
-      if (site === 'indeed' && indeedJobKey(read.page.url) === null) {
-        showOutcome({ kind: 'not_a_posting' }, site);
-        return;
-      }
-      const normalized = normalizeCapture(read.page);
-      if (!normalized.ok) {
-        showOutcome({ kind: normalized.error }, site);
-        return;
-      }
-      showOutcome(await postCapture(deps.fetch, s, normalized.payload), site);
-    });
+    void busy(
+      async () => {
+        const s = await ready();
+        if (isOutcome(s)) {
+          showOutcome(s);
+          return;
+        }
+        const tab = await deps.activeTab();
+        // Only LinkedIn and Indeed tabs are read, decided from the tab's URL: any other page stays
+        // untouched and unsent.
+        const site = tab?.url === undefined ? null : captureSiteOf(tab.url);
+        if (tab === null || tab.url === undefined || site === null) {
+          showOutcome({ kind: 'unsupported_tab' });
+          return;
+        }
+        // An Indeed tab is read only when its URL names one posting (issue #74): there is no
+        // canonical URL to send otherwise, so the page is left alone.
+        if (site === 'indeed' && indeedJobKey(tab.url) === null) {
+          showOutcome({ kind: 'not_a_posting' }, site);
+          return;
+        }
+        const read = await deps.runExtract(tab.id, site);
+        if (read === null) {
+          showOutcome({ kind: 'inject_failed' }, site);
+          return;
+        }
+        if (!read.ok) {
+          showOutcome({ kind: read.reason }, site);
+          return;
+        }
+        // An Indeed page may have moved on since the click (a link followed in the tab): what is
+        // sent must still be one posting, since its URL is what the server keys the job by.
+        // LinkedIn keeps its behaviour from before Indeed (the server refuses what it cannot read).
+        if (site === 'indeed' && indeedJobKey(read.page.url) === null) {
+          showOutcome({ kind: 'not_a_posting' }, site);
+          return;
+        }
+        const normalized = normalizeCapture(read.page);
+        if (!normalized.ok) {
+          showOutcome({ kind: normalized.error }, site);
+          return;
+        }
+        const outcome = await postCapture(fetch, s, normalized.payload);
+        showOutcome(outcome, site);
+        showResultLink(s, outcome);
+      },
+      { working: 'Capturing…', button: captureButton, writes: true },
+    );
   });
 
   /**
@@ -448,7 +598,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     // finishes must not hold them. Past the bound, nothing is filled and the popup says why; an
     // answer that comes later is dropped. A fill from an earlier window is found by the filler, in
     // the page, after this: a fill it refuses may still have downloaded the copy (tl on #556).
-    const download = fetchResume(deps.get, s, attempt);
+    const download = fetchResume(get, s, attempt);
     download.catch(() => undefined);
     const resume = await Promise.race([
       download,
@@ -458,6 +608,9 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       show(renderPrefillStop({ kind: 'resume_timeout' }));
       return;
     }
+    // The action's limit cut the download (#648): its "none" is not "no resume", so nothing is
+    // filled, and busy says the server did not answer (qa on #713).
+    if (action?.controller.signal.aborted === true) return;
     if (resume.kind === 'review_stale') {
       show(renderPrefillStop({ kind: 'none', reason: 'review_stale' }));
       return;
@@ -486,11 +639,18 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     }
     // The resume: confirmed here, not in the page (tl and sec on #187). Look for its name a
     // bounded number of times; if it never shows, take back exactly our file.
+    // With no copy to attach, the filler can only say "attach your resume yourself"; the popup
+    // knows why, from the download (#653).
+    const why = resume.kind === 'none' ? resume.why : null;
     const report = {
       ...filled,
       chosen: [...filled.chosen],
       filled: [...filled.filled],
-      notFilled: [...filled.notFilled],
+      notFilled: filled.notFilled.map((n) =>
+        why !== null && n.label === 'Resume' && n.reason === 'attach_yourself'
+          ? { ...n, reason: why }
+          : n,
+      ),
     };
     if (filled.resume !== null) {
       show({ tone: 'info', text: RESUME_CHECKING });
@@ -553,75 +713,81 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   };
 
   prefillButton.addEventListener('click', () => {
-    void busy(async () => {
-      const s = await ready();
-      if (isOutcome(s)) {
-        showOutcome(s);
-        return;
-      }
-      // Decided from the tab's address alone: any other tab is neither asked about nor touched.
-      const tab = await deps.activeTab();
-      const posting = tab?.url === undefined ? null : greenhouseJobOf(tab.url);
-      if (tab === null || tab.url === undefined || posting === null) {
-        show(renderPrefillStop({ kind: 'not_greenhouse' }));
-        return;
-      }
-      const current = await fetchCurrent(deps.get, s, tab.url);
-      if (current.kind !== 'attempt') {
-        show(renderPrefillStop(current));
-        return;
-      }
-      await fillAttempt(tab, posting, s, current.attempt, FILLING);
-    });
+    void busy(
+      async () => {
+        const s = await ready();
+        if (isOutcome(s)) {
+          showOutcome(s);
+          return;
+        }
+        // Decided from the tab's address alone: any other tab is neither asked about nor touched.
+        const tab = await deps.activeTab();
+        const posting = tab?.url === undefined ? null : greenhouseJobOf(tab.url);
+        if (tab === null || tab.url === undefined || posting === null) {
+          show(renderPrefillStop({ kind: 'not_greenhouse' }));
+          return;
+        }
+        const current = await fetchCurrent(get, s, tab.url);
+        if (current.kind !== 'attempt') {
+          show(renderPrefillStop(current));
+          return;
+        }
+        await fillAttempt(tab, posting, s, current.attempt, FILLING);
+      },
+      { working: 'Filling…', button: prefillButton },
+    );
   });
 
   // "Record confirmation page" (#121): ask which application, then read the page once, then
   // send it with the tab's own address. The server checks everything again on the POST.
   recordButton.addEventListener('click', () => {
-    void busy(async () => {
-      const s = await ready();
-      if (isOutcome(s)) {
-        showOutcome(s);
-        return;
-      }
-      const tab = await deps.activeTab();
-      if (tab === null || tab.url === undefined || !isHttpsPage(tab.url)) {
-        show(renderConfirmation({ kind: 'not_a_page' }));
-        return;
-      }
-      // A second guard for C-1 (sec on https://github.com/bgoleno/opportun/pull/199): a capture
-      // site is neither asked about nor read here; the server never matches it either.
-      if (captureSiteOf(tab.url) !== null) {
-        show(renderConfirmation({ kind: 'capture_site' }));
-        return;
-      }
-      const found = await fetchConfirmable(deps.get, s, tab.url);
-      if (found.kind !== 'attempt') {
-        show(renderConfirmation(found));
-        return;
-      }
-      const read = await deps.runReadPage(tab.id);
-      if (read === null) {
-        show(renderConfirmation({ kind: 'inject_failed' }));
-        return;
-      }
-      // The page's own address is compared, never sent: a tab that moved since the lookup is
-      // not recorded (the server would check the address sent, which is the tab's).
-      if (read.href !== tab.url) {
-        show(renderConfirmation({ kind: 'moved' }));
-        return;
-      }
-      if (read.text.trim() === '') {
-        show(renderConfirmation({ kind: 'empty' }));
-        return;
-      }
-      const sent = await postConfirmation(deps.fetch, s, found.id, {
-        url: tab.url,
-        title: read.title,
-        text: read.text,
-      });
-      show(renderConfirmation(sent, `${found.opportunityTitle} at ${found.companyName}`));
-    });
+    void busy(
+      async () => {
+        const s = await ready();
+        if (isOutcome(s)) {
+          showOutcome(s);
+          return;
+        }
+        const tab = await deps.activeTab();
+        if (tab === null || tab.url === undefined || !isHttpsPage(tab.url)) {
+          show(renderConfirmation({ kind: 'not_a_page' }));
+          return;
+        }
+        // A second guard for C-1 (sec on https://github.com/bgoleno/opportun/pull/199): a capture
+        // site is neither asked about nor read here; the server never matches it either.
+        if (captureSiteOf(tab.url) !== null) {
+          show(renderConfirmation({ kind: 'capture_site' }));
+          return;
+        }
+        const found = await fetchConfirmable(get, s, tab.url);
+        if (found.kind !== 'attempt') {
+          show(renderConfirmation(found));
+          return;
+        }
+        const read = await deps.runReadPage(tab.id);
+        if (read === null) {
+          show(renderConfirmation({ kind: 'inject_failed' }));
+          return;
+        }
+        // The page's own address is compared, never sent: a tab that moved since the lookup is
+        // not recorded (the server would check the address sent, which is the tab's).
+        if (read.href !== tab.url) {
+          show(renderConfirmation({ kind: 'moved' }));
+          return;
+        }
+        if (read.text.trim() === '') {
+          show(renderConfirmation({ kind: 'empty' }));
+          return;
+        }
+        const sent = await postConfirmation(fetch, s, found.id, {
+          url: tab.url,
+          title: read.title,
+          text: read.text,
+        });
+        show(renderConfirmation(sent, `${found.opportunityTitle} at ${found.companyName}`));
+      },
+      { working: 'Recording the confirmation page…', button: recordButton, writes: true },
+    );
   });
 
   /**
@@ -660,16 +826,21 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       // The settings and the lookup, bounded (OPEN_LOOKUP_MS): past the bound the open gives up
       // without a word and releases the buttons, and an answer that comes later is dropped, so
       // it can never start a fill on a popup the user has since used.
+      // Giving up also cancels the request (#783): it would otherwise stay open until the server
+      // or the browser ended it.
+      const lookup = new AbortController();
+      const lookupGet: GetLike = (url, init) => deps.get(url, { ...init, signal: lookup.signal });
       const decision = (async () => {
         const s = await ready();
         if (isOutcome(s)) return null;
-        return { s, current: await fetchCurrent(deps.get, s, tab.url) };
+        return { s, current: await fetchCurrent(lookupGet, s, tab.url) };
       })();
       decision.catch(() => undefined);
       const decided = await Promise.race([
         decision,
         deps.wait(OPEN_LOOKUP_MS).then(() => 'gave_up' as const),
       ]);
+      if (decided === 'gave_up') lookup.abort();
       if (decided === null || decided === 'gave_up') return;
       const { s, current } = decided;
       if (current.kind !== 'attempt' || !current.attempt.firstRead) return;

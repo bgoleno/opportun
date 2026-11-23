@@ -1,17 +1,21 @@
 # Contributing to Opportun
 
-Thanks for your interest. Opportun is in beta: it has no tagged releases yet, and `main` is
-the only supported version (see [SECURITY.md](SECURITY.md)).
+Thanks for your interest. Opportun is in beta. Only the latest tagged release is supported, and fixes land on `main`
+first (see [SECURITY.md](SECURITY.md)).
 
 ## How to contribute
 
 - Standard flow: issue first for anything non-trivial, then a focused PR.
 - TypeScript, strict mode; tests accompany behavior changes; CI must be green
   (tests, typecheck, lint, security scans).
-- Security-sensitive areas (auth, crypto, adapters, fetchers, the extension's permissions
-  and the CI workflows) get extra review. The files are listed in
-  [`.github/scripts/security-paths.mjs`](.github/scripts/security-paths.mjs). See
-  [SECURITY.md](SECURITY.md) for how to report vulnerabilities privately.
+- Security-sensitive areas get extra review: auth (credential writes included), crypto,
+  adapters, fetchers, the extension's permissions, its form filler and popup, assisted apply
+  submissions, the board probe and ATS detection, the AI provider clients, the demo boundary,
+  data export and import, file storage, the observability settings, deployment (Compose, the
+  Dockerfile, the Caddyfile) and the CI workflows. The files are listed in
+  [`.github/scripts/security-paths.mjs`](.github/scripts/security-paths.mjs), and a PR that
+  touches one gets the security label. See [SECURITY.md](SECURITY.md) for how to report
+  vulnerabilities privately.
 - **Review the docs.** [docs/requirements.md](docs/requirements.md) and
   [docs/design.md](docs/design.md) describe what Opportun is meant to do. Open an issue for
   anything that seems wrong, missing, unclear, or over-engineered. Reference requirement IDs
@@ -44,6 +48,11 @@ not strict, so a branch that is behind but passes still merges.
 (`needs.visibility.outputs.public == 'true'` in `.github/workflows/security.yml`). It is
 required now that the repository is public; a fork or a private copy that made it required
 would have a check that never reports, and every pull request there would be unmergeable.
+
+The image's base, `node:22-slim` in `deploy/Dockerfile`, is pinned by digest. Dependabot
+(`.github/dependabot.yml`, the docker ecosystem for `deploy/`, weekly) opens a pull request when
+a newer digest is published. It goes through the same checks and review as any other pull
+request before it is merged.
 
 Merge with the script, which respects the required checks:
 

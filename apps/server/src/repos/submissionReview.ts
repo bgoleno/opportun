@@ -19,6 +19,7 @@
 //   the write it guards.
 //
 // Opportun never transmits an application: nothing here contacts an employer or an ATS.
+import { destinationAllowed } from '../lib/submissionDestination';
 import { and, desc, eq, gt, inArray, isNull, lte, max, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Submission } from '@opportun/core';
@@ -26,16 +27,14 @@ import { DEFAULT_DAILY_REVIEW_CAP, MAX_DAILY_REVIEW_CAP, type Config } from '../
 import { lockScope, withTransaction } from '../db/client';
 import { jsonText } from '../db/dialect';
 import { applicationSubmissions, auditLog } from '../db/schema';
-import { boardFromUrl } from '../jobs/atsDetect';
-import { atsJobRefOfUrl } from '../lib/atsJobRef';
 import { audit } from '../lib/audit';
 import { isSharedDemoAccount } from '../lib/demoAccounts';
 import { refuseFixtureData } from '../lib/demoOwnData';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
-import { isPageFetchProhibited } from '../lib/safeFetch';
 import { submissionDigest } from '../lib/submissionDigest';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import {
   getRow,
   notNow,
@@ -119,7 +118,7 @@ async function reviewsInWindow(
     .from(auditLog)
     .where(
       and(
-        eq(auditLog.userId, ctx.userId),
+        ownedBy(auditLog.userId, ctx),
         eq(auditLog.event, 'submission.reviewed'),
         gt(auditLog.createdAt, now - REVIEW_CAP_WINDOW_MS),
       ),
@@ -216,6 +215,8 @@ const reviewStale = (): HttpError =>
     409,
     'review_stale',
     'This application changed since you reviewed it. Review it again.',
+    undefined,
+    { userFacing: true },
   );
 
 export interface ReviewInput {
@@ -247,7 +248,7 @@ async function earlierApplication(
     .from(applicationSubmissions)
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         ne(applicationSubmissions.id, row.id),
         eq(applicationSubmissions.atsKind, row.atsKind),
         row.atsRef === null
@@ -307,9 +308,15 @@ export async function reviewSubmission(
     // themselves, and the review shows that), may go ahead. Under the lock, like every check.
     const blocked = snapshotBlocksReview(row);
     if (blocked !== null) {
-      throw new HttpError(409, blocked, SNAPSHOT_BLOCK_MESSAGES.get(blocked), {
-        submissionId: row.id,
-      });
+      throw new HttpError(
+        409,
+        blocked,
+        SNAPSHOT_BLOCK_MESSAGES.get(blocked),
+        {
+          submissionId: row.id,
+        },
+        { userFacing: true },
+      );
     }
     if (submissionDigest(row) !== input.reviewDigest) throw reviewStale();
 
@@ -329,6 +336,7 @@ export async function reviewSubmission(
         'reapply_reason_required',
         'You already applied for this job, or have an application to it on the way. Say why you are applying again.',
         { submissionId: earlier.id },
+        { userFacing: true },
       );
     }
 
@@ -376,6 +384,7 @@ export async function reviewSubmission(
     'daily_review_cap',
     'You reached the most applications you can review in 24 hours.',
     { resetAt: outcome.resetAt },
+    { userFacing: true },
   );
 }
 
@@ -390,64 +399,6 @@ const handedOff = (row: SubmissionRow): HandoffResult => ({
   destinationUrl: row.destinationUrl,
   expiresAt: (row.handedOffAt ?? 0) + HANDOFF_IDLE_MS,
 });
-
-/** Why a destination may not be opened for this requisition (design 7.2), or null. */
-export type DestinationRefusal =
-  | 'not_a_url'
-  | 'not_https'
-  | 'credentials'
-  | 'prohibited_host'
-  | 'not_ats_board'
-  | 'other_board'
-  | 'not_this_posting';
-
-/**
- * Why `destination` may not be opened for this requisition, or null when it may (design 7.2):
- * https only, no credentials, never a LinkedIn or Indeed host, and a recognised ATS posting URL
- * for this very requisition: the same ATS, the same requisition id, and the same board or tenant
- * where the attempt names one (a Workday requisition id is only unique within its tenant). A
- * company career page that embeds an ATS board is not accepted: nothing here can tell the
- * company's own host from a lookalike, which needs the M3 company-domain check.
- *
- * Each guard answers with its own reason so a test can pin it even where another guard would
- * also refuse (LinkedIn and Indeed are never a recognised board); the route answers them all
- * alike, 422 destination_not_allowed.
- */
-export function destinationRefusal(
-  destination: string,
-  sub: Pick<SubmissionRow, 'atsKind' | 'atsExternalId' | 'atsRef'>,
-): DestinationRefusal | null {
-  let url: URL;
-  try {
-    url = new URL(destination);
-  } catch {
-    return 'not_a_url';
-  }
-  if (url.protocol !== 'https:') return 'not_https';
-  if (url.username !== '' || url.password !== '') return 'credentials';
-  if (isPageFetchProhibited(url.hostname)) return 'prohibited_host';
-  // A recognised ATS board host, never a page that merely embeds a board: atsJobRefOfUrl also
-  // reads `gh_jid` on any host, which is how a lookalike could name this requisition.
-  const board = boardFromUrl(url.href);
-  if (board === null) return 'not_ats_board';
-  if (board.kind !== sub.atsKind) return 'other_board';
-  // atsRef is the board the draft was created from (repos/submissions.ts): the same tenant.
-  if (sub.atsRef !== null && board.slug.toLowerCase() !== sub.atsRef.toLowerCase()) {
-    return 'other_board';
-  }
-  // The job this address names, from its own path (#521): a URL in its query names nothing here.
-  const ref = atsJobRefOfUrl(url.href);
-  const named = ref !== null && ref.kind === sub.atsKind && ref.externalId === sub.atsExternalId;
-  return named ? null : 'not_this_posting';
-}
-
-/** Whether `destination` may be opened for this requisition (destinationRefusal is null). */
-export function destinationAllowed(
-  destination: string,
-  sub: Pick<SubmissionRow, 'atsKind' | 'atsExternalId' | 'atsRef'>,
-): boolean {
-  return destinationRefusal(destination, sub) === null;
-}
 
 /**
  * Hands off a reviewed attempt: the user is about to open the employer's form. Audit only, no
@@ -475,7 +426,13 @@ export async function handoffSubmission(
     if (opts.demo === true) refuseFixtureData(row);
     const now = Date.now();
     if (row.reviewExpiresAt === null || row.reviewExpiresAt <= now) {
-      throw new HttpError(409, 'review_expired', 'This review has expired. Review it again.');
+      throw new HttpError(
+        409,
+        'review_expired',
+        'This review has expired. Review it again.',
+        undefined,
+        { userFacing: true },
+      );
     }
     if (row.reviewDigest === null || submissionDigest(row) !== row.reviewDigest) {
       throw reviewStale();
@@ -485,6 +442,8 @@ export async function handoffSubmission(
         422,
         'destination_not_allowed',
         "This application's destination is not the employer's posting for this requisition.",
+        undefined,
+        { userFacing: true },
       );
     }
     const [updated] = await tx

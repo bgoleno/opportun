@@ -358,6 +358,55 @@
       "when": 1796500000000,
       "tag": "0050_submission_device_token_actor",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1796600000000,
+      "tag": "0051_referral_rankings",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1796700000000,
+      "tag": "0052_dedupe_ai_failures",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1796800000000,
+      "tag": "0053_discovery_rank_batch_returns",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1796900000000,
+      "tag": "0054_pending_revoked_reason",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1797000000000,
+      "tag": "0055_jobs_updated_at_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1797100000000,
+      "tag": "0056_obs_metric_points_bucket_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1797200000000,
+      "tag": "0057_rank_batch_applied_counts",
+      "breakpoints": true
     }
   ]
 }

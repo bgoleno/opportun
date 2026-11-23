@@ -1,12 +1,14 @@
 // Reactive Resume integration (FR-R7): the instance address and API key, a validate probe,
 // and the per-user document store preference. The key goes into the vault once and never
 // comes back out over HTTP (NFR-SEC4).
+import { keyedFetch } from '../lib/safeFetch';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import {
   clearRrConfig,
   DOCUMENT_STORE_PREFS,
+  DocumentStorePrefInput,
   DOCUMENT_STORE_SETTING,
   parseRrBaseUrl,
   readDocumentStorePref,
@@ -50,6 +52,8 @@ const ValidationSchema = z.object({
   error: z.string().nullable(),
 });
 const StoreBody = z.object({ store: z.enum(DOCUMENT_STORE_PREFS) }).strict();
+/** What a client sends: the old name `google` too (#771), stored as `google_doc`. */
+const StoreInput = z.object({ store: DocumentStorePrefInput }).strict();
 
 export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
@@ -78,11 +82,13 @@ export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> 
     async (req) => {
       const ctx = requireUser(req);
       const baseUrl = parseRrBaseUrl(req.body.baseUrl);
-      await writeRrConfig(db, ctx, baseUrl, req.body.apiKey);
-      await audit(db, 'integration.reactive_resume_saved', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { baseUrl, keyChanged: req.body.apiKey !== undefined },
+      // The key, the address and the audit row commit together (#819).
+      await writeRrConfig(db, ctx, baseUrl, req.body.apiKey, async (tx) => {
+        await audit(tx, 'integration.reactive_resume_saved', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { baseUrl, keyChanged: req.body.apiKey !== undefined },
+        });
       });
       return await status(ctx);
     },
@@ -92,9 +98,11 @@ export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> 
     '/integrations/reactive-resume/validate',
     { schema: { response: { 200: ValidationSchema } } },
     async (req) => {
-      const cfg = await readRrConfig(db, requireUser(req));
+      const ctx = requireUser(req);
+      const cfg = await readRrConfig(db, ctx);
       if (cfg === undefined) throw new HttpError(409, 'reactive_resume_not_connected');
-      return validateReactiveResume(app.reactiveResumeFetch, cfg);
+      // Under the user's rate key, as the store's calls are (#617).
+      return validateReactiveResume(keyedFetch(app.reactiveResumeFetch, ctx.userId), cfg);
     },
   );
 
@@ -121,7 +129,7 @@ export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> 
   // Where NEW base resumes go. Existing resumes keep the store they were registered in.
   api.put(
     '/settings/document-store',
-    { schema: { body: StoreBody, response: { 200: StoreBody } } },
+    { schema: { body: StoreInput, response: { 200: StoreBody } } },
     async (req) => {
       const ctx = requireUser(req);
       if (req.body.store === 'reactive_resume' && !(await status(ctx)).connected) {
@@ -129,6 +137,8 @@ export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> 
           409,
           'reactive_resume_not_connected',
           'Connect Reactive Resume before choosing it.',
+          undefined,
+          { userFacing: true },
         );
       }
       await writeUserSetting(db, ctx, DOCUMENT_STORE_SETTING, req.body.store);

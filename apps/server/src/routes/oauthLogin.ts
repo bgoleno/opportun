@@ -21,7 +21,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { isUniqueViolation, lockScope, withTransaction } from '../db/client';
-import { oauthAccounts, users } from '../db/schema';
+import { oauthAccounts } from '../db/schema';
 import { audit } from '../lib/audit';
 import { readClientCreds, readClientId } from '../lib/google';
 import { racePoint } from '../lib/racePoints';
@@ -60,7 +60,8 @@ import { createPendingToken } from '../lib/twoFactor';
 import { isRegistrationOpen } from '../lib/registration';
 import { createSession, sessionStored } from '../lib/sessions';
 import { isSecureRequest } from '../plugins/security';
-import { requireUser, type UserCtx } from '../repos/base';
+import { requireAdmin, requireUser, type UserCtx } from '../repos/base';
+import { findUserIdByEmail, insertUser, passwordHashRow, totpEnabledRow } from '../repos/users';
 import { sessionMeta, setSessionCookies } from './auth';
 
 /** HttpOnly cookie holding the browser binding of an in-flight OAuth flow. */
@@ -75,13 +76,21 @@ export const OAUTH_BINDING_COOKIE_DEV = 'opportun_oauth';
 const LOGIN_PAGE = '/login';
 const SECURITY_PAGE = '/settings/security';
 /** Starts and callbacks per IP: generous for people, tight for a script. */
-const OAUTH_IP_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
+export const OAUTH_IP_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
 
 const ProviderParams = z.object({ provider: z.enum(OAUTH_PROVIDERS) });
+/**
+ * Changing who can sign in with a provider re-asks for the admin's own password (#620, sec's second
+ * audit), as the registration switch does: a stolen admin session alone cannot point the login page
+ * at a client of its choosing, nor take one away.
+ */
+const AdminPassword = z.string().min(1).max(1024);
 const CredsBody = z.object({
   clientId: z.string().trim().min(1).max(300),
   clientSecret: z.string().trim().min(1).max(500),
+  password: AdminPassword,
 });
+const ConfirmBody = z.object({ password: AdminPassword });
 /** GET start is login only: linking goes through the password-confirmed POST .../link. */
 const StartQuery = z.object({ mode: z.literal('login') });
 const LinkBody = z.object({ password: z.string().min(1).max(1024) });
@@ -153,12 +162,6 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     };
   };
 
-  function requireAdmin(req: Parameters<typeof requireUser>[0]) {
-    const ctx = requireUser(req);
-    if (!ctx.isAdmin) throw new HttpError(403, 'forbidden');
-    return ctx;
-  }
-
   api.get(
     '/admin/oauth-providers',
     { schema: { response: { 200: z.object({ items: z.array(ProviderStatus) }) } } },
@@ -179,18 +182,45 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  /** The admin's own password, checked; false when it was wrong (and answered 403). */
+  const adminConfirmed = (
+    req: FastifyRequest,
+    reply: FastifyReply,
+    userId: string,
+    action: string,
+    password: string,
+  ) => confirmPassword(req, reply, { userId, password, action });
+
   api.put(
     '/admin/oauth-providers/:provider',
-    { schema: { params: ProviderParams, body: CredsBody, response: { 200: ProviderStatus } } },
-    async (req) => {
+    {
+      preHandler: reauthLimits(db),
+      schema: { params: ProviderParams, body: CredsBody, response: { 200: ProviderStatus } },
+    },
+    async (req, reply) => {
       const ctx = requireAdmin(req);
       const { provider } = req.params;
       if (!providerAvailable(provider)) throw new HttpError(409, 'provider_unavailable');
-      await writeProviderCreds(db, provider, req.body);
-      await audit(db, 'admin.oauth_provider_configured', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { provider },
+      if (
+        !(await adminConfirmed(
+          req,
+          reply,
+          ctx.userId,
+          'admin.oauth_provider_configure',
+          req.body.password,
+        ))
+      ) {
+        return reply;
+      }
+      const { clientId, clientSecret } = req.body;
+      // The client and its audit row commit together (#802).
+      await withTransaction(db, async (tx) => {
+        await writeProviderCreds(db, provider, { clientId, clientSecret }, tx);
+        await audit(tx, 'admin.oauth_provider_configured', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { provider },
+        });
       });
       return await status(provider, ctx);
     },
@@ -205,19 +235,36 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
    */
   api.post(
     '/admin/oauth-providers/:provider/import',
-    { schema: { params: ProviderParams, response: { 200: ProviderStatus } } },
-    async (req) => {
+    {
+      preHandler: reauthLimits(db),
+      schema: { params: ProviderParams, body: ConfirmBody, response: { 200: ProviderStatus } },
+    },
+    async (req, reply) => {
       const ctx = requireAdmin(req);
       const { provider } = req.params;
       if (provider !== 'google') throw new HttpError(409, 'import_unsupported');
+      if (
+        !(await adminConfirmed(
+          req,
+          reply,
+          ctx.userId,
+          'admin.oauth_provider_configure',
+          req.body.password,
+        ))
+      ) {
+        return reply;
+      }
       // The integration client belongs to the admin asking, never to another user (FR-S5).
       const creds = await readClientCreds(db, ctx);
       if (creds === undefined) throw new HttpError(409, 'integration_client_missing');
-      await writeProviderCreds(db, provider, creds);
-      await audit(db, 'admin.oauth_provider_configured', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { provider, source: 'google_integration' },
+      // The client and its audit row commit together (#802).
+      await withTransaction(db, async (tx) => {
+        await writeProviderCreds(db, provider, creds, tx);
+        await audit(tx, 'admin.oauth_provider_configured', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { provider, source: 'google_integration' },
+        });
       });
       return await status(provider, ctx);
     },
@@ -225,10 +272,26 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
 
   api.delete(
     '/admin/oauth-providers/:provider',
-    { schema: { params: ProviderParams, response: { 204: z.null() } } },
+    {
+      preHandler: reauthLimits(db),
+      schema: { params: ProviderParams, body: ConfirmBody, response: { 204: z.null() } },
+    },
     async (req, reply) => {
       const ctx = requireAdmin(req);
       const { provider } = req.params;
+      if (
+        !(await adminConfirmed(
+          req,
+          reply,
+          ctx.userId,
+          'admin.oauth_provider_remove',
+          req.body.password,
+        ))
+      ) {
+        return reply;
+      }
+      // The removal commits, and the audit row after (#802, sec): a failed write leaves the
+      // provider removed rather than signing people in through it still.
       await deleteProviderCreds(db, provider);
       await audit(db, 'admin.oauth_provider_removed', {
         userId: ctx.userId,
@@ -312,11 +375,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const ctx = requireUser(req);
       const { provider } = req.params;
-      const user = await db
-        .select({ hash: users.passwordHash })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
+      const user = await passwordHashRow(db, ctx.userId);
       if (user === undefined) throw new HttpError(401, 'unauthorized');
       if (hasUsablePassword(user.hash)) throw new HttpError(409, 'has_password');
       const linked = await db
@@ -343,11 +402,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       const ctx = requireUser(req);
       const { provider } = req.params;
-      const user = await db
-        .select({ hash: users.passwordHash })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
+      const user = await passwordHashRow(db, ctx.userId);
       if (user === undefined) throw new HttpError(401, 'unauthorized');
       // An account created by OAuth sign-in has no password to confirm: it sets one first.
       if (!hasUsablePassword(user.hash)) throw new HttpError(409, 'password_required');
@@ -366,6 +421,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
   async function resolveLogin(
     provider: OAuthProvider,
     identity: OAuthIdentity,
+    ip: string,
   ): Promise<LoginOutcome> {
     // Scoped to the identity (https://github.com/bgoleno/opportun/issues/56): on Postgres,
     // without it, two callbacks of one new identity can interleave between the reads below
@@ -392,11 +448,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         // sign-in here and checks that another of the same identity cannot get past its lock
         // and commit in between (see the scope comment above).
         await racePoint('oauth.login.locked');
-        const match = await tx
-          .select({ id: users.id })
-          .from(users)
-          .where(eq(users.email, identity.email))
-          .get();
+        const match = await findUserIdByEmail(tx, identity.email);
         // Review Focus 2 / ruling R2: an email never joins a provider account to an existing
         // one. Unverified proves nothing; verified proves only the mailbox.
         if (!identity.emailVerified) {
@@ -413,18 +465,15 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         const displayName = (identity.displayName ?? identity.email.split('@')[0] ?? 'New user')
           .trim()
           .slice(0, 100);
-        await tx
-          .insert(users)
-          .values({
-            id: userId,
-            email: identity.email,
-            passwordHash: unusablePasswordHash(),
-            displayName: displayName.length > 0 ? displayName : 'New user',
-            isAdmin: false,
-            createdAt: now,
-            updatedAt: now,
-          })
-          .run();
+        await insertUser(tx, {
+          id: userId,
+          email: identity.email,
+          passwordHash: unusablePasswordHash(),
+          displayName: displayName.length > 0 ? displayName : 'New user',
+          isAdmin: false,
+          createdAt: now,
+          updatedAt: now,
+        });
         await tx
           .insert(oauthAccounts)
           .values({
@@ -436,6 +485,12 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
             updatedAt: now,
           })
           .run();
+        // With the account it records (#779): a failed write leaves no account or link behind.
+        await audit(tx, 'auth.register', {
+          userId,
+          ip,
+          detail: { isAdmin: false, method: 'oauth', provider },
+        });
         return { ok: true, userId, how: 'created' };
       },
       { scope: `oauth:${provider}:${identity.providerAccountId}` },
@@ -451,7 +506,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     let outcome: LoginOutcome;
     await racePoint('oauth.login');
     try {
-      outcome = await resolveLogin(provider, identity);
+      outcome = await resolveLogin(provider, identity, req.ip);
     } catch (err) {
       // A concurrent callback linked or created the same thing first: start over.
       if (isUniqueViolation(err)) return reply.redirect(`${LOGIN_PAGE}?oauth=error`);
@@ -466,14 +521,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       });
       return reply.redirect(`${LOGIN_PAGE}?oauth=${existing ? 'existing_account' : 'unknown'}`);
     }
-    const { userId, how } = outcome;
-    if (how === 'created') {
-      await audit(db, 'auth.register', {
-        userId,
-        ip: req.ip,
-        detail: { isAdmin: false, method: 'oauth', provider },
-      });
-    }
+    const { userId } = outcome;
     // The link is read; a reset can commit from here on (#573).
     await racePoint('oauth.login.linked');
     // The session, or the pending 2FA token, is written only while the link just read still
@@ -493,18 +541,18 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         )
         .get();
       if (link === undefined) return null;
-      const user = await tx
-        .select({ totpEnabled: users.totpEnabled })
-        .from(users)
-        .where(eq(users.id, userId))
-        .get();
+      const user = await totpEnabledRow(tx, userId);
       if (user === undefined) return null;
-      return user.totpEnabled
-        ? {
-            kind: 'pending' as const,
-            pendingToken: await createPendingToken(tx, userId, sessionMeta(req)),
-          }
-        : { kind: 'session' as const, session: await createSession(tx, userId, sessionMeta(req)) };
+      // The audit row is written with the session or pending token (#779): a failed write rolls
+      // both back, and no cookie or token is handed out.
+      if (user.totpEnabled) {
+        const pendingToken = await createPendingToken(tx, userId, sessionMeta(req));
+        await audit(tx, 'auth.2fa_challenge', { userId, ip: req.ip, detail: { method: 'oauth' } });
+        return { kind: 'pending' as const, pendingToken };
+      }
+      const session = await createSession(tx, userId, sessionMeta(req));
+      await audit(tx, 'auth.login', { userId, ip: req.ip, detail: { method: 'oauth', provider } });
+      return { kind: 'session' as const, session };
     });
     if (written === null) {
       await audit(db, 'auth.oauth_unknown', {
@@ -517,19 +565,9 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     if (written.kind === 'pending') {
       // The provider stood in for the password; the code step is unchanged. The token rides
       // in the fragment, which browsers never send to a server or put in a Referer.
-      await audit(db, 'auth.2fa_challenge', {
-        userId,
-        ip: req.ip,
-        detail: { method: 'oauth' },
-      });
       return reply.redirect(`${LOGIN_PAGE}#pending2fa=${written.pendingToken}`);
     }
     setSessionCookies(req, reply, written.session);
-    await audit(db, 'auth.login', {
-      userId,
-      ip: req.ip,
-      detail: { method: 'oauth', provider },
-    });
     return reply.redirect('/');
   }
 
@@ -593,6 +631,8 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
             updatedAt: now,
           })
           .run();
+        // With the link it records (#779).
+        await audit(tx, 'auth.oauth_linked', { userId, ip: req.ip, detail: { provider } });
         return 'linked';
       });
     } catch (err) {
@@ -609,11 +649,6 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       });
       return flash('conflict');
     }
-    await audit(db, 'auth.oauth_linked', {
-      userId: ctx.userId,
-      ip: req.ip,
-      detail: { provider },
-    });
     return flash('linked');
   }
 
@@ -645,12 +680,13 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       });
       return reply.redirect(`${SECURITY_PAGE}?oauth=setpw_mismatch`);
     }
-    grantPasswordSet(db, sessionId, ctx.userId);
+    // Recorded before it is granted (#779): a failed write grants nothing.
     await audit(db, 'auth.password_set_reauth', {
       userId: ctx.userId,
       ip: req.ip,
       detail: { provider },
     });
+    grantPasswordSet(db, sessionId, ctx.userId);
     return reply.redirect(`${SECURITY_PAGE}?oauth=setpw_ready`);
   }
 
@@ -672,12 +708,23 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
               sessionId: sessionIdFrom(req),
             });
       if (verified === null || !spendNonce(db, verified.nonce)) {
-        await audit(db, 'auth.oauth_bad_state', {
-          ...(req.userCtx === null ? {} : { userId: req.userCtx.userId }),
-          ip: req.ip,
-          detail: { provider, replay: verified !== null },
-        });
-        throw new HttpError(403, 'bad_state');
+        // A refusal's record: a failed write is logged, and the browser still lands on an app
+        // page (#853), never on raw 500 JSON.
+        try {
+          await audit(db, 'auth.oauth_bad_state', {
+            ...(req.userCtx === null ? {} : { userId: req.userCtx.userId }),
+            ip: req.ip,
+            detail: { provider, replay: verified !== null },
+          });
+        } catch (err) {
+          req.log.warn({ 'opportun.oauth.provider': provider, err }, 'oauth callback failed');
+        }
+        // An app page that says the sign-in or link was not completed, not a raw JSON 403
+        // (#662): the Security page for a signed-in browser, else the sign-in page. Nothing in
+        // the request is trusted for this, the mode included: the state did not verify.
+        return reply.redirect(
+          `${req.userCtx === null ? LOGIN_PAGE : SECURITY_PAGE}?oauth=not_completed`,
+        );
       }
       const mode: OAuthMode = verified.mode;
       // Where a failure lands, and its flash (setpw flashes are the Set-a-password card's).
@@ -709,9 +756,18 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         );
         return fail('error');
       }
-      if (mode === 'link') return finishLink(req, reply, provider, identity);
-      if (mode === 'setpw') return finishSetPassword(req, reply, provider, identity);
-      return finishLogin(req, reply, provider, identity);
+      // A failure from here on (an audit write that rolled its step back, #779) lands on the
+      // mode's own page with a plain error (#853), not on raw 500 JSON. Each step has already
+      // changed nothing when it throws.
+      try {
+        if (mode === 'link') return await finishLink(req, reply, provider, identity);
+        if (mode === 'setpw') return await finishSetPassword(req, reply, provider, identity);
+        return await finishLogin(req, reply, provider, identity);
+      } catch (err) {
+        // The error's class, never its message (14.8).
+        req.log.warn({ 'opportun.oauth.provider': provider, err }, 'oauth callback failed');
+        return fail('error');
+      }
     },
   );
 
@@ -720,11 +776,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
     { schema: { response: { 200: LinkedAccounts } } },
     async (req) => {
       const ctx = requireUser(req);
-      const user = await db
-        .select({ hash: users.passwordHash })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
+      const user = await passwordHashRow(db, ctx.userId);
       const accounts = (
         await db
           .select({ provider: oauthAccounts.provider, createdAt: oauthAccounts.createdAt })
@@ -754,11 +806,7 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         .where(and(eq(oauthAccounts.userId, ctx.userId), eq(oauthAccounts.provider, provider)))
         .get();
       if (row === undefined) throw new HttpError(404, 'not_linked');
-      const user = await db
-        .select({ hash: users.passwordHash })
-        .from(users)
-        .where(eq(users.id, ctx.userId))
-        .get();
+      const user = await passwordHashRow(db, ctx.userId);
       if (user === undefined) throw new HttpError(401, 'unauthorized');
       if (hasUsablePassword(user.hash)) {
         // The Wave-1 re-auth convention: a credential change takes the current password.
@@ -781,6 +829,8 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
           )?.n ?? 0;
         throw new HttpError(409, linked <= 1 ? 'last_method' : 'password_required');
       }
+      // A removal (#846, #815's rule): the unlink commits first and is recorded after, so a failed
+      // audit write never leaves a provider able to sign in that its owner unlinked.
       await db.delete(oauthAccounts).where(eq(oauthAccounts.id, row.id)).run();
       await audit(db, 'auth.oauth_unlinked', {
         userId: ctx.userId,

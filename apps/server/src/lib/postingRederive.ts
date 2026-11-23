@@ -39,9 +39,9 @@
 // context to make up for data that was never kept. The deterministic extraction has no such
 // gap: it is already the accepted quality bar for a live capture with no AI key, so re-derive
 // holds itself to the same bar rather than inventing a second, approximate path.
+import { capturedPage, confirm } from './postingReconcile';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
-import { capturedPage, confirm } from '../jobs/postingReconcile';
 import { createActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
 import { getOpportunity, updateOpportunity, type OpportunityView } from '../repos/opportunities';
@@ -57,7 +57,9 @@ export type RederiveOutcome =
   | { kind: 'merged'; opportunity: OpportunityView }
   | { kind: 'capture_only'; opportunity: OpportunityView }
   /** The capture's site found no description in it (or has no recognizer); nothing was changed. */
-  | { kind: 'no_description_found' };
+  | { kind: 'no_description_found' }
+  /** The description changed while the board was read, so nothing was written (#851). */
+  | { kind: 'left_alone'; opportunity: OpportunityView };
 
 /**
  * Whether re-deriving would silently overrule a decision only the user gets to make, and so
@@ -101,7 +103,7 @@ export async function rederivePosting(
       reason === 'user_confirmed'
         ? 'You confirmed this posting yourself. Re-deriving would replace that decision.'
         : 'This opportunity already has a description. Edit it instead.';
-    throw new HttpError(409, reason, message);
+    throw new HttpError(409, reason, message, undefined, { userFacing: true });
   }
 
   const capture = await capturedPage(db, ctx, opportunityId);
@@ -110,6 +112,8 @@ export async function rederivePosting(
       409,
       'no_capture',
       'This opportunity has no stored capture to re-derive from.',
+      undefined,
+      { userFacing: true },
     );
   }
 
@@ -119,7 +123,12 @@ export async function rederivePosting(
   });
 
   if (outcome.status === 'exact' || outcome.status === 'single') {
-    await confirm(db, ctx, opp, outcome.candidate.posting, outcome.readFrom);
+    const confirmed = await confirm(db, ctx, opp, outcome.candidate.posting, outcome.readFrom);
+    // confirm() wrote nothing when the description changed under it (#851, qa on #855): said as
+    // such, not as a merge.
+    if (confirmed.status !== 'confirmed') {
+      return { kind: 'left_alone', opportunity: await getOpportunity(db, ctx, opportunityId) };
+    }
     await note(
       db,
       ctx,

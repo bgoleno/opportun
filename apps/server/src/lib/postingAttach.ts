@@ -34,7 +34,7 @@ export type AttachSource = 'email_link' | 'posting_link' | 'board' | 'paste';
 
 const HOW_SAID: ReadonlyMap<AttachSource, string> = new Map([
   ['email_link', 'Found through a link in a linked message.'],
-  ['posting_link', "Found on the company's ATS board, by the job its posting link names."],
+  ['posting_link', "Found on the company's ATS board, by the job this opportunity names."],
   ['board', "Found on the company's ATS board."],
   ['paste', 'Added by hand.'],
 ]);
@@ -47,7 +47,7 @@ const HOW_SAID: ReadonlyMap<AttachSource, string> = new Map([
  */
 const HOW_SAID_REFETCH: ReadonlyMap<AttachSource, string> = new Map([
   ['email_link', 'Refetched through a link in a linked message.'],
-  ['posting_link', "Refetched from the company's ATS board, by the job its posting link names."],
+  ['posting_link', "Refetched from the company's ATS board, by the job this opportunity names."],
   ['board', "Refetched from the company's ATS board."],
   ['paste', 'Replaced by hand.'],
 ]);
@@ -75,36 +75,59 @@ export async function attachPosting(
    * to check a link on Greenhouse's API. With neither, a verified identity is only kept.
    */
   identity: { readFrom?: ReadFrom; sctx?: Pick<SourceContext, 'fetch' | 'log'> } = {},
+  /**
+   * #756 (tl): when the user wrote the description, confirm the posting from this board copy
+   * without touching the description (design D11), instead of refusing; on a posting confirmed
+   * already too (#812, tl: a Refetch re-checks the board). Find posting and a picked board row
+   * only; pasted text is still refused.
+   */
+  opts: { keepDescription?: boolean } = {},
 ): Promise<OpportunityView> {
   const posting = sanitizePosting(raw);
   if (posting.descriptionMd == null || posting.descriptionMd === '') {
-    throw new HttpError(422, 'invalid_posting', 'That posting has no description text.');
+    throw new HttpError(
+      422,
+      'invalid_posting',
+      'That posting has no description text.',
+      undefined,
+      { userFacing: true },
+    );
   }
   const current = await getOpportunity(db, ctx, opportunityId);
   // The user's own writing outranks any board (design D11). A description the system wrote,
   // such as a browser capture's page text, is replaceable by the posting it was waiting for.
-  if (
+  const usersOwn =
     !replaceAllowedByFlag(current) &&
-    !isSystemWritten(current.descriptionMd, current.descriptionFingerprint)
-  ) {
+    !isSystemWritten(current.descriptionMd, current.descriptionFingerprint);
+  // The user's own description is kept, and the posting only confirmed, when asked to (#756), the
+  // posting settled already or not (#812); otherwise their writing still refuses the attach.
+  const keep = usersOwn && opts.keepDescription === true;
+  if (usersOwn && !keep) {
     throw new HttpError(
       409,
       'already_described',
       'This opportunity already has a description. Edit it instead.',
+      undefined,
+      { userFacing: true },
     );
   }
   // Issue #255: a Refetch calls this on an opportunity already `confirmed`; the timeline says
   // so distinctly rather than reading identically to the first match.
   const refetch = current.postingState === 'confirmed';
-  const patch: UpdateOpportunityInput = {
-    descriptionMd: posting.descriptionMd,
-    // Written together, or the next board run reads this write as a user edit.
-    descriptionFingerprint: descriptionFingerprint(posting.descriptionMd),
-    postingUrl: posting.postingUrl ?? current.postingUrl,
-  };
-  if (current.location == null && posting.location != null) patch.location = posting.location;
-  if (current.remote == null && posting.remote != null) patch.remote = posting.remote;
-  if (current.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
+  const patch: UpdateOpportunityInput = keep
+    ? // Only the link: the description, and the facts beside it, stay the user's (#756).
+      { postingUrl: posting.postingUrl ?? current.postingUrl }
+    : {
+        descriptionMd: posting.descriptionMd,
+        // Written together, or the next board run reads this write as a user edit.
+        descriptionFingerprint: descriptionFingerprint(posting.descriptionMd),
+        postingUrl: posting.postingUrl ?? current.postingUrl,
+      };
+  if (!keep) {
+    if (current.location == null && posting.location != null) patch.location = posting.location;
+    if (current.remote == null && posting.remote != null) patch.remote = posting.remote;
+    if (current.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
+  }
   // Worked out before any write: a check on Greenhouse's API is a request (#398).
   // The identity is the stored link's: a posting without a link of its own keeps the one already
   // stored (as reconcile's confirm does), and is judged by it (tl on #414).
@@ -125,10 +148,33 @@ export async function attachPosting(
   // `gh_jid` link's is the board's, proven above (#398).
   const updated = await setPostingState(db, ctx, opportunityId, {
     postingState: 'confirmed',
-    postingStateDetail: null,
+    // A kept description is the user's: user_confirmed, so a later reconcile or re-derive never
+    // reads it as the employer's copy (tl on #756; as postingConfirm does).
+    postingStateDetail: keep ? 'user_confirmed' : null,
     atsJobRef,
   });
-  const howSaid = (refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? '';
+  // A Refetch that kept the user's description and found the same job changed no text: a check
+  // (#812, tl). Another job (a row the user picked) is a change, and said as one (qa on #830).
+  const sameJob =
+    refetch &&
+    current.atsJobRef != null &&
+    atsJobRef != null &&
+    current.atsJobRef.kind === atsJobRef.kind &&
+    current.atsJobRef.externalId === atsJobRef.externalId;
+  // "Checked" only when nothing at all was rewritten (#835, qa on #830): a link or a board token
+  // replaced is a change, and is named as one.
+  const linkChanged = (patch.postingUrl ?? null) !== (current.postingUrl ?? null);
+  const orgChanged = sameJob && current.atsJobRef?.org !== atsJobRef?.org;
+  const checkedOnly = keep && sameJob && !linkChanged && !orgChanged;
+  const howSaid = [
+    checkedOnly
+      ? "Checked on the company's board; your description was kept."
+      : ((refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? ''),
+    refetch && linkChanged ? "The posting link was updated to the board's." : '',
+    keep && !checkedOnly ? 'Your own description was kept.' : '',
+  ]
+    .filter((l) => l !== '')
+    .join(' ');
   await createActivity(db, ctx, opportunityId, {
     kind: 'link',
     title: 'Job posting attached',
@@ -140,4 +186,32 @@ export async function attachPosting(
     externalUrl: posting.postingUrl,
   });
   return updated;
+}
+
+/**
+ * Records a posting identified through its own `gh_jid` link (#813): Find posting checked the job
+ * on Greenhouse's API and set its identity, with no posting text read, so nothing is attached.
+ * The same kind of entry as an attach, so the timeline says how every posting was found. `kept`:
+ * it also confirmed the posting, and the user's own description stays as it was.
+ */
+export async function recordIdentified(
+  db: Db,
+  ctx: UserCtx,
+  opportunityId: string,
+  boardUrl: string,
+  opts: { kept: boolean },
+): Promise<void> {
+  await createActivity(db, ctx, opportunityId, {
+    kind: 'link',
+    title: 'Job posting identified',
+    bodyMd: [
+      'Recognised on Greenhouse, by the job its posting link names.',
+      opts.kept ? 'Your own description was kept.' : '',
+    ]
+      .filter((l) => l !== '')
+      .join(' '),
+    occurredAt: Date.now(),
+    participants: [],
+    externalUrl: boardUrl,
+  });
 }

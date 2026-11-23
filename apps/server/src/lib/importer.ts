@@ -5,11 +5,14 @@
 // the `import` job. Re-running a pack is idempotent: opportunities upsert by
 // dedupeKey(company, title, location), stages only move forward along the chain, and
 // notes, applications, resumes and contacts are matched before anything is added.
+import { isLinkedInHost } from './linkedinHost';
 import {
+  CLOSED_REASONS,
   dedupeKey,
   DISMISS_REASONS,
   newId,
   OPPORTUNITY_STAGES,
+  type ClosedReason,
   type DismissReason,
   type OpportunityStage,
 } from '@opportun/core';
@@ -19,15 +22,7 @@ import { z } from 'zod';
 import type { DocumentStore } from '../adapters/documentStore';
 import { readDocumentStorePref } from '../adapters/reactiveResume';
 import { withTransaction, type Db } from '../db/client';
-import {
-  activities,
-  networkContacts,
-  jobs,
-  opportunities,
-  resumes,
-  stageHistory,
-} from '../db/schema';
-import type { JobHandler } from '../jobs/registry';
+import { activities, networkContacts, opportunities, resumes, stageHistory } from '../db/schema';
 import { createActivity } from '../repos/activities';
 import type { Exec, UserCtx } from '../repos/base';
 import { findOrCreateCompanySync } from '../repos/companies';
@@ -36,6 +31,7 @@ import { insertResume } from '../repos/resumes';
 import { CsvError, parseCsv, unguardFormula, type CsvRecord } from './csv';
 import { HttpError } from './errors';
 import { cleanText } from './safeText';
+import { resumeStoreFor } from './resumeStores';
 
 export const OPPORTUNITY_COLUMNS = [
   'company',
@@ -46,9 +42,19 @@ export const OPPORTUNITY_COLUMNS = [
   'source',
   'applied_at',
   'dismissed_reason',
+  // #736: a closed opportunity's reason, so an export re-imports with it.
+  'closed_reason',
   'notes_file',
   'resume_doc_ref',
 ] as const;
+type OpportunityColumn = (typeof OPPORTUNITY_COLUMNS)[number];
+/**
+ * The header before #736, with no closed_reason: an export or a hand-made pack from an older build
+ * still imports, its closed opportunities with no reason.
+ */
+export const LEGACY_OPPORTUNITY_COLUMNS: readonly OpportunityColumn[] = OPPORTUNITY_COLUMNS.filter(
+  (c) => c !== 'closed_reason',
+);
 export const CONTACT_COLUMNS = ['name', 'email', 'linkedin_url', 'company', 'notes'] as const;
 
 export const MAX_PACK_BYTES = 20 * 1024 * 1024;
@@ -65,8 +71,19 @@ const CHAIN: readonly OpportunityStage[] = [
   'offer',
 ];
 
+/**
+ * A pack refused, in a sentence for the user who uploaded it: our own words, the names of their
+ * own files, and our CsvError's text. It never wraps library or zip-reader text (a zip the reader
+ * fails on becomes "not a readable zip file"), so `userText` may be sent as a marked message (#750).
+ */
 export class PackError extends Error {
   override name = 'PackError';
+  readonly userText: string;
+
+  constructor(userText: string) {
+    super(userText);
+    this.userText = userText;
+  }
 }
 
 /**
@@ -100,7 +117,9 @@ export type ImportPack = z.infer<typeof ImportPackSchema>;
  * picking one. The alias can go once upgrading straight from a release before #22 is no longer
  * supported, since only such an upgrade can find a job queued under the old name.
  */
-const StoredImportPackSchema = ImportPackSchema.extend({ contactsCsv: z.string().optional() })
+export const StoredImportPackSchema = ImportPackSchema.extend({
+  contactsCsv: z.string().optional(),
+})
   .refine((p) => p.contactsCsv === undefined || p.networkCsv === undefined, {
     message: 'an import pack carries both contactsCsv and networkCsv',
   })
@@ -166,6 +185,14 @@ function parseOrThrow(text: string, file: string): CsvRecord[] {
   }
 }
 
+/** The columns opportunities.csv was written with: today's, or the header from before #736. */
+function opportunityColumnsOf(records: CsvRecord[]): readonly OpportunityColumn[] {
+  const header = records[0]?.fields.map((f) => f.trim().toLowerCase()).join(',');
+  if (header === LEGACY_OPPORTUNITY_COLUMNS.join(',')) return LEGACY_OPPORTUNITY_COLUMNS;
+  checkHeader(records, 'opportunities.csv', OPPORTUNITY_COLUMNS);
+  return OPPORTUNITY_COLUMNS;
+}
+
 function checkHeader(records: CsvRecord[], file: string, columns: readonly string[]): void {
   const header = records[0]?.fields.map((f) => f.trim().toLowerCase());
   if (header === undefined || header.join(',') !== columns.join(',')) {
@@ -200,12 +227,12 @@ export function packFromFiles(entries: { name: string; data: Uint8Array }[]): Im
 function packFromMap(files: Map<string, string>): ImportPack {
   const opportunitiesCsv = files.get('opportunities.csv') as string;
   const oppRecords = parseOrThrow(opportunitiesCsv, 'opportunities.csv');
-  checkHeader(oppRecords, 'opportunities.csv', OPPORTUNITY_COLUMNS);
+  const oppColumns = opportunityColumnsOf(oppRecords);
   const network = networkCsvOf(files);
   if (network !== undefined) {
     checkHeader(parseOrThrow(network.csv, network.file), network.file, CONTACT_COLUMNS);
   }
-  const notesIdx = OPPORTUNITY_COLUMNS.indexOf('notes_file');
+  const notesIdx = oppColumns.indexOf('notes_file');
   const notes: Record<string, string> = {};
   for (const rec of oppRecords.slice(1)) {
     // Read the same way importOpportunity reads the column, guard and all (lib/csv).
@@ -308,13 +335,18 @@ interface OpportunityRow {
   source: string | null;
   appliedAt: number | null;
   dismissedReason: DismissReason | null;
+  closedReason: ClosedReason | null;
   notesFile: string | null;
   resumeDocRef: string | null;
 }
 
-function parseOpportunityRow(rec: CsvRecord): OpportunityRow {
-  checkColumns(rec, OPPORTUNITY_COLUMNS);
-  const get = (name: (typeof OPPORTUNITY_COLUMNS)[number]) => cell(rec, OPPORTUNITY_COLUMNS, name);
+function parseOpportunityRow(
+  rec: CsvRecord,
+  columns: readonly OpportunityColumn[] = OPPORTUNITY_COLUMNS,
+): OpportunityRow {
+  checkColumns(rec, columns);
+  // A column the pack's header does not have reads as empty (closed_reason before #736).
+  const get = (name: OpportunityColumn) => (columns.includes(name) ? cell(rec, columns, name) : '');
   const stage = get('stage');
   if (!(OPPORTUNITY_STAGES as readonly string[]).includes(stage)) {
     throw new RowError(
@@ -333,6 +365,10 @@ function parseOpportunityRow(rec: CsvRecord): OpportunityRow {
   if (reason !== '' && !(DISMISS_REASONS as readonly string[]).includes(reason)) {
     throw new RowError(`dismissed_reason must be one of: ${DISMISS_REASONS.join(', ')}`);
   }
+  const closed = get('closed_reason');
+  if (closed !== '' && !(CLOSED_REASONS as readonly string[]).includes(closed)) {
+    throw new RowError(`closed_reason must be one of: ${CLOSED_REASONS.join(', ')}`);
+  }
   return {
     company: required(get('company'), 'company', 200),
     title: required(get('title'), 'title', 300),
@@ -342,6 +378,8 @@ function parseOpportunityRow(rec: CsvRecord): OpportunityRow {
     source: optional(get('source'), 'source', 200),
     appliedAt,
     dismissedReason: reason === '' ? null : (reason as DismissReason),
+    // Only a closed opportunity has one; on any other stage it is not kept, as the app keeps none.
+    closedReason: stage === 'closed' && closed !== '' ? (closed as ClosedReason) : null,
     notesFile: optional(get('notes_file'), 'notes_file', 500),
     resumeDocRef: optional(get('resume_doc_ref'), 'resume_doc_ref', 500),
   };
@@ -360,6 +398,7 @@ async function setStage(
   from: OpportunityStage,
   to: OpportunityStage,
   dismissedReason: DismissReason | null,
+  closedReason: ClosedReason | null = null,
 ): Promise<void> {
   const at = Date.now();
   await tx
@@ -367,7 +406,7 @@ async function setStage(
     .set({
       stage: to,
       dismissedReason: to === 'dismissed' ? dismissedReason : null,
-      closedReason: null,
+      closedReason: to === 'closed' ? closedReason : null,
       updatedAt: at,
     })
     .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, oppId)))
@@ -452,7 +491,15 @@ async function importOpportunity(row: OpportunityRow, deps: RowDeps): Promise<Ou
         .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, view.id)))
         .run();
       if (row.stage !== 'discovered') {
-        await setStage(tx, ctx, view.id, 'discovered', row.stage, row.dismissedReason);
+        await setStage(
+          tx,
+          ctx,
+          view.id,
+          'discovered',
+          row.stage,
+          row.dismissedReason,
+          row.closedReason,
+        );
       }
     });
     existing = { id: view.id, stage: row.stage };
@@ -502,14 +549,20 @@ async function importOpportunity(row: OpportunityRow, deps: RowDeps): Promise<Ou
     try {
       // Which store registers it is the user's own preference (#19), not always Google.
       const storeKind = await readDocumentStorePref(db, ctx);
-      const store = storeKind === 'reactive_resume' ? deps.reactiveResumeStore : deps.documentStore;
+      // Through the one registry (#771); the importer holds the Google and Reactive Resume stores.
+      const store = resumeStoreFor(storeKind, {
+        documentStore: () => deps.documentStore,
+        reactiveResumeStore: () => deps.reactiveResumeStore,
+        // Never a preference (DOCUMENT_STORE_PREFS): an upload has no link to register.
+        localFileStore: () => undefined,
+      });
       if (store === undefined) throw new Error('the document store is unavailable');
       const meta = await store.registerExisting(ctx, row.resumeDocRef);
       if (!(await trackedResume(db, ctx, meta.docRef))) {
         await insertResume(db, ctx, {
           kind: 'tailored',
           title: meta.title,
-          store: storeKind === 'reactive_resume' ? 'reactive_resume' : 'google_doc',
+          store: storeKind,
           docRef: meta.docRef,
           opportunityId: oppId,
           parentResumeId: null,
@@ -532,6 +585,10 @@ async function importContact(rec: CsvRecord, db: Db, ctx: UserCtx): Promise<Outc
   const email = optional(get('email').toLowerCase(), 'email', 320);
   if (email !== null && !EMAIL.test(email)) throw new RowError('email is not an email address');
   const linkedinUrl = httpUrl(get('linkedin_url'), 'linkedin_url');
+  // A LinkedIn link on LinkedIn only (#655), as the contact form takes it.
+  if (linkedinUrl !== null && !isLinkedInHost(linkedinUrl)) {
+    throw new RowError('linkedin_url must be a LinkedIn profile URL');
+  }
   const company = optional(get('company'), 'company', 200);
   // Notes keep their inner line breaks; only the cell's outer whitespace is trimmed.
   const notes = optional(get('notes'), 'notes', 10_000);
@@ -613,7 +670,9 @@ export async function runImport(
   pack: ImportPack,
   deps: ImportDeps = {},
 ): Promise<ImportResult> {
-  const oppRecords = parseCsv(pack.opportunitiesCsv).slice(1);
+  const oppAll = parseCsv(pack.opportunitiesCsv);
+  const oppColumns = opportunityColumnsOf(oppAll);
+  const oppRecords = oppAll.slice(1);
   const contactRecords = pack.networkCsv === undefined ? [] : parseCsv(pack.networkCsv).slice(1);
   const report: ImportReport = { created: 0, updated: 0, skipped: 0, errors: [] };
   const progress: ImportProgress = {
@@ -633,7 +692,7 @@ export async function runImport(
 
   for (const rec of oppRecords) {
     try {
-      const row = parseOpportunityRow(rec);
+      const row = parseOpportunityRow(rec, oppColumns);
       tally(
         await importOpportunity(row, {
           db,
@@ -695,58 +754,3 @@ export function purgedPayload(pack: ImportPack): PurgedImportPayload {
     },
   };
 }
-
-export const importJob: JobHandler<{ pack: ImportPack }> = {
-  kind: IMPORT_JOB_KIND,
-  payloadSchema: z.object({ pack: StoredImportPackSchema }),
-  maxAttempts: 3,
-  async run(db, { pack }, ctx) {
-    try {
-      if (ctx.userId === null) throw new Error('import job has no user');
-      const user: UserCtx = { userId: ctx.userId, isAdmin: false };
-      const { progress, report } = await runImport(db, user, pack, {
-        documentStore: ctx.services.documentStore,
-        reactiveResumeStore: ctx.services.reactiveResumeStore,
-        onProgress: async (p, r) =>
-          await ctx.setResult({
-            progress: { ...p },
-            report: { ...r, errors: [...r.errors] },
-          } satisfies ImportResult),
-      });
-      // Issue #2: this used to be two writes (the final result, then the purge, once
-      // runImport had already returned), so a crash in between left the pack behind for a
-      // (harmless, since imports are idempotent) retry to clean up. One write instead: the
-      // report that says the import is finished and the purge that says the pack is gone now
-      // commit together, so there is nothing left to observe in between.
-      await db
-        .update(jobs)
-        .set({
-          result: {
-            progress: { ...progress },
-            report: { ...report, errors: [...report.errors] },
-          } satisfies ImportResult,
-          payload: purgedPayload(pack),
-          updatedAt: Date.now(),
-        })
-        .where(eq(jobs.id, ctx.jobId))
-        .run();
-    } catch (err) {
-      // Issue #2: a failed attempt still needs the pack for its retry, but the attempt about
-      // to exhaust the budget (the runner is about to mark this job dead) does not get one, so
-      // purge here or the pack sits in the row, and in every nightly backup, forever.
-      if (ctx.attempt >= ctx.maxAttempts) {
-        try {
-          await db
-            .update(jobs)
-            .set({ payload: purgedPayload(pack), updatedAt: Date.now() })
-            .where(eq(jobs.id, ctx.jobId))
-            .run();
-        } catch {
-          // The database is the likeliest reason the import itself failed; that original
-          // error is more useful than this one, so it is what gets thrown below.
-        }
-      }
-      throw err;
-    }
-  },
-};

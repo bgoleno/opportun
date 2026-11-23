@@ -7,6 +7,7 @@
 // Cost (14.11): with collection off, one check. With it on, the verb and table are read once per
 // distinct statement text and kept, so a repeated statement costs a map lookup. The store's own
 // writes run suppressed and are not measured (14.6).
+import { provideStatementObserver } from '../db/client';
 import { checkValue } from './gate';
 import { ATTRIBUTE_TYPES, DB_OPERATIONS, OTHER } from './catalog';
 import {
@@ -166,3 +167,7 @@ export function observeStatementAsync<T>(
     },
   );
 }
+
+// The handover to db/client (https://github.com/bgoleno/opportun/issues/803): it observes each
+// statement through these from this module's load on, and imports nothing from obs/ itself.
+provideStatementObserver({ sync: observeStatement, async: observeStatementAsync });

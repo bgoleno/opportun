@@ -3,18 +3,19 @@
 // token, submission, snapshot row, snapshot file or uploaded file of a demo user remains, and a
 // token minted before the reset gets 401. The seed's own resume files are rewritten with the same
 // content, so the same hashes, and must survive (sec on #544).
+import { removeIfUnreferenced } from '../src/lib/attachmentSweep';
 import { randomBytes } from 'node:crypto';
 import { newId } from '@opportun/core';
 import { eq, inArray } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
-import { DEMO_SEED_ACK_KEY, derivedId } from '../src/cli/seedDemo';
+import { DEMO_SEED_ACK_KEY, derivedId } from '../src/lib/demo/seed';
 import {
   DEMO_IDENTITY_VALUES,
   DEMO_RESUME_BASE_ID,
   DEMO_RESUME_BASE_TEXT,
   DEMO_TAILORED_RESUMES,
   DEMO_USERS,
-} from '../src/cli/seedDemoFixture';
+} from '../src/lib/demo/fixture';
 import {
   applicationSubmissions,
   attachments,
@@ -25,7 +26,6 @@ import {
   users,
 } from '../src/db/schema';
 import { runDemoReset } from '../src/jobs/demoReset';
-import { removeIfUnreferenced } from '../src/jobs/attachmentSweep';
 import { isFixtureIdentity } from '../src/lib/demoOwnData';
 import { createDeviceToken } from '../src/lib/deviceTokens';
 import { createSubmissionDraft } from '../src/repos/submissions';
@@ -195,12 +195,14 @@ describe('the fixture identity list covers every identity value the seed writes 
       // The resume's own header: the candidate's name, and every email anywhere in its text.
       seen.push(DEMO_RESUME_BASE_TEXT.split('\n')[0]!);
       seen.push(...(DEMO_RESUME_BASE_TEXT.match(/\S+@\S+/g) ?? []));
+      // And every phone number in it (#671): a run of digits, spaces and + ( ) -.
+      seen.push(...(DEMO_RESUME_BASE_TEXT.match(/\+?\d[\d ()-]{8,}\d/g) ?? []));
       for (const t of DEMO_TAILORED_RESUMES) {
         seen.push(...(t.summary.match(/\S+@\S+/g) ?? []));
       }
       expect(seen.length).toBeGreaterThan(10);
       for (const value of seen) expect(isFixtureIdentity('any', value), value).toBe(true);
-      expect(DEMO_IDENTITY_VALUES.length).toBe(DEMO_USERS.length * 2 + 2);
+      expect(DEMO_IDENTITY_VALUES.length).toBe(DEMO_USERS.length * 2 + 3);
     } finally {
       await app.close();
     }

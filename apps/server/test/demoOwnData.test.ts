@@ -1,6 +1,7 @@
 // Assisted apply on the demo fills only the visitor's own data
 // (https://github.com/bgoleno/opportun/issues/544, slice 1 of #542). The switch is on for the
 // demo since #545, which binds each attempt to its visitor (test/demoActorBinding.test.ts).
+import { SNAPSHOT_JOB_KIND } from '../src/lib/submissionSnapshotQueue';
 import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -8,9 +9,11 @@ import { describe, expect, it } from 'vitest';
 import {
   DEMO_CANDIDATE_EMAIL,
   DEMO_CANDIDATE_NAME,
+  DEMO_CANDIDATE_PHONE,
   DEMO_IDENTITY_VALUES,
+  DEMO_RESUME_BASE_TEXT,
   DEMO_USERS,
-} from '../src/cli/seedDemoFixture';
+} from '../src/lib/demo/fixture';
 import {
   applicationSubmissions,
   auditLog,
@@ -20,7 +23,6 @@ import {
   profiles,
   resumes,
 } from '../src/db/schema';
-import { SNAPSHOT_JOB_KIND } from '../src/jobs/submissionSnapshot';
 import { createDeviceToken } from '../src/lib/deviceTokens';
 import { fixtureField, isFixtureIdentity } from '../src/lib/demoOwnData';
 import { submissionDigest } from '../src/lib/submissionDigest';
@@ -309,7 +311,19 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
     ['email', account.email.toUpperCase()],
     ['fullName', `${DEMO_CANDIDATE_NAME.toLowerCase().replace(' ', '   ')}`],
     ['email', DEMO_CANDIDATE_EMAIL],
+    // #671: the seed's phone, punctuated another way: compared by its digits.
+    ['phone', '+1 (415) 555-0134'],
+    // #682 (qa on #676): and without its country code.
+    ['phone', '415-555-0134'],
+    // #782 (qa's regression pass): under a field other than phone.
+    ['mobile', '415-555-0134'],
   ];
+
+  it('the seed carries a phone number, and it is one of the demo identity values (#671)', () => {
+    expect(DEMO_CANDIDATE_PHONE.replace(/\D/g, '')).toBe('14155550134');
+    expect(DEMO_RESUME_BASE_TEXT).toContain(DEMO_CANDIDATE_PHONE);
+    expect(DEMO_IDENTITY_VALUES).toContain(DEMO_CANDIDATE_PHONE);
+  });
 
   for (const [field, value] of cases) {
     it(`review refuses ${field} = "${value}", naming the field`, async () => {
@@ -402,6 +416,75 @@ describe('the fixture-identity backstop (#544, criterion 3)', () => {
     await app.jobs.drain();
     await api(a, 'PATCH', `/submissions/${id}`, { fields: { fullName: account.displayName } });
     expect((await review(a, id)).statusCode).toBe(200);
+  });
+
+  // #682 (qa on #676): the seeded number typed without "+1", or with the international prefix, or
+  // punctuated any way, is the same number; another number, or another country's, is not.
+  it.each([
+    '415-555-0134',
+    '(415) 555 0134',
+    '4155550134',
+    '1-415-555-0134',
+    '+1.415.555.0134',
+    '00 1 415 555 0134',
+    '+1 415 555 0134',
+    // #726 (tl and qa on #725): the 011 exit prefix, and a trailing extension.
+    '011 1 415 555 0134',
+    '+1 415 555 0134 ext 2',
+    '415-555-0134 x12',
+    '(415) 555-0134 #3',
+    '415.555.0134 extension 45',
+    // qa on #762: an extension of seven digits or more.
+    '+1 415 555 0134 ext 1234567',
+  ])('the seeded phone as "%s" is the demo\'s', (value) => {
+    expect(isFixtureIdentity('phone', value)).toBe(true);
+    expect(fixtureField({ phone: value, city: 'Seattle' })).toBe('phone');
+  });
+
+  // #782 (qa's regression pass): the seeded phone in any field, not only `phone`, in every format
+  // above. Field keys are whatever the form names (FIELD_KEY in core), so no list of phone-like
+  // names could be complete; the seed's phone is the only identity value with seven digits or more.
+  const PHONE_FORMATS = [
+    '415-555-0134',
+    '(415) 555 0134',
+    '4155550134',
+    '1-415-555-0134',
+    '+1.415.555.0134',
+    '00 1 415 555 0134',
+    '+1 415 555 0134',
+    '011 1 415 555 0134',
+    '+1 415 555 0134 ext 2',
+    '415-555-0134 x12',
+    '(415) 555-0134 #3',
+    '415.555.0134 extension 45',
+    '+1 415 555 0134 ext 1234567',
+  ];
+  for (const key of ['mobile', 'tel', 'telephone', 'cellPhone', 'workPhone', 'question_1234']) {
+    it.each(PHONE_FORMATS)(
+      `the seeded phone under ${key} as "%s" is the demo's (#782)`,
+      (value) => {
+        expect(isFixtureIdentity(key, value)).toBe(true);
+        expect(fixtureField({ [key]: value, city: 'Seattle' })).toBe(key);
+      },
+    );
+    it.each(['415-555-0135', '+44 415 555 0134', '+1 206 555 0100', '555-0134'])(
+      `a real phone under ${key} ("%s") is accepted (#782)`,
+      (value) => {
+        expect(isFixtureIdentity(key, value)).toBe(false);
+        expect(fixtureField({ [key]: value })).toBeNull();
+      },
+    );
+  }
+
+  it.each([
+    '415-555-0135',
+    '+44 415 555 0134',
+    '+1 415 555 01345',
+    '555-0134',
+    '+1 415 555 0135 ext 2',
+    '011 44 415 555 0134',
+  ])('"%s" is not the seeded phone', (value) => {
+    expect(isFixtureIdentity('phone', value)).toBe(false);
   });
 
   it('compares after case and whitespace, and a phone by its digits', () => {

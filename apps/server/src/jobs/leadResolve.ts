@@ -10,6 +10,7 @@
 //      ever fetched are those adapters' fixed ATS API hosts through safeFetch.
 // The lead's own posting URL is never fetched: it is often a LinkedIn job link, which stays
 // metadata only (and safeFetch refuses prohibited hosts in any case).
+import { enqueue } from '../lib/jobQueue';
 import type { NormalizedPosting } from '@opportun/core';
 import { and, desc, eq, inArray, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
@@ -22,6 +23,7 @@ import {
 import type { Db } from '../db/client';
 import { jsonText } from '../db/dialect';
 import { companies, discoveryResults, discoveryRuns, discoverySources } from '../db/schema';
+import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../lib/titleMatch';
 import { HttpError } from '../lib/errors';
 import { sanitizePosting } from '../lib/postingSanitize';
 import type { UserCtx } from '../repos/base';
@@ -32,15 +34,12 @@ import {
   type DiscoveryResultView,
   type DiscoverySourceRow,
 } from '../repos/discovery';
-import { DISCOVERY_RANK_KIND, LEAD_RESOLVE_KIND } from './discoveryKinds';
+import { DISCOVERY_RANK_KIND, LEAD_RESOLVE_KIND } from '../lib/jobKinds';
 import { requireService, type JobHandler } from './registry';
-import { enqueue } from './runner';
 import { continuesTrace } from '../obs/workflow';
 
 export { LEAD_RESOLVE_KIND };
 
-/** Minimum normalized title token overlap for a confident match. */
-export const TITLE_MATCH_THRESHOLD = 0.6;
 /** Cached ATS results considered per lead (newest first). */
 const MAX_CACHED = 500;
 /** Postings read from one live board at most. */
@@ -74,28 +73,6 @@ export function normalizeName(value: string): string {
     .toLowerCase()
     .replace(/\p{M}/gu, '')
     .replace(/[^\p{L}\p{N}]+/gu, '');
-}
-
-function titleTokens(title: string): Set<string> {
-  return new Set(
-    title
-      .normalize('NFKD')
-      .toLowerCase()
-      .replace(/\p{M}/gu, '')
-      .split(/[^\p{L}\p{N}]+/u)
-      .filter((t) => t.length > 0),
-  );
-}
-
-/** Shared tokens over the larger token set: 1 for the same words, 0 for none in common. */
-export function titleOverlap(a: string, b: string): number {
-  const ta = titleTokens(a);
-  const tb = titleTokens(b);
-  const larger = Math.max(ta.size, tb.size);
-  if (larger === 0) return 0;
-  let shared = 0;
-  for (const t of ta) if (tb.has(t)) shared += 1;
-  return shared / larger;
 }
 
 function isPartial(p: NormalizedPosting): boolean {

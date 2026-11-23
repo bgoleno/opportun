@@ -26,12 +26,13 @@
 //     changed rich-text node is re-encoded (a non-breaking space becomes a plain space);
 //   - the tailored copy is a duplicate in Reactive Resume; Opportun never renders or exports
 //     the PDF itself.
+import type { ResumeStore } from '@opportun/core';
 import { z } from 'zod';
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { withTransaction, type Db } from '../db/client';
 import { secrets, settings } from '../db/schema';
 import { HttpError } from '../lib/errors';
-import { FetchBlockedError, type safeFetch } from '../lib/safeFetch';
+import { FetchBlockedError, keyedFetch, type safeFetch } from '../lib/safeFetch';
 import { racePoint } from '../lib/racePoints';
 import { getSecretValue, putSecretIn } from '../lib/secretBox';
 import type { Exec, UserCtx } from '../repos/base';
@@ -45,8 +46,19 @@ export const RR_SECRET_KIND = 'oauth_token' as const;
 export const RR_SECRET_LABEL = 'reactive_resume';
 export const RR_URL_SETTING = 'reactive_resume_url';
 export const DOCUMENT_STORE_SETTING = 'document_store';
-export const DOCUMENT_STORE_PREFS = ['google', 'reactive_resume'] as const;
+/**
+ * Where new resumes go: a resume store's own name (#771), one name per store. `google` is the
+ * old name of `google_doc`: a preference stored, or a client still sending it, reads as that.
+ */
+export const DOCUMENT_STORE_PREFS = [
+  'google_doc',
+  'reactive_resume',
+] as const satisfies readonly ResumeStore[];
 export type DocumentStorePref = (typeof DOCUMENT_STORE_PREFS)[number];
+/** A preference as stored or sent, the old name included, read as its one name (#771). */
+export const DocumentStorePrefInput = z
+  .enum([...DOCUMENT_STORE_PREFS, 'google'])
+  .transform((v): DocumentStorePref => (v === 'google' ? 'google_doc' : v));
 
 export interface RrConfig {
   /** An https origin without a trailing slash. */
@@ -69,13 +81,27 @@ export function parseRrBaseUrl(raw: string): string {
       400,
       'invalid_base_url',
       'Enter the https address of your Reactive Resume.',
+      undefined,
+      { userFacing: true },
     );
   }
   if (url.protocol !== 'https:') {
-    throw new HttpError(400, 'invalid_base_url', 'Reactive Resume must be reached over https.');
+    throw new HttpError(
+      400,
+      'invalid_base_url',
+      'Reactive Resume must be reached over https.',
+      undefined,
+      { userFacing: true },
+    );
   }
   if (url.username !== '' || url.password !== '') {
-    throw new HttpError(400, 'invalid_base_url', 'The address must not contain credentials.');
+    throw new HttpError(
+      400,
+      'invalid_base_url',
+      'The address must not contain credentials.',
+      undefined,
+      { userFacing: true },
+    );
   }
   return url.origin;
 }
@@ -324,6 +350,8 @@ function rrHttpError(status: number, body: Buffer): HttpError {
       409,
       'reactive_resume_unauthorized',
       'Reactive Resume rejected the API key. Create a new API key in Reactive Resume and save it in Settings > Integrations.',
+      undefined,
+      { userFacing: true },
     );
   }
   if (status === 403 && code === 'RESUME_LOCKED') {
@@ -331,6 +359,8 @@ function rrHttpError(status: number, body: Buffer): HttpError {
       409,
       'reactive_resume_locked',
       'The resume is locked in Reactive Resume. Unlock it there, then try again.',
+      undefined,
+      { userFacing: true },
     );
   }
   if (status === 409) {
@@ -338,6 +368,8 @@ function rrHttpError(status: number, body: Buffer): HttpError {
       409,
       'reactive_resume_conflict',
       'The resume changed in Reactive Resume while the edit was being applied. Try again.',
+      undefined,
+      { userFacing: true },
     );
   }
   if (status === 403 || status === 404) return new HttpError(422, 'reactive_resume_unavailable');
@@ -389,6 +421,7 @@ async function rrCall(
       'reactive_resume_unreachable',
       'Reactive Resume could not be reached at the configured address.',
       { reason },
+      { userFacing: true },
     );
   }
   let json: unknown;
@@ -465,6 +498,9 @@ export interface ReactiveResumeDeps {
 }
 
 export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentStore {
+  // Each call under the user's rate key (#617, tl on #667): users of one shared Reactive Resume
+  // host take turns at its bucket rather than queuing behind each other's bursts.
+  const fetchFor = (ctx: UserCtx): RrFetch => keyedFetch(deps.fetch, ctx.userId);
   async function cfgFor(ctx: UserCtx): Promise<RrConfig> {
     const cfg = await deps.config(ctx);
     if (cfg === undefined) {
@@ -472,6 +508,8 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
         409,
         'reactive_resume_not_connected',
         'Connect Reactive Resume in Settings > Integrations first.',
+        undefined,
+        { userFacing: true },
       );
     }
     return cfg;
@@ -481,7 +519,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
     async registerExisting(ctx, ref): Promise<ResumeDocMeta> {
       const cfg = await cfgFor(ctx);
       const id = parseRrRef(ref, cfg.baseUrl);
-      const resume = await getResume(deps.fetch, cfg, id);
+      const resume = await getResume(fetchFor(ctx), cfg, id);
       return { docRef: id, title: resume.name, url: rrResumeUrl(cfg.baseUrl, id) };
     },
 
@@ -489,7 +527,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
       const cfg = await cfgFor(ctx);
       const baseId = parseRrRef(baseRef, cfg.baseUrl);
       const created = await rrJson(
-        deps.fetch,
+        fetchFor(ctx),
         cfg,
         `/resumes/${encodeURIComponent(baseId)}/copies`,
         { method: 'POST', body: { name } },
@@ -502,7 +540,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
 
     async readText(ctx, ref) {
       const cfg = await cfgFor(ctx);
-      const resume = await getResume(deps.fetch, cfg, parseRrRef(ref, cfg.baseUrl));
+      const resume = await getResume(fetchFor(ctx), cfg, parseRrRef(ref, cfg.baseUrl));
       return flattenRrResume(resume.data).text;
     },
 
@@ -518,7 +556,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
       }
       const cfg = await cfgFor(ctx);
       const id = parseRrRef(ref, cfg.baseUrl);
-      const resume = await getResume(deps.fetch, cfg, id);
+      const resume = await getResume(fetchFor(ctx), cfg, id);
       const { text, slots } = flattenRrResume(resume.data);
       const missing = edits.findIndex((e) => !text.includes(e.find));
       if (missing !== -1) {
@@ -545,6 +583,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
             'edit_spans_formatting',
             'This edit crosses formatting (bold, italic or a link) in Reactive Resume; apply it by hand there.',
             { index },
+            { userFacing: true },
           );
         }
         return { index, outcome: 'applied' };
@@ -553,7 +592,7 @@ export function createReactiveResumeStore(deps: ReactiveResumeDeps): DocumentSto
         .filter((s) => original.get(s.path) !== s.value)
         .map((s) => ({ op: 'replace' as const, path: s.path, value: s.value }));
       if (operations.length > 0) {
-        await rrJson(deps.fetch, cfg, `/resumes/${encodeURIComponent(id)}`, {
+        await rrJson(fetchFor(ctx), cfg, `/resumes/${encodeURIComponent(id)}`, {
           method: 'PATCH',
           body: { operations, expectedUpdatedAt: resume.updatedAt },
         });
@@ -609,6 +648,8 @@ export async function writeRrConfig(
   ctx: UserCtx,
   baseUrl: string,
   apiKey: string | undefined,
+  // What must commit with the save or not at all: its audit row (#819).
+  inTransaction?: (tx: Exec) => Promise<void>,
 ): Promise<void> {
   await racePoint('rr.config');
   // The user's scope: the key row and the address commit together, and a second save cannot
@@ -623,6 +664,8 @@ export async function writeRrConfig(
             422,
             'api_key_required',
             'Enter the API key again when setting or changing the Reactive Resume address.',
+            undefined,
+            { userFacing: true },
           );
         }
       } else {
@@ -641,6 +684,7 @@ export async function writeRrConfig(
           .run();
       }
       await writeUserSetting(tx, ctx, RR_URL_SETTING, baseUrl);
+      if (inTransaction !== undefined) await inTransaction(tx);
     },
     { scope: `user:${ctx.userId}` },
   );
@@ -674,7 +718,7 @@ async function clearRrConfigIn(db: Exec, ctx: UserCtx): Promise<void> {
     )
     .run();
   if ((await readDocumentStorePref(db, ctx)) === 'reactive_resume') {
-    await writeUserSetting(db, ctx, DOCUMENT_STORE_SETTING, 'google');
+    await writeUserSetting(db, ctx, DOCUMENT_STORE_SETTING, 'google_doc');
   }
 }
 
@@ -683,7 +727,7 @@ export async function readDocumentStorePref(db: Exec, ctx: UserCtx): Promise<Doc
     db,
     ctx,
     DOCUMENT_STORE_SETTING,
-    z.enum(DOCUMENT_STORE_PREFS),
-    'google',
+    DocumentStorePrefInput,
+    'google_doc',
   );
 }

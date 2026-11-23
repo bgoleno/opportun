@@ -1,6 +1,7 @@
 // Company industry tags (https://github.com/bgoleno/opportun/issues/220, #190 N4b): candidates get a
 // code from the NAICS table in batched calls, a tag is kept, and a correction is never overwritten.
 // The provider is mocked, and every person and company is made up.
+import { enqueue, readSchedules } from '../src/lib/jobQueue';
 import { AiUnavailableError, renderPrompt, runStructured } from '@opportun/ai';
 import { NAICS_2022_INDUSTRY_GROUPS, newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
@@ -32,7 +33,6 @@ import { createCompany } from '../src/repos/companies';
 import { createRun, createSource } from '../src/repos/discovery';
 import { discoverySpentTodayUsd, writeDiscoveryBudget } from '../src/repos/discoveryBudget';
 import { getActivePrompt } from '../src/repos/prompts';
-import { enqueue, readSchedules } from '../src/jobs/runner';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 
@@ -1166,15 +1166,24 @@ describe('#220 criterion 3: what it sends, and the budget', () => {
       }
     });
 
-    it('a rejected key, no key or the budget marks nobody', async () => {
+    // The name promised three reasons and the body ran one (https://github.com/bgoleno/opportun/issues/597
+    // (c)): each of them, on the first call alone after a refused batch, stops the run and marks nobody.
+    it.each([
+      [
+        'a rejected key',
+        () => new AiUnavailableError('provider_error', 'unauthorized', { keyRejected: true }),
+        'key_rejected',
+      ],
+      ['no key', () => new AiUnavailableError('no_key'), 'no_key'],
+      ['the budget', () => new AiUnavailableError('budget_exceeded'), 'budget_exceeded'],
+    ] as const)('%s marks nobody', async (_why, error, stopped) => {
       const { app, a } = await boot();
       for (let i = 1; i <= 5; i++) await suggested(app, a, named('C', i));
       vi.mocked(runStructured)
         .mockRejectedValueOnce(REFUSED) // the batch
-        .mockRejectedValueOnce(
-          new AiUnavailableError('provider_error', 'unauthorized', { keyRejected: true }),
-        );
-      expect((await tagCompanies(app.db, ctxOf(a))).stopped).toBe('key_rejected');
+        .mockRejectedValueOnce(error()); // the first company alone
+      const run = await tagCompanies(app.db, ctxOf(a));
+      expect(run).toMatchObject({ stopped, calls: 2, tagged: 0 });
       for (let i = 1; i <= 5; i++) expect(await failedAt(app, a, named('C', i))).toBeNull();
     });
 

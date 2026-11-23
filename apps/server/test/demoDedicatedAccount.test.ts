@@ -15,8 +15,8 @@ import {
   UnexpectedUsersError,
   seedDemo,
   type SeedDemoCredentials,
-} from '../src/cli/seedDemo';
-import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+} from '../src/lib/demo/seed';
+import { DEMO_USERS } from '../src/lib/demo/fixture';
 import { rawRun, type Db } from '../src/db/client';
 import { companies, settings, users } from '../src/db/schema';
 import { DEDICATED_MARK_PREFIX, dedicatedMarkKey } from '../src/lib/demoDedicated';
@@ -116,17 +116,17 @@ describe('the dedicated account CLI (#563)', () => {
     expect(mark).toMatchObject({ userId: null, value: { userId: row.id } });
   });
 
-  // tl on #567 (#570): the account and its mark have committed by the audit write, so a failure
-  // there must not leave an account whose password nobody was shown.
-  it('shows the password even when the audit write fails after the account is made', async () => {
+  // tl on #567 (#570): a failed audit write must not leave an account whose password nobody was
+  // shown. Since #802 (as #723 does for a reset) the audit row commits with the account, so a
+  // failure there leaves no account at all, and no password is shown for one.
+  it('creates nothing and shows no password when the audit write fails', async () => {
     await seedDemo(db, CREDS, undefined, ENV);
     await rawRun(db, sql`DROP TABLE audit_log`);
     const c = capture();
     await expect(createDemoAccount({ db, env: ENV, ...JOURNALIST, io: c.io })).rejects.toThrow();
     const row = await db.select().from(users).where(eq(users.email, JOURNALIST.email)).get();
-    expect(row).toBeDefined();
-    expect(c.out).toHaveLength(1);
-    expect(await verifyPassword(row!.passwordHash, c.out[0]!)).toBe(true);
+    expect(row).toBeUndefined();
+    expect(c.out).toEqual([]);
   });
 
   it('never opens registration, and its rows match a registered account on everything else', async () => {

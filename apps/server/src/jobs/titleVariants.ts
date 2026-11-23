@@ -7,6 +7,7 @@
 //
 // What the call sends: the role target's own fields that say what the job is called (its name,
 // title family, seniority range and keywords). No posting, resume, contact or company data.
+import { enqueue } from '../lib/jobQueue';
 import {
   AiUnavailableError,
   renderPrompt,
@@ -24,7 +25,6 @@ import { line } from '../lib/promptText';
 import type { UserCtx } from '../repos/base';
 import { getActivePrompt } from '../repos/prompts';
 import type { JobHandler } from './registry';
-import { enqueue } from './runner';
 
 export const TITLE_VARIANTS_KIND = 'discovery.title_variants';
 

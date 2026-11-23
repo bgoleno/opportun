@@ -8,7 +8,7 @@
 // made for one person on a demo server, and every account off the demo, is untouched. The checks run at review,
 // at handoff and when the extension asks for the attempt (/connector/apply/current), so a fixture
 // value put back behind the server's back is still never sent.
-import { DEMO_IDENTITY_VALUES } from '../cli/seedDemoFixture';
+import { DEMO_IDENTITY_VALUES } from './demo/fixture';
 import type { Config } from '../config';
 import { isSharedDemoAccount } from './demoAccounts';
 import { HttpError } from './errors';
@@ -22,8 +22,29 @@ const normalise = (v: string): string =>
 /** A phone number is the same number however it is punctuated. */
 const digits = (v: string): string => v.replace(/\D/g, '');
 
+/**
+ * A phone's national number (#682, qa on #676): its digits, less a trailing extension, the
+ * international exit prefix (00, or North America's 011: #726) and North America's country code
+ * (1) on an 11-digit number, so the seeded +1 number typed as 415-555-0134, 1-415-555-0134,
+ * 011 1 415 555 0134 or 415-555-0134 ext 2 is the same number. The seed's numbers are
+ * North American; another country's code stays, so +44 415 555 0134 is another number.
+ */
+function nationalDigits(v: string): string {
+  // A trailing extension, of any length (qa on #762), is not part of the number (#726): "ext 2",
+  // "x12", "#3", "extension 45".
+  // Trimmed first, so the pattern has no run of spaces next to another (linear on any input).
+  let d = digits(v.trim().replace(/(?:ext(?:ension)?\.?|x|#)\s*\d+$/i, ''));
+  // The international exit prefix: 00, or North America's 011 (#726).
+  if (d.startsWith('011')) d = d.slice(3);
+  else if (d.startsWith('00')) d = d.slice(2);
+  if (d.length === 11 && d.startsWith('1')) d = d.slice(1);
+  return d;
+}
+
 const IDENTITY = new Set(DEMO_IDENTITY_VALUES.map(normalise));
-const IDENTITY_DIGITS = new Set(DEMO_IDENTITY_VALUES.map(digits).filter((d) => d.length >= 7));
+const IDENTITY_DIGITS = new Set(
+  DEMO_IDENTITY_VALUES.map(nationalDigits).filter((d) => d.length >= 7),
+);
 /**
  * The demo's own mail domain: every email the seed writes is at it, and no visitor's own address
  * is, so any address there, or at a subdomain of it (qa on #550), is the demo's (tl on #550), not
@@ -38,11 +59,18 @@ function atDemoDomain(v: string): boolean {
   return domain === DEMO_MAIL_DOMAIN || domain.endsWith(`.${DEMO_MAIL_DOMAIN}`);
 }
 
-/** Whether `value`, in field `key`, is one of the demo's own identity values. */
-export function isFixtureIdentity(key: string, value: string): boolean {
+/**
+ * Whether `value`, in field `key`, is one of the demo's own identity values. The phone is compared
+ * by its digits in every field, not only `phone` (#782): a form names its fields as it likes
+ * (`mobile`, `tel`, a question id), so no list of phone-like names would be complete. That refuses
+ * only the seed's phone: it is the only identity value with seven digits or more, and a field
+ * whose national digits are exactly its number holds that number, whatever it is called.
+ */
+export function isFixtureIdentity(_key: string, value: string): boolean {
   const v = normalise(value);
   if (IDENTITY.has(v) || atDemoDomain(v)) return true;
-  return key === 'phone' && digits(value).length >= 7 && IDENTITY_DIGITS.has(digits(value));
+  const phone = nationalDigits(value);
+  return phone.length >= 7 && IDENTITY_DIGITS.has(phone);
 }
 
 /**
@@ -74,7 +102,7 @@ export const DEMO_FIXTURE_MESSAGE =
 
 /** 422 naming the field that holds a fixture identity value. */
 export const fixtureValueRefused = (field: string): HttpError =>
-  new HttpError(422, 'demo_fixture_value', DEMO_FIXTURE_MESSAGE, { field });
+  new HttpError(422, 'demo_fixture_value', DEMO_FIXTURE_MESSAGE, { field }, { userFacing: true });
 
 /**
  * 422 for any resume on a demo attempt. Every resume on the demo is the seed's, or a copy tailored
@@ -84,7 +112,13 @@ export const fixtureValueRefused = (field: string): HttpError =>
  * came from at creation, as a flag a tailored copy carries forward; never derive it from parents.
  */
 export const demoResumeRefused = (): HttpError =>
-  new HttpError(422, 'resume_unavailable_on_demo', DEMO_RESUME_MESSAGE, { field: 'resume' });
+  new HttpError(
+    422,
+    'resume_unavailable_on_demo',
+    DEMO_RESUME_MESSAGE,
+    { field: 'resume' },
+    { userFacing: true },
+  );
 
 /**
  * The backstop for review, handoff and /connector/apply/current: throws while any field holds a

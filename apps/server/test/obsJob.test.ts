@@ -3,13 +3,14 @@
 // that dies before its handler runs, inside a `job {kind}` span that continues the trace in
 // jobs.trace_context (CONSUMER) or starts a new one (INTERNAL); a failure writes one `error`
 // event with the job's kind and trace id, never the error's message.
+import { enqueue } from '../src/lib/jobQueue';
 import { SpanKind, SpanStatusCode } from '@opentelemetry/api';
 import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { jobs, obsMetricPoints } from '../src/db/schema';
 import { registerJob, unregisterJob } from '../src/jobs/registry';
-import { enqueue, runDueJobs } from '../src/jobs/runner';
+import { runDueJobs } from '../src/jobs/runner';
 import { flushNow, setCollecting } from '../src/obs';
 import { MINUTE_MS } from '../src/obs/metrics';
 import { useApi } from './api';

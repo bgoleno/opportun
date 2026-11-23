@@ -6,24 +6,41 @@
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
 import { USER_CONTEXT_KEY } from '@opportun/ai';
-import { newId } from '@opportun/core';
 import { ROOT_CONTEXT } from '@opentelemetry/api';
-import { CronExpressionParser } from 'cron-parser';
-import { and, eq, inArray, like, sql } from 'drizzle-orm';
-import { z } from 'zod';
-import { isUniqueViolation, rawGet, runCount, type Db, type Exec } from '../db/client';
+import { and, eq, gte, sql } from 'drizzle-orm';
+import { isUniqueViolation, type Db } from '../db/client';
 import { claimNextJob, type ClaimedJob } from '../db/dialect';
+import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
+import { runWithHoldStop } from '../lib/demoResetGate';
 import { HttpError } from '../lib/errors';
-import { jobs, settings } from '../db/schema';
+import { jobs } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
-import { contextFromTraceparent, currentTraceparent, isCollecting, obs } from '../obs';
+import {
+  dropPendingScheduled,
+  insertJob,
+  nextOccurrence,
+  readSchedules,
+  scheduleDedupeKey,
+} from '../lib/jobQueue';
+import { keyedFetch } from '../lib/safeFetch';
+import { contextFromTraceparent, isCollecting, obs } from '../obs';
 import { OTHER } from '../obs/catalog';
 import { errorType } from '../obs/outbound';
-import { RANK_WAITING_KIND } from './discoveryKinds';
+import { RANK_BATCH_CLEANUP_KIND, RANK_WAITING_KIND } from '../lib/jobKinds';
 import { finishInterruptedRuns } from './interruptedRuns';
 import { getJobHandler, type JobContext, type JobHandler, type JobServices } from './registry';
+import { jobWorkersSetting } from '../config';
 
-export const DEFAULT_MAX_ATTEMPTS = 5;
+/**
+ * The services a job gets: a job that belongs to a user fetches under that user's rate key
+ * (#617), so the per-host bucket shares a vendor host between users rather than one user's jobs
+ * holding every slot ahead of another's.
+ */
+function servicesFor(services: Partial<JobServices>, userId: string | null): Partial<JobServices> {
+  if (userId === null || services.sourceFetch === undefined) return services;
+  return { ...services, sourceFetch: keyedFetch(services.sourceFetch, userId) };
+}
+
 const BASE_DELAY_MS = 30_000;
 const MAX_JITTER_MS = 10_000;
 const MAX_DELAY_MS = 3_600_000;
@@ -59,116 +76,22 @@ export const DEFAULT_KIND_LIMITS: Readonly<Record<string, number>> = {
   // after another and a vendor's 429 cancels the rest before any of them starts.
   'company.network_probe': 1,
   [RANK_WAITING_KIND]: 2,
+  // A batch's provider cleanup (#686, tl): one at a time on the instance, so a provider that hangs
+  // ties up one worker, not all of them.
+  [RANK_BATCH_CLEANUP_KIND]: 1,
 };
 
 function envWorkers(): number {
-  const raw = process.env.OPPORTUN_JOB_WORKERS;
-  if (raw === undefined || raw.trim() === '') return DEFAULT_WORKERS;
-  const n = Number(raw);
-  return Number.isSafeInteger(n) && n >= 1 ? n : DEFAULT_WORKERS;
+  return jobWorkersSetting() ?? DEFAULT_WORKERS;
 }
 
 export type JobRow = typeof jobs.$inferSelect;
 export type JobStatus = JobRow['status'];
-const UNFINISHED: JobStatus[] = ['pending', 'running'];
 
 /** min(2^attempts * 30s + jitter(0-10s), 1h). */
 export function backoffMs(attempts: number, random: () => number = Math.random): number {
   const jitter = Math.floor(Math.min(Math.max(random(), 0), 1) * MAX_JITTER_MS);
   return Math.min(2 ** attempts * BASE_DELAY_MS + jitter, MAX_DELAY_MS);
-}
-
-export interface EnqueueOptions {
-  runAt?: number;
-  /** Skip the enqueue (returning the existing id) while an unfinished job has kind + key. */
-  dedupeKey?: string;
-  /** The user the job acts for; scopes GET /jobs and per-user lookups such as imports. */
-  userId?: string;
-  /**
-   * Continue the caller's trace in the job (design.md 14.6): stores the active span's W3C
-   * traceparent in jobs.trace_context. Only while collection is on, and only when a span is
-   * active; otherwise the column stays null. A deduped enqueue leaves the holder's own value.
-   */
-  continueTrace?: boolean;
-}
-
-async function insertJob(
-  db: Db,
-  kind: string,
-  payload: unknown,
-  opts: EnqueueOptions,
-): Promise<string> {
-  const handler = getJobHandler(kind);
-  const value = handler === undefined ? payload : handler.payloadSchema.parse(payload);
-  await racePoint('jobs.enqueue');
-  const traceContext = opts.continueTrace === true ? currentTraceparent() : null;
-  // The partial unique index jobs_unfinished_dedupe_uq (migration 0019) admits one unfinished
-  // job per (kind, dedupe_key): insert-or-nothing, then read the holder. If the holder
-  // finished between the two statements the key is free again, so try once more.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const now = Date.now();
-    const row = {
-      id: newId(),
-      kind,
-      payload: value ?? null,
-      runAt: opts.runAt ?? now,
-      attempts: 0,
-      maxAttempts: handler?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS,
-      status: 'pending' as const,
-      dedupeKey: opts.dedupeKey ?? null,
-      userId: opts.userId ?? null,
-      traceContext,
-      createdAt: now,
-      updatedAt: now,
-    };
-    if (opts.dedupeKey === undefined) {
-      await db.insert(jobs).values(row).run();
-      return row.id;
-    }
-    // Targeted at the partial unique index (jobs_unfinished_dedupe_uq, migration 0019), so
-    // any other constraint still fails loudly. Raw SQL: drizzle's SQLite builder renders a
-    // conflict target's WHERE after DO NOTHING, which a partial index does not accept.
-    const inserted = await rawGet<{ id: string }>(
-      db,
-      sql`INSERT INTO jobs (id, kind, payload, run_at, attempts, max_attempts, status,
-                            dedupe_key, user_id, trace_context, created_at, updated_at)
-          VALUES (${row.id}, ${row.kind}, ${JSON.stringify(row.payload)}, ${row.runAt},
-                  ${row.attempts}, ${row.maxAttempts}, ${row.status}, ${row.dedupeKey},
-                  ${row.userId}, ${row.traceContext}, ${row.createdAt}, ${row.updatedAt})
-          ON CONFLICT (kind, dedupe_key)
-            WHERE dedupe_key IS NOT NULL AND status IN ('pending', 'running')
-          DO NOTHING
-          RETURNING id`,
-    );
-    if (inserted !== undefined) return inserted.id;
-    const holder = await db
-      .select({ id: jobs.id })
-      .from(jobs)
-      .where(
-        and(
-          eq(jobs.kind, kind),
-          eq(jobs.dedupeKey, opts.dedupeKey),
-          inArray(jobs.status, UNFINISHED),
-        ),
-      )
-      .get();
-    if (holder !== undefined) return holder.id;
-  }
-  throw new Error(`enqueue ${kind}: dedupe key kept changing hands`);
-}
-
-/**
- * Adds a job. The payload is validated against the registered handler's schema (a kind with
- * no handler yet is stored as-is). Returns the new job id, or the id of the unfinished job
- * that holds the same kind + dedupeKey.
- */
-export async function enqueue(
-  db: Db,
-  kind: string,
-  payload: unknown,
-  opts: EnqueueOptions = {},
-): Promise<string> {
-  return insertJob(db, kind, payload, opts);
 }
 
 export interface RunOptions {
@@ -239,7 +162,13 @@ async function finish(
       lockedBy: null,
       lockedAt: null,
       updatedAt: now,
-      ...(error === undefined ? {} : { lastError: error.slice(0, MAX_ERROR_LENGTH) }),
+      // A done job carries no error: one left from an earlier attempt is not this outcome's, and
+      // Settings > Jobs would show it as if it were (qa's regression pass, #784).
+      ...(error === undefined
+        ? status === 'done'
+          ? { lastError: null }
+          : {}
+        : { lastError: error.slice(0, MAX_ERROR_LENGTH) }),
       ...(payload === undefined ? {} : { payload }),
     })
     .where(eq(jobs.id, id))
@@ -252,7 +181,8 @@ function errorText(err: unknown): string {
 
 /** How a run ended, for the job metric and span (#343). */
 interface JobOutcome {
-  outcome: 'done' | 'retry' | 'dead';
+  /** discarded: a shared demo account's job whose account the nightly reset replaced (#618). */
+  outcome: 'done' | 'retry' | 'dead' | 'discarded';
   /** A class or code (14.8): `no_handler`, `invalid_payload`, or the thrown error's. */
   errorType?: string;
 }
@@ -346,13 +276,19 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
     );
     return { outcome: 'dead', errorType: 'invalid_payload' };
   }
+  let holdExpired = false;
+  // The hold's stop signal (#684), once the job holds the gate: set below.
+  const held: { stop?: AbortSignal } = {};
   const ctx: JobContext = {
     jobId: job.id,
     userId: job.userId,
     attempt: job.attempts,
     maxAttempts: job.maxAttempts,
-    services: opts.services ?? {},
-    stopping: opts.stopping ?? (() => false),
+    services: servicesFor(opts.services ?? {}, job.userId),
+    // Also true once its hold on the demo reset's gate is about to end (its stop signal, the
+    // margin before the bound: tl on #704), or has: a job that loops stops before its AI calls
+    // all fail at once and it writes their failures.
+    stopping: () => holdExpired || held.stop?.aborted === true || (opts.stopping?.() ?? false),
     async setResult(value) {
       await db
         .update(jobs)
@@ -364,8 +300,63 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
   // Computed before the run, from the payload as stored: a handler is free to mutate what it
   // was given, and what must not outlive the job is what the row holds.
   const transient = withoutTransient(handler, job.payload);
+  // On a demo server a job holds the reset's gate for its whole run (#618), so it finishes before
+  // the nightly reset starts, or waits for it: a shared demo account's job, and an instance job,
+  // whose per-user work (the prompt refinements, say) can reach those accounts (tl on #618). Not
+  // the reset itself, nor a job of any other account. Once it holds it, its row must still be
+  // there: the reset deletes the shared accounts' jobs with them, so a job claimed before the reset
+  // is discarded without running, and writes nothing into the account reseeded under the same id.
+  // A hold has a bound (lib/demoResetGate.ts): past it the job is told to stop (ctx.stopping).
+  const gate = opts.services?.demoResetGate;
+  const gated =
+    gate !== undefined &&
+    handler.takesDemoResetGateItself !== true &&
+    (job.userId === null || SHARED_DEMO_IDS.has(job.userId));
+  const hold = gated
+    ? await gate.shared({
+        onExpire: () => {
+          holdExpired = true;
+          log?.warn(
+            { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+            'job held the demo reset gate to its limit; told to stop',
+          );
+        },
+      })
+    : undefined;
+  if (hold !== undefined) held.stop = hold.signal;
   try {
-    await handler.run(db, parsed.data, ctx);
+    if (hold !== undefined) {
+      const still = await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, job.id)).get();
+      if (still === undefined) {
+        log?.warn(
+          { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+          'job discarded: the demo reset replaced its account',
+        );
+        return { outcome: 'discarded' };
+      }
+    }
+    const run = () => runHandler(db, job, opts, handler, parsed.data, ctx, transient);
+    // Its AI calls end on the hold's stop signal, before the bound (#684).
+    return await (hold === undefined ? run() : runWithHoldStop(hold.signal, run));
+  } finally {
+    hold?.release();
+  }
+}
+
+/** The handler's run, and the row's end: done, retried later, or dead. */
+async function runHandler(
+  db: Db,
+  job: ClaimedJob,
+  opts: RunOptions,
+  handler: JobHandler<unknown>,
+  payload: unknown,
+  ctx: JobContext,
+  transient: unknown,
+): Promise<JobOutcome> {
+  const now = opts.now ?? Date.now;
+  const log = opts.services?.log;
+  try {
+    await handler.run(db, payload, ctx);
   } catch (err) {
     const at = now();
     // #345: catalogued keys (design 14.9); the error reduces to its type and frames in the log.
@@ -422,13 +413,79 @@ export async function runDueJobs(db: Db, opts: RunOptions = {}): Promise<number>
  * Single-process deployment: anything still `running` when a runner starts was orphaned by
  * a crash or kill, so it goes back to `pending` (its attempt stays counted).
  */
-export async function recoverStaleJobs(db: Db): Promise<number> {
-  return await runCount(
-    db
+export async function recoverStaleJobs(
+  db: Db,
+  opts: { now?: number; random?: () => number; log?: JobServices['log'] } = {},
+): Promise<number> {
+  const now = opts.now ?? Date.now();
+  const orphans = await db
+    .select({
+      id: jobs.id,
+      kind: jobs.kind,
+      payload: jobs.payload,
+      attempts: jobs.attempts,
+      maxAttempts: jobs.maxAttempts,
+    })
+    .from(jobs)
+    .where(eq(jobs.status, 'running'))
+    .all();
+  for (const job of orphans) {
+    // #588: a job that ended the process (out of memory mid-import, say) was put back on every
+    // start whatever its attempts, so it ran again each time: a crash loop. At its last attempt it
+    // is dead, as a job that threw there would be (its transient payload fields dropped the same).
+    if (job.attempts >= job.maxAttempts) {
+      await finish(
+        db,
+        job.id,
+        'dead',
+        now,
+        `orphaned: the process ended while its last attempt (${job.attempts} of ${job.maxAttempts}) ran`,
+        withoutTransient(getJobHandler(job.kind), job.payload),
+      );
+      opts.log?.error(
+        { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+        'a job left running at its last attempt when the process ended: dead',
+      );
+      continue;
+    }
+    // With attempts left it waits out the backoff a failure would have given it (#588), rather
+    // than run at once on a start that may follow the very crash it caused.
+    await db
       .update(jobs)
-      .set({ status: 'pending', lockedBy: null, lockedAt: null, updatedAt: Date.now() })
-      .where(eq(jobs.status, 'running')),
-  );
+      .set({
+        status: 'pending',
+        lockedBy: null,
+        lockedAt: null,
+        runAt: now + backoffMs(job.attempts, opts.random),
+        updatedAt: now,
+      })
+      .where(and(eq(jobs.id, job.id), eq(jobs.status, 'running')))
+      .run();
+  }
+  // A pending row already at its limit is never claimed (claimJobSql), so it would sit for ever,
+  // and a schedule's row would stop its schedule (qa on #720). Main's recovery before #588 left
+  // such rows: an orphan put back with its attempts unchanged. Dead, saying why; a schedule then
+  // queues its next occurrence (safeMaterialize, after this).
+  const spent = await db
+    .select({ id: jobs.id, kind: jobs.kind, payload: jobs.payload })
+    .from(jobs)
+    .where(and(eq(jobs.status, 'pending'), gte(jobs.attempts, jobs.maxAttempts)))
+    .all();
+  for (const job of spent) {
+    await finish(
+      db,
+      job.id,
+      'dead',
+      now,
+      'pending at its attempt limit: it will not be claimed again',
+      withoutTransient(getJobHandler(job.kind), job.payload),
+    );
+    opts.log?.error(
+      { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
+      'a pending job at its attempt limit: dead',
+    );
+  }
+  return orphans.length + spent.length;
 }
 
 /** Puts back a claimed job that never ran: pending, unlocked, and its attempt not counted. */
@@ -477,6 +534,7 @@ export function startRunner(
   const activeByKind = new Map<string, number>();
   const atCap = (): string[] =>
     [...activeByKind.entries()]
+      // eslint-disable-next-line security/detect-object-injection -- job kinds are server constants, and a missing one falls back to no cap
       .filter(([kind, n]) => n >= (limits[kind] ?? Number.POSITIVE_INFINITY))
       .map(([kind]) => kind);
 
@@ -559,7 +617,11 @@ export function startRunner(
   // follows immediately, so no run begins before the interrupted ones are ended.
   const startup = (async () => {
     try {
-      await recoverStaleJobs(db);
+      await recoverStaleJobs(db, {
+        now: clock(),
+        ...(opts.random === undefined ? {} : { random: opts.random }),
+        ...(opts.services?.log === undefined ? {} : { log: opts.services.log }),
+      });
       await finishInterruptedRuns(db);
       await safeMaterialize(db, clock(), opts);
     } catch (err) {
@@ -654,147 +716,6 @@ async function reviveRow(db: Db, id: string, now: number): Promise<JobRow | unde
 
 // ---------------------------------------------------------------------------
 // Scheduler
-
-export const SCHEDULE_PREFIX = 'schedule:';
-
-/**
- * A schedule row's value. The row key is `schedule:<name>`; by default the job kind is the
- * name and the payload `{}`. A named schedule (e.g. `schedule:discovery.run:<sourceId>`) sets
- * `kind` and `payload` so many rows can drive one job kind with different payloads.
- */
-export interface Schedule {
-  cron: string;
-  enabled: boolean;
-  kind?: string | undefined;
-  payload?: Record<string, unknown> | undefined;
-}
-
-/** A bare cron string is an enabled schedule; the object form can switch it off. */
-const ScheduleValue = z.union([
-  z
-    .string()
-    .min(1)
-    .transform((cron): Schedule => ({ cron, enabled: true })),
-  z.object({
-    cron: z.string().min(1),
-    enabled: z.boolean().default(true),
-    kind: z.string().min(1).max(100).optional(),
-    payload: z.record(z.string(), z.unknown()).optional(),
-  }),
-]);
-
-const scheduleDedupeKey = (name: string): string => `${SCHEDULE_PREFIX}${name}`;
-
-/** The next occurrence strictly after `now`, or undefined for an invalid expression. */
-export function nextOccurrence(cron: string, now: number): number | undefined {
-  try {
-    return CronExpressionParser.parse(cron, { currentDate: new Date(now) })
-      .next()
-      .getTime();
-  } catch {
-    return undefined;
-  }
-}
-
-/** The shortest spacing a user-supplied schedule may have: at most one run an hour. */
-export const MIN_USER_CRON_INTERVAL_MS = 60 * 60 * 1000;
-/** Occurrences sampled for the spacing check (enough to span one full matching hour). */
-const USER_CRON_SAMPLES = 10;
-
-/**
- * Why a user-supplied cron is refused, or null when it is acceptable: it must parse, use the five
- * standard fields (no seconds field), and leave at least an hour between occurrences.
- */
-export function userCronProblem(cron: string, now: number = Date.now()): string | null {
-  let it: ReturnType<typeof CronExpressionParser.parse>;
-  try {
-    it = CronExpressionParser.parse(cron, { currentDate: new Date(now) });
-  } catch {
-    return 'must be a valid cron expression';
-  }
-  if (cron.trim().split(/\s+/).length !== 5) {
-    return 'must have five fields (minute hour day month weekday); a seconds field is not supported';
-  }
-  let prev: number | undefined;
-  for (let i = 0; i < USER_CRON_SAMPLES && it.hasNext(); i++) {
-    const at = it.next().getTime();
-    if (prev !== undefined && at - prev < MIN_USER_CRON_INTERVAL_MS) {
-      return 'must run at most once an hour';
-    }
-    prev = at;
-  }
-  return prev === undefined ? 'must be a valid cron expression' : null;
-}
-
-/** Drops the pending occurrence a schedule row materialized (its dedupe key is the row key). */
-async function dropPendingScheduled(exec: Exec, name: string): Promise<void> {
-  await exec
-    .delete(jobs)
-    .where(and(eq(jobs.dedupeKey, scheduleDedupeKey(name)), eq(jobs.status, 'pending')))
-    .run();
-}
-
-/**
- * Writes schedule:<name>; a pending occurrence of the old schedule is dropped. `userId` makes
- * the row (and the jobs it materializes) belong to that user, so deleting the user removes it.
- */
-export async function setSchedule(
-  db: Exec,
-  name: string,
-  schedule: Schedule,
-  userId: string | null = null,
-): Promise<void> {
-  const now = Date.now();
-  await db
-    .insert(settings)
-    .values({ key: scheduleDedupeKey(name), userId, value: schedule, updatedAt: now })
-    .onConflictDoUpdate({ target: settings.key, set: { value: schedule, userId, updatedAt: now } })
-    .run();
-  await dropPendingScheduled(db, name);
-}
-
-/** Deletes schedule:<name> and its pending occurrence. */
-export async function removeSchedule(db: Exec, name: string): Promise<void> {
-  await db
-    .delete(settings)
-    .where(eq(settings.key, scheduleDedupeKey(name)))
-    .run();
-  await dropPendingScheduled(db, name);
-}
-
-/** Creates schedule:<kind> with `cron` unless a row (possibly disabled) already exists. */
-export async function seedSchedule(db: Db, kind: string, cron: string): Promise<void> {
-  await db
-    .insert(settings)
-    .values({
-      key: scheduleDedupeKey(kind),
-      userId: null,
-      value: { cron, enabled: true } satisfies Schedule,
-      updatedAt: Date.now(),
-    })
-    .onConflictDoNothing()
-    .run();
-}
-
-export async function readSchedules(
-  db: Db,
-): Promise<{ kind: string; schedule: Schedule | undefined; userId: string | null }[]> {
-  // Every schedule row is written by server code: user-facing settings routes only write
-  // their own fixed per-user keys, never a schedule: key.
-  const rows = await db
-    .select({ key: settings.key, value: settings.value, userId: settings.userId })
-    .from(settings)
-    .where(like(settings.key, `${SCHEDULE_PREFIX}%`))
-    .all();
-  return rows.map((row) => {
-    const parsed = ScheduleValue.safeParse(row.value);
-    return {
-      kind: row.key.slice(SCHEDULE_PREFIX.length),
-      schedule: parsed.success ? parsed.data : undefined,
-      userId: row.userId,
-    };
-  });
-}
 
 /**
  * For each schedule row: enabled, enqueue its next occurrence (deduped, so at most one

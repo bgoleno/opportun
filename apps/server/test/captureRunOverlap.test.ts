@@ -4,6 +4,7 @@
 // and the board's pending card, in 3 of 12. A run under its ingest lock had nothing to stop a
 // capture, which looked, then wrote, outside it. Each order is built here with a race point, and a
 // real run of a real source. The provider is mocked and every posting is made up.
+import { enqueue } from '../src/lib/jobQueue';
 import { runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
@@ -14,7 +15,6 @@ import { onSlowTransaction } from '../src/db/gate';
 import { discoveryResults, discoveryRuns, jobs, opportunities } from '../src/db/schema';
 import { drainWaitingResults } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob } from '../src/jobs/runner';
 import { resolveCapture } from '../src/lib/captureResolve';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';
@@ -24,6 +24,7 @@ import { useApi } from './api';
 import { sqliteOnly } from './db';
 import type { TestClient } from './isolation';
 import { heldApart, pauseAt, settledOrWaiting } from './race';
+import { runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -73,13 +74,13 @@ async function boardWithThePosting(app: FastifyInstance, c: TestClient): Promise
 }
 
 async function runBoard(app: FastifyInstance, c: TestClient, sourceId: string): Promise<void> {
-  await enqueue(
+  const queued = await enqueue(
     app.db,
     DISCOVERY_RUN_KIND,
     { sourceId },
     { dedupeKey: `${DISCOVERY_RUN_KIND}:${sourceId}`, userId: c.userId },
   );
-  await runNextJob(app.db, { services: app.jobs.services });
+  await runQueuedJob(app, queued);
 }
 
 const capture = (app: FastifyInstance, c: TestClient, over: Partial<NormalizedPosting> = {}) =>

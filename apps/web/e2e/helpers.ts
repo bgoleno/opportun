@@ -1,8 +1,11 @@
-// Shared steps for the e2e flows. Every flow registers its own user through the UI, so each
-// test sees only its own data on the shared server.
+// Shared steps for the e2e flows. Every flow registers its own user, so each test sees only its
+// own data on the shared server.
+import { readFile } from 'node:fs/promises';
 import {
   expect,
+  type Browser,
   type BrowserContext,
+  type BrowserContextOptions,
   type Locator,
   type Page,
   type PlaywrightWorkerArgs,
@@ -11,26 +14,73 @@ import { BASE_URL } from '../playwright.config';
 
 export const PASSWORD = 'correct horse battery staple';
 
+/**
+ * The instance admin's signed-in session, stored once for the run by global-setup.ts, so specs
+ * act as the admin without signing in through the form: each form sign-in spends the login limit
+ * (10 per address and email in 15 minutes), and the run's spend is checked in
+ * global-teardown.ts (#776). Sign the admin in through the form only to test sign-in itself.
+ */
+export function adminStorageState(): string {
+  const path = process.env.E2E_ADMIN_STATE;
+  if (path === undefined || path === '')
+    throw new Error('E2E_ADMIN_STATE is not set: global-setup.ts did not run');
+  return path;
+}
+
+/** A browser context signed in as the admin, from the stored session. */
+export async function adminContext(
+  browser: Browser,
+  options: BrowserContextOptions = {},
+): Promise<BrowserContext> {
+  return browser.newContext({ ...options, storageState: adminStorageState() });
+}
+
+/** Signs this page's context in as the admin, from the stored session, and opens the Dashboard. */
+export async function signInAsAdmin(page: Page): Promise<void> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- this run's own temp file
+  const state = JSON.parse(await readFile(adminStorageState(), 'utf8')) as {
+    cookies: Parameters<BrowserContext['addCookies']>[0];
+  };
+  await page.context().addCookies(state.cookies);
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+}
+
 let seq = 0;
 
 /**
- * Registers a fresh user through /register and lands on the dashboard. A brand-new account is
- * offered the first-run tour (FR-U11); every flow but the tour's own declines it with Not now,
+ * Registers a fresh user, signed in on this page, and lands on the dashboard. A brand-new account
+ * is offered the first-run tour (FR-U11); every flow but the tour's own declines it with Not now,
  * which is what a user who wants to get on with it does.
+ *
+ * The account is made through the test server's sign-up shortcut (POST /__mock/auth/users,
+ * apps/server/src/testSupport/mockAuth.ts), which writes exactly what POST /auth/register writes
+ * but spends none of the 100 sign-in attempts an address has per 15 minutes: one form sign-up a
+ * test spent most of them over the run (#776). `viaForm` signs up through /register instead, for
+ * the specs that test sign-up itself.
  */
 export async function registerUser(
   page: Page,
   name = 'Jane Example',
-  opts: { keepTour?: boolean } = {},
+  opts: { keepTour?: boolean; viaForm?: boolean } = {},
 ): Promise<string> {
   seq += 1;
   const email = `e2e-${Date.now()}-${seq}@example.com`;
-  await page.goto('/register');
-  await page.getByLabel('Name').fill(name);
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
-  await page.getByLabel(/Confirm/).fill(PASSWORD);
-  await page.getByRole('button', { name: 'Create account' }).click();
+  if (opts.viaForm === true) {
+    await page.goto('/register');
+    await page.getByLabel('Name').fill(name);
+    await page.getByLabel('Email').fill(email);
+    await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
+    await page.getByLabel(/Confirm/).fill(PASSWORD);
+    await page.getByRole('button', { name: 'Create account' }).click();
+  } else {
+    // page.request shares the page's cookies, so the session it is given signs the page in.
+    const res = await page.request.post('/__mock/auth/users', {
+      data: { email, password: PASSWORD, displayName: name },
+    });
+    expect(res.status(), `sign-up shortcut: ${await res.text()}`).toBe(201);
+    await page.goto('/');
+  }
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
   if (opts.keepTour !== true) {
     const welcome = page.getByRole('dialog', { name: "Let's get your search running" });
@@ -122,13 +172,13 @@ export async function choose(scope: Page | Locator, label: string, option: strin
  * Creates a device token with the browser-capture scope through Settings, as a user setting up
  * the extension does, so a test can post a captured page the way the extension would.
  */
-export async function createCaptureToken(page: Page): Promise<string> {
+export async function createCaptureToken(page: Page, password = PASSWORD): Promise<string> {
   await page.goto('/settings/integrations');
   await page.getByRole('button', { name: 'Create token' }).click();
   const dialog = page.getByRole('dialog', { name: 'Create a device token' });
   await dialog.getByLabel('Name').fill('Chrome extension');
   await dialog.getByRole('checkbox', { name: /^Browser capture/ }).setChecked(true);
-  await dialog.getByLabel('Current password').fill(PASSWORD);
+  await dialog.getByLabel('Current password').fill(password);
   await dialog.getByRole('button', { name: 'Create' }).click();
   const shown = page.getByRole('dialog', { name: 'Copy your device token' });
   const token = await shown.getByLabel('Device token').inputValue();
@@ -143,9 +193,9 @@ const STUB = '<!doctype html><title>Stub ATS</title><h1>Stub application form</h
  * the machine: a handoff's new tab never reaches a real ATS (Opportun never submits; the e2e
  * never even visits).
  */
-export async function stubOtherHosts(context: BrowserContext): Promise<void> {
+export async function stubOtherHosts(context: BrowserContext, base = BASE_URL): Promise<void> {
   await context.route(
-    (url) => !url.href.startsWith(BASE_URL),
+    (url) => !url.href.startsWith(base),
     (route) => route.fulfill({ status: 200, contentType: 'text/html', body: STUB }),
   );
 }
@@ -169,9 +219,10 @@ export async function registerBaseResume(page: Page, docId: string): Promise<voi
 export async function captureGreenhouseOpportunity(
   page: Page,
   playwright: PlaywrightWorkerArgs['playwright'],
+  server: { baseURL: string; password: string } = { baseURL: BASE_URL, password: PASSWORD },
 ): Promise<string> {
-  const token = await createCaptureToken(page);
-  const extension = await playwright.request.newContext({ baseURL: BASE_URL });
+  const token = await createCaptureToken(page, server.password);
+  const extension = await playwright.request.newContext({ baseURL: server.baseURL });
   try {
     const res = await extension.post('/api/v1/connector/capture', {
       headers: { authorization: `Bearer ${token}` },

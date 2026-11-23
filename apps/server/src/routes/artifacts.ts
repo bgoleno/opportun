@@ -172,6 +172,7 @@ export async function artifactRoutes(app: FastifyInstance): Promise<void> {
         );
         throw notFound();
       }
+      // eslint-disable-next-line security/detect-object-injection -- the SERVER_FILE constant
       tree[SERVER_FILE] = new Uint8Array(
         Buffer.from(
           `${JSON.stringify({ baseUrl: requestBaseUrl(req, app.config.baseUrl) }, null, 2)}\n`,

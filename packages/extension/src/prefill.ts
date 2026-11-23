@@ -18,6 +18,8 @@ export interface GetInit {
   headers: Record<string, string>;
   credentials: 'omit';
   redirect: 'error';
+  /** Ends the request at the action's time limit (#648). */
+  signal?: AbortSignal;
 }
 export type GetLike = (url: string, init: GetInit) => Promise<FetchResponse>;
 
@@ -218,9 +220,39 @@ export function toBase64(bytes: Uint8Array): string {
   return btoa(out);
 }
 
-/** The resume copy, none to attach, or a refusal that stops the whole fill. */
+/**
+ * Why the resume copy was not attached (#653), told in the fill report in place of the filler's
+ * plain "attach your resume yourself". Set by the popup from the download, never by the filler.
+ */
+export type ResumeMiss = 'resume_preparing' | 'resume_not_downloaded' | 'resume_unusable';
+export const RESUME_MISSES: readonly ResumeMiss[] = [
+  'resume_preparing',
+  'resume_not_downloaded',
+  'resume_unusable',
+];
+
+/**
+ * The resume copy, none to attach, or a refusal that stops the whole fill. `why` is null when
+ * there is nothing more to say: no resume was chosen, its export failed, or it was deleted.
+ */
 export type ResumeResult =
-  { kind: 'file'; base64: string } | { kind: 'none' } | { kind: 'review_stale' };
+  | { kind: 'file'; base64: string }
+  | { kind: 'none'; why: ResumeMiss | null }
+  | { kind: 'review_stale' };
+
+/**
+ * The reason for a snapshot state that is not ready (#653), the same from /current and a 409.
+ * The server names the file only when the state is `ready`, and an attempt with no resume chosen
+ * has no state at all (null), so `unsupported` always means a chosen resume with no PDF copy
+ * (qa on #717). `failed` is an export that failed (a resume deleted meanwhile, say), which "not
+ * a usable PDF" would not describe, so it says nothing more. A handed-off attempt is never
+ * `pending` or `failed` today: those two are only defensive.
+ */
+function missOfState(state: unknown): ResumeMiss | null {
+  if (state === 'pending') return 'resume_preparing';
+  if (state === 'unsupported') return 'resume_unusable';
+  return null;
+}
 
 /**
  * The attempt's resume copy as base64, or none whenever it cannot be attached as exactly that
@@ -234,19 +266,18 @@ export async function fetchResume(
   settings: Settings,
   attempt: PrefillAttempt,
 ): Promise<ResumeResult> {
-  const none = { kind: 'none' } as const;
+  const none = (why: ResumeMiss | null) => ({ kind: 'none', why }) as const;
   const { snapshotState, filename, bytes } = attempt.resume;
-  if (snapshotState !== 'ready' || filename === null || filename === '' || bytes === null) {
-    return none;
-  }
-  if (bytes <= 0 || bytes > MAX_RESUME_BYTES) return none;
+  if (snapshotState !== 'ready') return none(missOfState(snapshotState));
+  if (filename === null || filename === '' || bytes === null) return none(null);
+  if (bytes <= 0 || bytes > MAX_RESUME_BYTES) return none('resume_unusable');
   const res = await get(
     fetch,
     settings,
     `${settings.serverUrl}${APPLY_PATH}/${encodeURIComponent(attempt.id)}/snapshot`,
     'application/pdf',
   );
-  if (res === null) return none;
+  if (res === null) return none('resume_not_downloaded');
   if (res.status === 409) {
     let body: unknown;
     try {
@@ -255,22 +286,23 @@ export async function fetchResume(
       body = undefined;
     }
     const error = isRecord(body) && isRecord(body.error) ? body.error : {};
-    return error.code === 'review_stale' ? { kind: 'review_stale' } : none;
+    if (error.code === 'review_stale') return { kind: 'review_stale' };
+    return none(missOfState(error.snapshotState));
   }
-  if (res.status !== 200 || res.arrayBuffer === undefined) return none;
+  if (res.status !== 200 || res.arrayBuffer === undefined) return none('resume_not_downloaded');
   if (!(res.headers.get('content-type') ?? '').toLowerCase().startsWith('application/pdf')) {
-    return none;
+    return none('resume_unusable');
   }
   let data: Uint8Array;
   try {
     data = new Uint8Array(await res.arrayBuffer());
   } catch {
-    return none;
+    return none('resume_not_downloaded');
   }
-  if (data.length !== bytes) return none;
+  if (data.length !== bytes) return none('resume_unusable');
   // "%PDF-": the file is what the form is told it is.
   const magic = [0x25, 0x50, 0x44, 0x46, 0x2d];
-  if (!magic.every((b, i) => data.at(i) === b)) return none;
+  if (!magic.every((b, i) => data.at(i) === b)) return none('resume_unusable');
   return { kind: 'file', base64: toBase64(data) };
 }
 
@@ -327,6 +359,20 @@ const PREFILL_FIELDS: readonly {
 ];
 
 /**
+ * A question label as greenhouseFill compares it (its `norm`, which lives inside the filler
+ * because the filler runs on the page on its own): spaces collapsed, a trailing required-mark `*`
+ * dropped, any case. Kept the same as that one.
+ */
+function labelKey(label: string): string {
+  return label
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\s*\*$/, '')
+    .trim()
+    .toLowerCase();
+}
+
+/**
  * What the filler fills, from the reviewed attempt only (tl's mapping): the four standard
  * fields by the form's ids, the other details (LinkedIn, website, and #435's city and how you
  * heard) by the question's exact label, and each reviewed answer by
@@ -342,14 +388,23 @@ export function buildPlan(
   const standard = PREFILL_FIELDS.flatMap((f) =>
     f.id === null ? [] : [{ id: f.id, name: f.name, value: value(f.key) }],
   ).filter((x) => x.value !== '');
+  // A reviewed answer is what the user confirmed for its question (#595): a detail loses each label
+  // a reviewed answer also carries, or the filler would find two answers for that question, call it
+  // ambiguous and fill neither. It keeps its other labels, so a second such question on the form
+  // (the "about us" one beside an answered "about this role") is still filled by the detail (qa on
+  // #674). A detail that lost a label is `covered`: when none of the rest is on the form, it is
+  // not reported as missing, since its question was filled with the answer. Labels compare as the
+  // filler compares them.
+  const answered = new Set(attempt.answers.map((a) => labelKey(a.label)));
   const questions = [
-    ...PREFILL_FIELDS.flatMap((f) =>
-      f.id !== null || f.labels.length === 0
-        ? []
-        : [{ labels: [...f.labels], name: f.name, value: value(f.key) }],
-    ),
+    ...PREFILL_FIELDS.flatMap((f) => {
+      if (f.id !== null || f.labels.length === 0) return [];
+      const labels = f.labels.filter((l) => !answered.has(labelKey(l)));
+      const covered = labels.length < f.labels.length;
+      return [{ labels, name: f.name, value: value(f.key), ...(covered ? { covered } : {}) }];
+    }),
     ...attempt.answers.map((a) => ({ labels: [a.label], name: a.label, value: a.value })),
-  ].filter((q) => q.value !== '');
+  ].filter((q) => q.value !== '' && q.labels.length > 0);
   const lists = PREFILL_FIELDS.flatMap((f) =>
     f.list === undefined ? [] : [{ id: f.list, name: f.name, value: value(f.key) }],
   ).filter((l) => l.value !== '');
@@ -387,6 +442,16 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
     'more than one question or answer has this label, so it was not filled: answer it on the form',
   ],
   ['attach_yourself', 'attach your resume yourself'],
+  // Why the copy was not attached (#653): set by the popup from the download.
+  [
+    'resume_preparing',
+    'the copy is still being prepared: try again in a minute, or attach your resume yourself',
+  ],
+  [
+    'resume_not_downloaded',
+    'the copy could not be downloaded from Opportun: try again, or attach your resume yourself',
+  ],
+  ['resume_unusable', 'the copy in Opportun is not a usable PDF: attach your resume yourself'],
   ['attach_file_yourself', 'attach this file yourself'],
   [
     'withheld',
@@ -398,6 +463,10 @@ export const NOT_FILLED_WORDS = new Map<NotFilledReason, string>([
   ],
   // The list reasons (tl's rule 4 on #402): reportLines puts the value in place of {value}.
   ['no_option', 'no option on the form\'s list is exactly "{value}": choose it on the form'],
+  [
+    'option_unclickable',
+    'the form\'s list has "{value}", but inside a link or a label, so Opportun did not click it: choose it on the form',
+  ],
   ['several_options', 'more than one option is exactly "{value}": choose it on the form'],
   ['list_not_shown', "the form's list did not appear in time: choose it on the form"],
   ['not_confirmed', 'the form did not show the choice "{value}": check this field'],

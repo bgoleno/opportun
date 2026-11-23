@@ -26,6 +26,7 @@ import { HttpError, notFound } from '../lib/errors';
 import { cleanText, truncateText } from '../lib/safeText';
 import { assertOpportunityOwned } from './activities';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { countWhere, likeContains, type Page } from './list';
 import { rejectCommunication } from './reject';
 import { createOpportunity, transitionOpportunity, type OpportunityView } from './opportunities';
@@ -149,7 +150,7 @@ export async function getSyncState(
   return await db
     .select()
     .from(syncState)
-    .where(and(eq(syncState.userId, ctx.userId), eq(syncState.integration, integration)))
+    .where(and(ownedBy(syncState.userId, ctx), eq(syncState.integration, integration)))
     .get();
 }
 
@@ -307,7 +308,7 @@ function selectViews(exec: Exec, ctx: UserCtx) {
     .from(communications)
     .leftJoin(
       opportunities,
-      and(eq(opportunities.id, communications.opportunityId), eq(opportunities.userId, ctx.userId)),
+      and(eq(opportunities.id, communications.opportunityId), ownedBy(opportunities.userId, ctx)),
     )
     .leftJoin(companies, eq(companies.id, opportunities.companyId));
 }
@@ -335,7 +336,7 @@ function toView(row: ViewRow): CommunicationView {
 }
 
 function ownedComm(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(communications.userId, ctx.userId), eq(communications.id, id));
+  return and(ownedBy(communications.userId, ctx), eq(communications.id, id));
 }
 
 async function getRowSync(exec: Exec, ctx: UserCtx, id: string): Promise<CommunicationRow> {
@@ -381,7 +382,7 @@ export async function listCommunications(
 ): Promise<Page<CommunicationView>> {
   if (opts.opportunityId !== undefined) await assertOpportunityOwned(db, ctx, opts.opportunityId);
   const where = and(
-    eq(communications.userId, ctx.userId),
+    ownedBy(communications.userId, ctx),
     viewWhere(opts.view),
     opts.opportunityId === undefined
       ? undefined
@@ -432,7 +433,8 @@ export type BulkAction = {
 };
 
 export interface BulkTriageInput {
-  ids: readonly string[];
+  /** Each message with the link the user saw it under (#666): a changed one is left alone. */
+  items: readonly { id: string; opportunityId: string | null }[];
   action: BulkAction;
 }
 
@@ -441,6 +443,8 @@ export interface BulkTriageResult {
   succeeded: number;
   /** Distinct ids that were not the caller's (or no longer exist); left untouched. */
   skipped: number;
+  /** Distinct messages linked differently since the user saw them (#666); left untouched. */
+  changed: number;
 }
 
 /**
@@ -459,22 +463,29 @@ export async function bulkTriage(
 ): Promise<BulkTriageResult> {
   let succeeded = 0;
   let skipped = 0;
-  for (const id of new Set(input.ids)) {
+  let changed = 0;
+  // De-duplicated by id: the first entry for an id is the one acted on.
+  const seen = new Map<string, string | null>();
+  for (const item of input.items) if (!seen.has(item.id)) seen.set(item.id, item.opportunityId);
+  for (const [id, expectedOpportunityId] of seen) {
     try {
       await rejectCommunication(db, ctx, id, {
         reason: input.action.reason,
         note: input.action.note ?? null,
+        expectedOpportunityId,
       });
       succeeded += 1;
     } catch (err) {
       if (err instanceof HttpError && err.statusCode === 404) {
         skipped += 1;
+      } else if (err instanceof HttpError && err.code === 'message_changed') {
+        changed += 1;
       } else {
         throw err;
       }
     }
   }
-  return { succeeded, skipped };
+  return { succeeded, skipped, changed };
 }
 
 /** Messages waiting for the user's review (the dashboard triage count). */
@@ -482,7 +493,7 @@ export async function needsReviewCount(db: Db, ctx: UserCtx): Promise<number> {
   return await countWhere(
     db,
     communications,
-    and(eq(communications.userId, ctx.userId), viewWhere('needs_review')),
+    and(ownedBy(communications.userId, ctx), viewWhere('needs_review')),
   );
 }
 
@@ -603,7 +614,7 @@ async function resolveMatch(
     })
     .from(opportunities)
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
-    .where(eq(opportunities.userId, ctx.userId))
+    .where(ownedBy(opportunities.userId, ctx))
     .all();
   const atCompany = all.filter((o) => sameCompany(o.companyName, match.company));
   if (atCompany.length === 0) return undefined;
@@ -639,12 +650,12 @@ async function threadLink(
           opportunities,
           and(
             eq(opportunities.id, communications.opportunityId),
-            eq(opportunities.userId, ctx.userId),
+            ownedBy(opportunities.userId, ctx),
           ),
         )
         .where(
           and(
-            eq(communications.userId, ctx.userId),
+            ownedBy(communications.userId, ctx),
             eq(communications.channel, comm.channel),
             eq(communications.threadKey, comm.threadKey),
             ne(communications.id, comm.id),
@@ -666,7 +677,7 @@ async function opportunityStage(
     await exec
       .select({ stage: opportunities.stage })
       .from(opportunities)
-      .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, id)))
+      .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, id)))
       .get()
   )?.stage;
 }
@@ -823,9 +834,7 @@ export async function applyClassification(
       await tx
         .update(opportunities)
         .set({ sourceRef: `${comm.channel}:${comm.externalId}`.slice(0, 500) })
-        .where(
-          and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, createdOpportunityId)),
-        )
+        .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, createdOpportunityId)))
         .run();
       const activity = await tx
         .insert(activities)

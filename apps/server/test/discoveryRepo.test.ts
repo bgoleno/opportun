@@ -1,5 +1,7 @@
 // Discovery repositories (Task 4): sources, runs and results, each scoped to its owner, plus the
 // adapter registry's override semantics.
+import { DEFAULT_DISCOVERY_CRON, ATS_REVERIFY_CRON } from '../src/lib/atsDetect';
+import { userCronProblem } from '../src/lib/jobQueue';
 import type { NormalizedPosting } from '@opportun/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
@@ -12,11 +14,9 @@ import {
   UnknownSourceError,
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
-import { DEFAULT_DISCOVERY_CRON, ATS_REVERIFY_CRON } from '../src/jobs/atsDetect';
 import { COMPANY_SUGGEST_CRON } from '../src/jobs/companySuggest';
 import { BACKUP_CRON } from '../src/jobs/backup';
 import { DISCOVERY_REFINE_CRON } from '../src/jobs/refineDiscoveryPrompt';
-import { userCronProblem } from '../src/jobs/runner';
 import { HttpError } from '../src/lib/errors';
 import {
   createRun,
@@ -160,7 +160,7 @@ describe('discovery sources repo', () => {
       }
       expect(caught, cron).toBeInstanceOf(HttpError);
       expect(caught as HttpError, cron).toMatchObject({ statusCode: 422, code: 'invalid_cron' });
-      expect((caught as HttpError).details?.message, cron).toMatch(/hour|five fields/);
+      expect((caught as HttpError).userMessage, cron).toMatch(/hour|five fields/);
     }
     expect((await make('0 * * * *')).scheduleCron).toBe('0 * * * *');
     const src = await make('0 7 * * *');

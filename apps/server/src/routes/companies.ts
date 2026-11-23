@@ -7,19 +7,17 @@
 //
 // Following a company (status 'followed', by PATCH or by accepting a suggestion) enables its
 // board's discovery source on the user's default cron; any other status disables it (FR-D5).
+import {
+  ATS_DETECT_KIND,
+  atsDetectDedupeKey,
+  syncFollowedCompany,
+  enqueueAtsDetect,
+} from '../lib/atsDetect';
 import { COMPANY_STATUSES, CompanySchema, isNaicsCode } from '@opportun/core';
-import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import type { Db } from '../db/client';
-import { jobs } from '../db/schema';
-import {
-  ATS_DETECT_KIND,
-  atsDetectDedupeKey,
-  enqueueAtsDetect,
-  syncFollowedCompany,
-} from '../jobs/atsDetect';
 import {
   BOARD_PROBE_KIND,
   boardProbeDedupeKey,
@@ -29,6 +27,7 @@ import { countPendingFromCompany } from '../lib/deniedCompanies';
 import { HttpError } from '../lib/errors';
 import { rateLimit } from '../lib/rateLimit';
 import type { UserCtx } from '../repos/base';
+import { unfinishedDedupeKeys } from '../repos/jobs';
 import {
   COMPANY_SORTS,
   createCompany,
@@ -82,19 +81,8 @@ async function pendingJobs(
 ): Promise<Set<string>> {
   if (ids.length === 0) return new Set();
   const keys = new Map(ids.map((id) => [dedupeKey(id), id]));
-  const rows = await db
-    .select({ dedupeKey: jobs.dedupeKey })
-    .from(jobs)
-    .where(
-      and(
-        eq(jobs.kind, kind),
-        eq(jobs.userId, ctx.userId),
-        inArray(jobs.status, ['pending', 'running']),
-        inArray(jobs.dedupeKey, [...keys.keys()]),
-      ),
-    )
-    .all();
-  return new Set(rows.map((r) => keys.get(r.dedupeKey ?? '')).filter((id) => id !== undefined));
+  const found = await unfinishedDedupeKeys(db, ctx, kind, [...keys.keys()]);
+  return new Set(found.map((k) => keys.get(k ?? '')).filter((id) => id !== undefined));
 }
 
 export async function companyViews(db: Db, ctx: UserCtx, rows: Company[]): Promise<CompanyView[]> {

@@ -24,8 +24,7 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
-import { ADMIN } from './global-setup';
-import { PASSWORD } from './helpers';
+import { adminStorageState, PASSWORD } from './helpers';
 import { ADMIN_ROUTES, USER_ROUTES } from './routes';
 import { KNOWN } from './widthKnown';
 import { judge, WIDTHS, type Finding } from './widthStandard';
@@ -215,7 +214,9 @@ test.beforeAll(async ({ playwright }, info) => {
   accounts = {
     user: await register('user'),
     seed: await register('seed'),
-    admin: await session('/api/v1/auth/login', { email: ADMIN.email, password: ADMIN.password }),
+    // The admin's session stored by global-setup, not a sign-in of its own (#776).
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- this run's own temp file
+    admin: JSON.parse(await readFile(adminStorageState(), 'utf8')) as State,
   };
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- this run's own output directory
   await mkdir(dirname(cache), { recursive: true });
@@ -554,6 +555,14 @@ async function openWorkspace(
     'Your platform work maps well to this role.',
   );
   await expect(opened.page.getByText(/Summary: You will own/)).toBeVisible();
+  // The flow strip above the document grows by its steps once the resume's flow has loaded (the
+  // resume list, its sends and the opportunity's submissions answer after the two lines above):
+  // measured before that, the document moves down by the strip's growth after the page has been
+  // scrolled, and a scroll check compares against a layout that is gone (#724). Its next-step
+  // heading is that last change, so the geometry is read once it shows.
+  await expect(
+    opened.page.getByRole('region', { name: 'Next step for this resume' }).getByRole('heading'),
+  ).toBeVisible();
   return opened;
 }
 

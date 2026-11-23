@@ -10,11 +10,13 @@
 // re-insert all of them as fresh leads. Re-parsing also recovers the dropped location.
 // `externalId` came from the `View job:` link rather than the block, so it survived the shift
 // and is the join key back to the digest.
+import { enqueue } from '../lib/jobQueue';
+import { senderAddress } from '../lib/mailAddress';
 import { buffer } from 'node:stream/consumers';
 import { dedupeKey, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
-import { alertSenders, parseAlertDigest, senderAddress } from '../adapters/sources/alertEmail';
+import { alertSenders, parseAlertDigest } from '../adapters/sources/alertEmail';
 import type { Db } from '../db/client';
 import { communications, discoveryResults, settings, users } from '../db/schema';
 import { ALERT_HEADER } from '../lib/alertParsers/linkedin';
@@ -22,7 +24,6 @@ import { sanitizePosting } from '../lib/postingSanitize';
 import type { Storage } from '../lib/storage';
 import type { UserCtx } from '../repos/base';
 import { requireService, type JobHandler } from './registry';
-import { enqueue } from './runner';
 
 export const REPAIR_ALERT_LEADS_KIND = 'discovery.repair_alert_leads';
 /** Global marker (user_id NULL): the repair has been queued for this deployment. */

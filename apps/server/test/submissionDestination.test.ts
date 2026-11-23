@@ -3,10 +3,10 @@
 // test/submissionReview.test.ts), so each guard is pinned here by the reason it gives: a guard
 // that another one already covers (LinkedIn and Indeed are never a recognised ATS board) would
 // otherwise have no test that fails without it.
+import { destinationAllowed, destinationRefusal } from '../src/lib/submissionDestination';
 import { describe, expect, it } from 'vitest';
 import { atsJobRefOfUrl, postingAtsJobRef } from '../src/lib/atsJobRef';
 import { confirmationPageVerdict } from '../src/repos/submissionConfirm';
-import { destinationAllowed, destinationRefusal } from '../src/repos/submissionReview';
 
 const SUB = { atsKind: 'ats_greenhouse', atsExternalId: '1000001', atsRef: 'examplecorp' } as const;
 const POSTING = 'https://boards.greenhouse.io/examplecorp/jobs/1000001';
@@ -119,14 +119,20 @@ describe('one address, read one way (#521, review at 23f3a37)', () => {
 describe('a trailing ) (#549)', () => {
   const STRAY = 'https://boards.greenhouse.io/examplecorp/jobs/1000002)';
 
-  it('a stray ) is dropped: the Greenhouse job is read, from postingAtsJobRef and destinationRefusal', () => {
-    expect(postingAtsJobRef(STRAY)).toEqual({
+  it('a stray ) is dropped: the Greenhouse job is read, and the identity holds the address without it', () => {
+    const ref = postingAtsJobRef(STRAY);
+    expect(ref).toEqual({
       kind: 'ats_greenhouse',
       org: 'examplecorp',
       externalId: '1000002',
       url: 'https://boards.greenhouse.io/examplecorp/jobs/1000002',
     });
-    expect(destinationRefusal(STRAY, { ...SUB, atsExternalId: '1000002' })).toBeNull();
+    // The attempt's destination is that address, which is accepted. The address as stored, with
+    // its `)`, is not (#620): what would be opened must be what was checked.
+    expect(destinationRefusal(ref!.url, { ...SUB, atsExternalId: '1000002' })).toBeNull();
+    expect(destinationRefusal(STRAY, { ...SUB, atsExternalId: '1000002' })).toBe(
+      'trailing_characters',
+    );
   });
 
   it('a stray ) after other trailing punctuation, or before it, is dropped too', () => {
@@ -157,5 +163,43 @@ describe('a trailing ) (#549)', () => {
     const balanced = 'https://boards.greenhouse.io/examplecorp/jobs/1000002?src=(newsletter)';
     expect(atsJobRefOfUrl(balanced)?.url).toBe(balanced);
     expect(atsJobRefOfUrl(`${balanced})`)?.url).toBe(balanced);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/620 (sec's second audit, low): the address checked is
+// the address opened, it names its job in its own path, and an attempt with no board names none.
+describe('destinationRefusal: #620 points 5, 6 and 7', () => {
+  it('(5) an attempt with no board recorded is refused: no tenant to compare', () => {
+    expect(destinationRefusal(POSTING, { ...SUB, atsRef: null })).toBe('no_board');
+  });
+
+  it.each([
+    [
+      'the board root, its job only in gh_jid',
+      'https://boards.greenhouse.io/examplecorp?gh_jid=1000001',
+    ],
+    [
+      'an embed page, its job in its query',
+      'https://boards.greenhouse.io/embed/job_app?for=examplecorp&token=1000001',
+    ],
+    [
+      'an embed page, its job in gh_jid',
+      'https://boards.greenhouse.io/embed/job_app?for=examplecorp&gh_jid=1000001',
+    ],
+  ])('(6) refuses %s: the job is named by the path or not at all', (_name, url) => {
+    expect(destinationRefusal(url, SUB)).toBe('not_this_posting');
+  });
+
+  it.each([
+    ['a trailing full stop', `${POSTING}.`],
+    ['a trailing comma', `${POSTING},`],
+    ['a stray closing bracket', `${POSTING})`],
+    ['a stray bracket after a full stop', `${POSTING}).`],
+  ])('(7) refuses %s: what the parser reads would not be the page opened', (_name, url) => {
+    expect(destinationRefusal(url, SUB)).toBe('trailing_characters');
+  });
+
+  it('(7) a balanced bracket at the end is the address as written, and is accepted', () => {
+    expect(destinationRefusal(`${POSTING}?ref=(newsletter)`, SUB)).toBeNull();
   });
 });

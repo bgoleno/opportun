@@ -8,6 +8,7 @@ import {
   parseServerUrl,
   saveSettings,
   type SettingsStorage,
+  travelsUnencrypted,
 } from '../src/settings';
 
 const TOKEN = `odt_${'A'.repeat(43)}`;
@@ -167,6 +168,17 @@ describe('saveSettings / loadSettings', () => {
     expect(data).toEqual({});
   });
 
+  // #655: the server's exact shape, odt_ and 43 characters, not "16 to 200" as before.
+  it.each([`odt_${'A'.repeat(20)}`, `odt_${'A'.repeat(42)}`, `odt_${'A'.repeat(44)}`])(
+    'refuses %s: a device token is odt_ and exactly 43 characters',
+    async (token) => {
+      const { storage, data } = memoryStorage();
+      const r = await saveSettings(storage, { serverUrl: 'https://opportun.example.com', token });
+      expect(r).toEqual({ ok: false, field: 'token', error: 'token_format' });
+      expect(data).toEqual({});
+    },
+  );
+
   it('refuses an invalid server URL, without storing anything', async () => {
     const { storage, data } = memoryStorage();
     const r = await saveSettings(storage, { serverUrl: 'http://example.com', token: TOKEN });
@@ -254,5 +266,24 @@ describe('loadSettings with a baked address', () => {
     const { data, storage } = memoryStorage();
     await loadSettings(storage, 'https://jobs.example.com');
     expect(data.serverUrl).toBeUndefined();
+  });
+});
+
+describe('travelsUnencrypted (#655)', () => {
+  it.each([
+    ['http://nas.local:8080', true],
+    ['http://192.168.1.10', true],
+    ['http://opportun.home.arpa', true],
+    ['http://opportun', true],
+    ['http://localhost:8080', false],
+    // #699 (tl and sec on #695): the other names for this computer.
+    ['http://[::1]:8080', false],
+    ['http://app.localhost:3000', false],
+    ['http://LOCALHOST.', false],
+    ['http://127.0.0.1:3000', false],
+    ['https://nas.local', false],
+    ['https://opportun.example.com', false],
+  ])('%s -> %s', (url, expected) => {
+    expect(travelsUnencrypted(url)).toBe(expected);
   });
 });

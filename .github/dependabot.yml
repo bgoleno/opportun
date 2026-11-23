@@ -1,0 +1,32 @@
+# Keeps the image's base current (#619, the owner's decision there): deploy/Dockerfile pins
+# node:22-slim by digest, and Dependabot opens a pull request when a newer digest is published.
+# It goes through the same checks and review as any other pull request. The docker ecosystem
+# only: the npm lockfile is updated by hand, as before.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /deploy
+    schedule:
+      interval: weekly
+    # Digest and minor or patch updates within node 22 only (#683): the runtime's major version
+    # follows .nvmrc and is changed on purpose, with the code, not by a bot (it proposed 22 -> 26
+    # in #675, which every docker leg failed).
+    ignore:
+      - dependency-name: node
+        update-types: ['version-update:semver-major']
+
+  # The workflows' actions, each pinned to a full commit SHA (#728, sec's supply-chain review): a
+  # pin is never updated by itself, so a fix in an action reached CI only when someone bumped it by
+  # hand. Dependabot proposes the new commit, keeping the `# vN` comment beside it, as a pull
+  # request that goes through the same review as any other.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # The CodeQL steps (init, analyze, upload-sarif) are one action, github/codeql-action, and
+    # must move together (#872): init and analyze at different versions fail the CodeQL jobs, as
+    # the split bumps in #791 and #793 did. One pull request for all of them.
+    groups:
+      codeql-action:
+        patterns:
+          - 'github/codeql-action*'

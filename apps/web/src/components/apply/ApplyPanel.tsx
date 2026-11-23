@@ -115,6 +115,15 @@ export function applyBlockedReason(opp: OpportunityView): string | null {
     if (embeddedGreenhouse(opp)) return EMBEDDED_GREENHOUSE;
     return "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.";
   }
+  // Each state names what the Details tab offers for it (#738, tl): the banner's Confirm for a
+  // posting that needs review; Find posting, shown until the posting is confirmed (#756), for one
+  // never checked.
+  if (opp.postingState === 'searching') {
+    return "Opportun is still checking this posting on the company's board; try again shortly.";
+  }
+  if (opp.postingState === null || opp.postingState === undefined) {
+    return "This opportunity's posting hasn't been checked on the company's board yet. Use Find posting on the Details tab.";
+  }
   if (opp.postingState !== 'confirmed') {
     return "This opportunity's posting needs review. Confirm it on the Details tab first.";
   }
@@ -220,9 +229,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
     const refusedLabel = opp.atsJobRef ? `Apply on ${ats}` : 'Apply on an ATS';
     body = (
       <div className="grid gap-3">
-        {latest !== undefined ? (
-          <LastAttempt latest={latest} companyName={opp.companyName} />
-        ) : null}
+        {latest !== undefined ? <LastAttempt latest={latest} /> : null}
         {reason === null ? (
           <>
             <p className="text-sm text-muted-foreground">
@@ -285,7 +292,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                   variant="outline"
                   className="w-fit"
                   disabled={find.isPending}
-                  onClick={() => find.mutate()}
+                  onClick={() => find.mutate(opp.postingState ?? 'none')}
                 >
                   {find.isPending ? 'Searching...' : 'Find posting'}
                 </Button>
@@ -487,7 +494,7 @@ function Applied({
 }
 
 /** The most recent finished attempt, so a new one starts knowing about it. */
-function LastAttempt({ latest, companyName }: { latest: SubmissionView; companyName: string }) {
+function LastAttempt({ latest }: { latest: SubmissionView }) {
   if (latest.status === 'abandoned' && latest.failureReason === 'review_expired') {
     return (
       <p className="text-sm text-muted-foreground">
@@ -496,21 +503,8 @@ function LastAttempt({ latest, companyName }: { latest: SubmissionView; companyN
       </p>
     );
   }
-  if (['submitted', 'confirmed', 'unknown', 'rejected'].includes(latest.status)) {
-    return (
-      <div className="grid gap-3">
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <SubmissionStatusChip status={latest.status} />
-          {latest.submittedAt !== null ? (
-            <span className="text-muted-foreground">{formatDateTime(latest.submittedAt)}</span>
-          ) : null}
-          <ViewApplication attempt={latest} />
-        </div>
-        {/* What happened after submitting (#148): for submitted or no confirmation seen. */}
-        <OutcomeActions attempt={latest} companyName={companyName} />
-      </div>
-    );
-  }
+  // An attempt that applied is never shown here (#595): the panel leads with it (`Applied`) as
+  // soon as any attempt has applied, so this is reached only when none has.
   return null;
 }
 

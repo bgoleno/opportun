@@ -12,7 +12,7 @@ import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { DiscoverySource } from '../adapters/discoverySource';
-import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
+import { GREENHOUSE_API_HOST as GREENHOUSE_HOST } from '@opportun/core';
 import { users } from '../db/schema';
 import { suggestCompanies } from '../jobs/companySuggest';
 import type { safeFetch } from '../lib/safeFetch';
@@ -60,12 +60,57 @@ export const FIXTURE_POSTINGS: readonly NormalizedPosting[] = [
 ];
 
 /** The ats_greenhouse override: the fixture postings whatever the configured slug. */
+/**
+ * What the next board listings do, for e2e specs on the posting flows (#859): hold the answer
+ * (a slow board, so a user can save while a check waits on it), leave jobs out (a job the posting
+ * names is no longer on the board), or add text to a job's description (the board's copy changed).
+ * Set with POST MOCK_SOURCE_PATH/listing and cleared with DELETE; a spec clears it when it is done.
+ */
+/** The longest a spec may hold one listing answer (per request; the body schema caps it too). */
+export const MAX_LISTING_HOLD_MS = 20_000;
+const LISTING_HOLD_STEP_MS = 50;
+
+interface ListingControl {
+  holdMs: number;
+  drop: readonly string[];
+  append: Readonly<Record<string, string>>;
+}
+const NO_CONTROL: ListingControl = { holdMs: 0, drop: [], append: {} };
+let listing: ListingControl = NO_CONTROL;
+/** Board listings read so far (GET MOCK_SOURCE_PATH/listing). */
+let listingReads = 0;
+
+/** Clears the listing control and its count (the app's close, and DELETE MOCK_SOURCE_PATH/listing). */
+export function resetListingControl(): void {
+  listing = NO_CONTROL;
+  listingReads = 0;
+}
+
 export const mockGreenhouseSource: DiscoverySource = {
   kind: 'ats_greenhouse',
   async *fetchPostings() {
-    for (const posting of FIXTURE_POSTINGS) yield { posting: { ...posting }, nextCursor: null };
+    listingReads += 1;
+    const control = listing;
+    // The hold is waited out in fixed steps, so no timer takes a duration from the request
+    // body; the body schema and MAX_LISTING_HOLD_MS bound how many steps there are.
+    const holdMs = Math.min(Math.max(control.holdMs, 0), MAX_LISTING_HOLD_MS);
+    for (let waited = 0; waited < holdMs; waited += LISTING_HOLD_STEP_MS) {
+      await new Promise((r) => setTimeout(r, LISTING_HOLD_STEP_MS));
+    }
+    for (const posting of FIXTURE_POSTINGS) {
+      if (posting.externalId != null && control.drop.includes(posting.externalId)) continue;
+      const extra = posting.externalId == null ? undefined : control.append[posting.externalId];
+      const descriptionMd =
+        extra === undefined ? posting.descriptionMd : `${posting.descriptionMd}${extra}`;
+      yield { posting: { ...posting, descriptionMd }, nextCursor: null };
+    }
   },
 };
+
+/** A company whose fixture board answers its probe slowly (see FIXTURE_BOARDS). */
+export const SLOW_BOARD_COMPANY = 'QA Slow Board';
+/** How long the slow board takes to answer its probe: past a 3 s poll, inside the 30 s fetch limit. */
+export const SLOW_BOARD_MS = 5000;
 
 /** Greenhouse board slugs the fake discovery fetch reports as existing boards. */
 export const FIXTURE_BOARDS: ReadonlyMap<string, string> = new Map([
@@ -73,6 +118,9 @@ export const FIXTURE_BOARDS: ReadonlyMap<string, string> = new Map([
   // slugCandidates('Vandelay Industries') probes this first, so board detection for the fixture
   // company hits and the find-posting flow reaches the fixture postings.
   ['vandelayindustries', FIXTURE_COMPANY],
+  // Answers its probe after SLOW_BOARD_MS (#809): a board check on it is still pending past one
+  // of the companies screen's 3 s polls, so a spec can count on seeing the poll.
+  ['qaslowboard', SLOW_BOARD_COMPANY],
 ]);
 
 const json = (status: number, body: unknown, url: string) => ({
@@ -83,12 +131,47 @@ const json = (status: number, body: unknown, url: string) => ({
 });
 
 /** The discovery fetch: a Greenhouse board probe for a fixture slug hits, everything else 404s. */
+/**
+ * Every single-job request (`/v1/boards/<token>/jobs/<id>`) the fake has answered, in order: a
+ * posting-link save asks the company's known boards whether one holds a `gh_jid` job, and an e2e
+ * reads this (GET MOCK_SOURCE_PATH/job-checks) to see that an unchanged link asked none
+ * (apps/web/e2e/postingLink.spec.ts, issue #748).
+ */
+const jobChecks: string[] = [];
+
+/** The fixture job ids, as in their posting URLs (boards.greenhouse.io/vandelay/jobs/1001). */
+const FIXTURE_JOB_IDS: readonly string[] = FIXTURE_POSTINGS.map(
+  (p) => /\/jobs\/(\d+)$/.exec(p.postingUrl ?? '')?.[1] ?? '',
+);
+
 export const mockSourceFetch: typeof safeFetch = async (url) => {
   const u = new URL(url);
+  // A single job on a fixture board (or the fixture postings' own `vandelay` board): it holds the
+  // fixture job ids, and nothing else.
+  const job = /^\/v1\/boards\/([a-z0-9-]+)\/jobs\/(\d+)$/.exec(u.pathname);
+  if (u.hostname === GREENHOUSE_HOST && job !== null) {
+    const [, token = '', id = ''] = job;
+    jobChecks.push(`${token}/${id}`);
+    const known = FIXTURE_BOARDS.has(token) || token === 'vandelay';
+    if (known && FIXTURE_JOB_IDS.includes(id)) {
+      const posting = FIXTURE_POSTINGS[FIXTURE_JOB_IDS.indexOf(id)];
+      return json(
+        200,
+        {
+          id: Number(id),
+          title: posting?.title ?? '',
+          absolute_url: `https://boards.greenhouse.io/${token}/jobs/${id}`,
+        },
+        url,
+      );
+    }
+    return json(404, { error: 'not found' }, url);
+  }
   // Detection probes the jobs list, since a board verifies only while it serves a posting.
   const m = /^\/v1\/boards\/([a-z0-9-]+)\/jobs$/.exec(u.pathname);
   const board = m?.[1] === undefined ? undefined : FIXTURE_BOARDS.get(m[1]);
   if (u.hostname === GREENHOUSE_HOST && board !== undefined) {
+    if (board === SLOW_BOARD_COMPANY) await new Promise((r) => setTimeout(r, SLOW_BOARD_MS));
     return json(
       200,
       { jobs: FIXTURE_POSTINGS.map((p, i) => ({ id: i + 1, title: p.title })) },
@@ -100,6 +183,12 @@ export const mockSourceFetch: typeof safeFetch = async (url) => {
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const SuggestBody = z.object({ email: z.string().min(1).max(320) });
+const JobId = z.string().regex(/^\d{1,12}$/);
+const ListingBody = z.object({
+  holdMs: z.number().int().min(0).max(MAX_LISTING_HOLD_MS).default(0),
+  drop: z.array(JobId).max(10).default([]),
+  append: z.record(JobId, z.string().max(500)).default({}),
+});
 
 /** Registers the mock-only discovery routes (outside /api, loopback callers only). */
 export async function mockSourceRoutes(app: FastifyInstance): Promise<void> {
@@ -115,5 +204,35 @@ export async function mockSourceRoutes(app: FastifyInstance): Promise<void> {
       .get();
     if (user === undefined) return reply.code(404).send({ error: { message: 'no such user' } });
     return reply.send(await suggestCompanies(app.db, { userId: user.id, isAdmin: false }));
+  });
+
+  /** The listing control (see ListingControl): set, read with its count, and cleared. */
+  app.post(`${MOCK_SOURCE_PATH}/listing`, async (req, reply) => {
+    if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) {
+      return reply.code(403).send({ error: { message: 'loopback only' } });
+    }
+    listing = ListingBody.parse(req.body ?? {});
+    return reply.send({ listing, reads: listingReads });
+  });
+  app.get(`${MOCK_SOURCE_PATH}/listing`, async (req, reply) => {
+    if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) {
+      return reply.code(403).send({ error: { message: 'loopback only' } });
+    }
+    return reply.send({ listing, reads: listingReads });
+  });
+  app.delete(`${MOCK_SOURCE_PATH}/listing`, async (req, reply) => {
+    if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) {
+      return reply.code(403).send({ error: { message: 'loopback only' } });
+    }
+    resetListingControl();
+    return reply.code(204).send();
+  });
+
+  /** The single-job requests answered so far (see jobChecks). */
+  app.get(`${MOCK_SOURCE_PATH}/job-checks`, async (req, reply) => {
+    if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) {
+      return reply.code(403).send({ error: { message: 'loopback only' } });
+    }
+    return reply.send({ checks: [...jobChecks] });
   });
 }

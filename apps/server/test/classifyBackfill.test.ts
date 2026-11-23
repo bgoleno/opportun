@@ -1,9 +1,9 @@
+import { CLASSIFY_JOB_KIND } from '../src/lib/mailClassifyQueue';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { communications, jobs } from '../src/db/schema';
 import { CLASSIFY_BACKFILL_KIND, classifyBackfillDedupeKey } from '../src/jobs/classifyBackfill';
-import { CLASSIFY_JOB_KIND } from '../src/jobs/gmailSync';
 import { runNextJob } from '../src/jobs/runner';
 import { upsertInbound } from '../src/repos/communications';
 import { useApi } from './api';

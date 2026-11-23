@@ -5,11 +5,12 @@
 // the owner chose; only the visitor who started an attempt may act on it, and only their device
 // token is given it. This slice is also the one that turns assisted apply on for the demo, so the
 // demo is never on without the binding (sec on #544).
+import { removeIfUnreferenced } from '../src/lib/attachmentSweep';
 import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
-import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+import { DEMO_USERS } from '../src/lib/demo/fixture';
 import { submissionsEnabled } from '../src/config';
 import {
   applicationSubmissions,
@@ -18,7 +19,6 @@ import {
   opportunities,
   resumes,
 } from '../src/db/schema';
-import { removeIfUnreferenced } from '../src/jobs/attachmentSweep';
 import { createDeviceToken } from '../src/lib/deviceTokens';
 import { setRaceHook } from '../src/lib/racePoints';
 import { createOpportunity } from '../src/repos/opportunities';

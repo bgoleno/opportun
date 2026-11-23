@@ -6,13 +6,15 @@ stage of the project, including the current beta.
 
 ## Supported versions
 
-| Version                  | Supported                       |
-| ------------------------ | ------------------------------- |
-| `main` (beta)            | Yes: fixes land on `main`       |
-| Any older commit or fork | No: update to the latest `main` |
+| Version                                                                   | Supported                                     |
+| ------------------------------------------------------------------------- | --------------------------------------------- |
+| The [latest release](https://github.com/bgoleno/opportun/releases/latest) | Yes: it gets security fixes                   |
+| `main` (beta)                                                             | Where fixes land first, then in a new release |
+| Any older release, commit or fork                                         | No: update to the latest release              |
 
-There are no tagged releases yet. Once releases begin, the latest minor release will
-receive security fixes and this table will list it.
+Only the latest release is supported. When a new release comes out, the one before it stops
+getting security fixes. The table names "the latest release" rather than a number, so it does
+not change with each release.
 
 ## Reporting a vulnerability
 
@@ -55,7 +57,9 @@ The full security design is [docs/design.md](docs/design.md), section 7. In shor
   Indeed host stays their choice), but without connection pinning -- the same
   documented residual as the MCP DNS-rebinding case covered separately below; filesystem
   access confined to the data directory; rate limits on sign-in, password re-confirmation
-  and device-token routes, and a per-user AI budget.
+  and device-token routes, a per-user share of each job site's request queue (see
+  [Requests to job sites, shared fairly](#requests-to-job-sites-shared-fairly)), and a per-user
+  AI budget.
 - **Assumed trusted**: the host, and whoever administers it. Anyone who controls the
   server process, the `data/` directory and `master.key` can read everything on the
   instance.
@@ -102,6 +106,217 @@ with both `capture:push` and `apply:assist`.
 
   It cannot list applications, and it cannot start, review or hand off an application or
   record "I submitted it". Its routes share a limit of 60 requests per token per 15 minutes.
+
+### Passwords, sessions and linked sign-in providers
+
+A password change and a password reset are how a user, or the administrator, cuts off someone
+who has a credential they should not have.
+
+- **A password change** ends every session of the account, the device it was made on included,
+  which gets a fresh session in the same step. Settings also offers to revoke every device token
+  at once, checked by default. The revocation commits together with the new password, or not at
+  all.
+- **A password reset** (the administrator's Settings > Users, or the command-line reset) sets a
+  temporary password and shows it once. It also ends every session, revokes every device token,
+  unlinks every sign-in provider (Google, GitHub, LinkedIn) and turns two-factor sign-in off. The
+  provider unlinking includes one that someone else linked, since a reset is also compromise
+  recovery. The user links their providers again afterwards.
+- **A credential that rests on a check made a moment earlier** is written only if that check
+  still holds when the credential is written:
+  - a session or pending two-factor token after a password sign-in;
+  - a session after the two-factor code;
+  - a device token after its password re-confirmation;
+  - a session after a provider sign-in;
+  - a new provider link;
+  - a two-factor enrolment, and its activation, after their password re-confirmation;
+  - an administrator's reset of another account, after the administrator's own password
+    re-confirmation.
+
+  Each is written under a per-user lock that a change and a reset also take, and only while the
+  password hash it was checked against, the pending token, the provider link or the session it
+  started from is still there. An administrator's reset holds both accounts' locks, taken in a
+  fixed order, and runs only while the administrator's own password is still the one just
+  proven (`apps/server/src/routes/auth.ts`). So a change or reset that lands during the check wins and nothing
+  is written, and one that starts just after removes what was written along with everything else
+  (`apps/server/src/lib/passwordLock.ts`).
+
+What this does not do: it cannot undo what a credential was used for before the change or
+reset, and it does not sign anyone out of the Google, GitHub or LinkedIn account itself. Those are
+the user's to secure with that provider.
+
+### Audit records commit with what they record
+
+Every change to a session, a credential or a stored secret writes a row to the audit log
+(`audit_log`, `apps/server/src/lib/audit.ts`). How the change and its row commit depends on what
+the change does, so that a failed audit write never leaves a change unrecorded where that matters,
+and never keeps alive something the user asked to end.
+
+- **Something created or changed commits with its row, or not at all.** If the row cannot be
+  written, the change is rolled back and the request fails. This covers:
+  - a sign-in by password, by the two-factor step or through a provider (the session and its row
+    commit together, and the session cookie is set only after);
+  - a registration, through the form or a provider;
+  - a password change, a password reset (the administrator's or the command line's) and the first
+    password set after a provider sign-in;
+  - two-factor enrolment, activation and removal, and a spent recovery code;
+  - linking a sign-in provider;
+  - a device token's creation and renaming;
+  - a stored secret's creation and edit, the Google client and connection, the Reactive Resume key,
+    and the administrator's sign-in provider settings;
+  - turning telemetry collection or export on, or pointing export at a new destination (export
+    starts only after the commit), and the administrator opening registration;
+  - the demo's command-line account, whose password is shown only after it commits.
+- **Something removed or stopped commits first, then is recorded.** A failed audit write fails the
+  request, but the removal or stop has already taken effect:
+  - signing out, and unlinking a sign-in provider;
+  - revoking a device token (only the call that revoked it writes a row);
+  - deleting a stored secret, disconnecting Google, removing the Reactive Resume key, and the
+    administrator removing a sign-in provider;
+  - turning telemetry collection or export off, and putting the previous export settings back when
+    new ones could not be started;
+  - the administrator closing registration.
+- **A failed first Google connection revokes its grant.** If the tokens Google issued cannot be
+  stored, the server revokes them at Google (best effort) so the account does not list the app as
+  authorized. It does not on a reconnection, where that would end the connection already stored.
+- **Logs and telemetry report only what committed.** An audit row's event reaches the server log
+  and the telemetry export only once the transaction that wrote the row has committed. A rolled-back
+  change sends nothing (`afterCommit` in `apps/server/src/db/client.ts`).
+
+### What error text reaches a client
+
+A request that fails answers with a code, and a sentence only when one was written for the person
+using the app (`HttpError` in `apps/server/src/lib/errors.ts`, the handler in
+`apps/server/src/plugins/security.ts`).
+
+- **An expected refusal** sends its code and its details. It sends its message only when the code
+  that threw it marks it as written for the user. Such a sentence may repeat what that person sent
+  or owns, never another error's text, a stack, a path, someone else's data or configuration. It is
+  cut to 300 characters. A `message` in the details is dropped, so the details cannot carry text
+  around that rule. A test reads every throw in the server
+  (`apps/server/test/userFacingErrors.test.ts`). It fails on a marked one that passes on a caught
+  error's text, and on a marked message that is neither a literal sentence nor on its reviewed list,
+  where each entry says where the text comes from. So a new non-literal message fails until it is
+  reviewed.
+- **A stage change the pipeline does not allow** gets `invalid_transition` with the pipeline's own
+  sentence and the two stages.
+- **A request that fails validation** gets the code `validation` and the list of what was wrong
+  with its own input. A request the framework refuses (malformed JSON, a body too large) gets a
+  code only.
+- **Anything unexpected** gets the code `internal` and "Internal server error". The error itself
+  goes only to the server log.
+
+### Test-support switches are refused in production
+
+The end-to-end tests run the server with fakes in place of outside services, each turned on by an
+environment variable: `OPPORTUN_AI_MOCK`, `OPPORTUN_DOCS_MOCK`, `OPPORTUN_GMAIL_MOCK`,
+`OPPORTUN_SOURCE_MOCK`, `OPPORTUN_OAUTH_MOCK` and `OPPORTUN_AUTH_MOCK`
+(`apps/server/src/testSupport/index.ts`). Some also add test-only routes under `/__mock/`. The last
+adds a sign-up that skips the sign-in rate limit, so the tests stay under it. That sign-up cannot
+create the first account, so it never makes the administrator, and it keeps registration's other
+rules.
+
+- **A production server refuses to start** with any of them set to `1`: under `NODE_ENV=production`,
+  which the shipped image sets (`deploy/Dockerfile`), the server stops at startup with an error that
+  names them.
+- **The fakes are loaded only when one is set.** A server with none of them set does not load the
+  test-support code at all.
+- **Their routes answer only local callers.** That is a second guard, not the first: behind a proxy
+  on the same host every caller looks local, so the production refusal is what keeps them off a real
+  server.
+
+### What CI pins and scans
+
+What builds and checks the code is pinned, so that a tag someone moves cannot change it unseen, and
+the dependencies are scanned for known vulnerabilities.
+
+- **Pinned:**
+  - **Workflow actions:** every action is pinned to a full commit SHA, which a test checks
+    (`.github/scripts/actions-pinned.test.mjs`).
+  - **Container images:** every image a workflow runs or pulls is pinned by digest (`@sha256:`).
+    That covers a job's container and service images, and the scanners run with `docker run`.
+    A test reads each of those, a bare Docker Hub name included (`.github/scripts/images-pinned.test.mjs`).
+    No workflow uses a container action that names its image by tag.
+  - **The image's base:** `node:22-slim` in `deploy/Dockerfile` is pinned by digest.
+  - **The package manager and its lockfile:** the package manager is pinned by version and
+    checksum in `package.json`'s `packageManager`, which corepack checks. Installs use the
+    lockfile as committed (`--frozen-lockfile`).
+  - **Kept current by Dependabot:** the action and base-image pins are bumped weekly
+    (`.github/dependabot.yml`). Dependabot does not read the images named inside workflows (the
+    Postgres and Playwright images in `.github/workflows/ci.yml`, and the OSV scanner's), so their
+    digests are bumped by hand.
+- **Scanned:**
+  - **The lockfile:** OSV scans `pnpm-lock.yaml` on every push to `main`, on every pull request
+    and weekly. Any known vulnerability fails the check (`.github/workflows/security.yml`).
+  - **The image's OS packages:** OSV scans the built image weekly, on `main`, and on a pull request
+    that changes what goes into it. It fails on a finding of CVSS 7.0 or more that the image's own
+    Debian release already has a fix for, and lists the rest (`.github/workflows/image-scan.yml`).
+  - **New dependencies in a pull request:** dependency review refuses one with a known
+    vulnerability of moderate severity or more, or a license outside its list of OSI-approved
+    licenses (two data packages are named exceptions).
+  - **The code and the workflows:** CodeQL analyses both.
+
+### Requests to job sites, shared fairly
+
+Requests the server makes through its fetch layer (`apps/server/src/lib/safeFetch.ts`) to a job
+board, an ATS or any other site go through one queue per host, at most one request per second.
+
+- **Each user gets a share.** A user's requests may hold at most `RATE_KEY_SLOTS` (3) of a host's
+  slots ahead at once, and their other requests wait for one of their own to free up. So one
+  user's large discovery run cannot push everyone else's requests to that host far behind.
+  Requests made for the server itself, not for one user, share a key of their own.
+- **A local wait is not the vendor's answer.** A request whose deadline passes while it waits in
+  that queue fails as `rate_wait`, which is never counted as the vendor failing or asking to slow
+  down.
+- **One user cannot stop a vendor for everyone indefinitely.** In the nightly check of a network's
+  boards, one user's failing companies can stop a vendor for every user at most once in
+  `NETWORK_PROBE_USER_STOP_NIGHTS` (7) nights (`apps/server/src/jobs/networkBoardProbe.ts`). Past
+  that, such a failure ends only that user's night.
+
+This is fairness between the users of one instance, not a protection against the vendor's own
+limits. The queue is per process, like the rest of the instance (one server process per
+database, as [docs/install.md](docs/install.md) requires).
+
+### What your AI provider keeps: ranking batches
+
+Batch ranking sends postings to the AI provider's batch service many at a time, instead of one
+live call each. It is off unless the user's own setting turns it on, and Settings does not offer
+that setting yet (`apps/server/src/repos/rankBatches.ts`).
+
+- **What it sends** is what a live ranking call sends: each posting's text, and the ranking
+  prompt with the user's role target.
+- **How it is sent:** with the AI key that user's ranking uses, through the same checked
+  provider path as every AI call (`apps/server/src/lib/aiProviderFetch.ts`, described under the
+  deviations below). The key goes only in its request header, never in an error, log or trace.
+- **Which providers:** Anthropic's Message Batches, and OpenAI's Batch API with its files.
+  OpenAI batches are made only against OpenAI's own API. With an operator's `OPENAI_BASE_URL`
+  pointing elsewhere, ranking stays live (`packages/ai/src/openaiBatch.ts`).
+- **What the provider keeps:** the batch and its results, until Opportun has applied the results.
+  Then a job of its own deletes the provider's copy: the Anthropic batch, or the OpenAI files of
+  requests and results. If the provider refuses, the job tries again for a while.
+- **When that delete never runs,** the copy stays until the provider's own retention ends.
+  [docs/guide/discovery.md](docs/guide/discovery.md#where-a-ranking-batchs-text-sits) gives the
+  figures; cases where the delete can be lost are tracked in
+  [#686](https://github.com/bgoleno/opportun/issues/686).
+
+The provider's own policy for data sent through its API applies as it does to every AI call.
+
+### Kept AI results: the referral ranking
+
+The Referrals tab's ranking of who could refer the user, with the AI's one-line reason for each
+contact, is kept per user and opportunity, so reopening the tab does not make another AI call
+(`apps/server/src/routes/referrals.ts`, table `referral_rankings`).
+
+- It is read only for its owner, and only for an opportunity that is theirs.
+- It is reused only while the AI's input is exactly the same: a hash of the contacts' lines and
+  the opportunity text. Any change to either means a fresh ranking, which replaces the kept one.
+  **Re-rank** asks for one at any time.
+- A kept ranking is filtered to the contacts in the current set before it is shown.
+- It is deleted with the user or the opportunity, and it is left out of exports as derived data
+  (`apps/server/src/lib/exporter.ts`).
+
+What this does not do yet: when a contact is deleted, the kept row for an opportunity still holds
+that contact's reason until the opportunity is ranked again. It is never shown, but it is still
+stored. That is tracked in [#710](https://github.com/bgoleno/opportun/issues/710).
 
 ## Deliberate deviations
 
@@ -185,6 +400,34 @@ since it was not a deliberate choice.)
   any other instance, and `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY=0` turns the feature off for
   the shared accounts only. The operator's settings are in
   [docs/demo-deployment.md](docs/demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo).
+
+  The nightly reset deletes the shared accounts and reseeds them under the same ids, so a write
+  that began before it could land in the fresh accounts. A gate keeps the two apart
+  (`apps/server/src/lib/demoResetGate.ts`, `apps/server/src/plugins/demoResetHold.ts`):
+
+  - every signed-in request, and every job that may reach those accounts, holds it while it runs;
+  - the reset waits for them, at most a minute, and resets nothing if some are still in;
+  - a request that arrives meanwhile waits, and then finds its session or token gone.
+
+  So that no single request or job holds the reset off:
+
+  - a request's body must arrive within 20 seconds;
+  - an AI call ends after 40 seconds;
+  - no hold lasts more than 50 seconds;
+  - every AI call, and the tailoring chat's reply, also ends 5 seconds before its request's or
+    job's hold does, and a job is told to stop then too. So what the work writes after it (the
+    call's record, a result marked unavailable) still comes while it holds the gate, and the reset
+    then replaces it ([#684](https://github.com/bgoleno/opportun/issues/684), fixed in
+    [#704](https://github.com/bgoleno/opportun/pull/704); `currentHoldStop` in
+    `apps/server/src/lib/demoResetGate.ts`).
+
+  What it does not close: slow work in a request that is not an AI call, such as making a resume in
+  Google Docs or Reactive Resume, and work a handler leaves running after it has answered, can still
+  write after the reset into the reseeded account. That write is the visitor's own, into an account
+  every visitor can write to anyway. A seed run by hand, and more than one server process on the
+  database, are outside the gate. The details are
+  in docs/demo-deployment.md, under "Nothing that began before the reset writes after it".
+
 - **Postgres TLS is encrypted but not verified by default.** For a Postgres host that is not
   loopback, `DB_SSL` defaults to `require`: the connection is encrypted, but the server
   certificate chain and hostname are not checked. An attacker positioned on the network

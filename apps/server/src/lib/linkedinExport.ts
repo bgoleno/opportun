@@ -9,15 +9,15 @@
 // (external_id: conversation id plus a hash of the row, thread_key: conversation id, snippet and
 // no body), and each new message queues comms.classify carrying the text. The rows are applied by
 // a job with the pack importer's report shape, so re-importing the same export changes nothing.
+import { enqueueClassify } from './mailClassifyQueue';
+import { isLinkedInHost } from './linkedinHost';
 import { createHash } from 'node:crypto';
 import { and, eq, inArray } from 'drizzle-orm';
 import { unzipSync } from 'fflate';
 import { z } from 'zod';
 import { withTransaction, type Db } from '../db/client';
-import { communications, companies, networkContacts, jobs } from '../db/schema';
+import { communications, companies, networkContacts } from '../db/schema';
 import { ingestLookbackDays } from '../adapters/gmail';
-import { enqueueClassify } from '../jobs/gmailSync';
-import type { JobHandler } from '../jobs/registry';
 import type { UserCtx } from '../repos/base';
 import { upsertInbound, sameCompany } from '../repos/communications';
 import {
@@ -131,8 +131,8 @@ function cellOf(rec: CsvRecord, column: Map<string, number>) {
 const orNull = (s: string, max: number): string | null => (s === '' ? null : truncateText(s, max));
 
 /**
- * A profile URL as a stable key: http(s) only (anything else is dropped, it is metadata and
- * never fetched), lowercased, without query, fragment or trailing slash.
+ * A profile URL as a stable key: http(s) on a LinkedIn host only (anything else is dropped, it is
+ * metadata and never fetched), lowercased, without query, fragment or trailing slash.
  */
 export function normalizeLinkedinUrl(raw: string | null | undefined): string | null {
   const value = (raw ?? '').trim();
@@ -144,6 +144,9 @@ export function normalizeLinkedinUrl(raw: string | null | undefined): string | n
     return null;
   }
   if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+  // LinkedIn's own export names LinkedIn profiles; a row naming any other host is not one, so
+  // it is stored with no link (#655).
+  if (!isLinkedInHost(value)) return null;
   return `${url.protocol}//${url.host}${url.pathname}`.replace(/\/+$/, '').toLowerCase();
 }
 
@@ -609,56 +612,3 @@ export function purgedLinkedInPayload(pack: LinkedInPack) {
     },
   };
 }
-
-export const linkedInImportJob: JobHandler<{ pack: LinkedInPack }> = {
-  kind: LINKEDIN_IMPORT_JOB_KIND,
-  payloadSchema: z.object({ pack: LinkedInPackSchema }),
-  maxAttempts: 3,
-  async run(db, { pack }, ctx) {
-    try {
-      if (ctx.userId === null) throw new Error('linkedin import job has no user');
-      const user: UserCtx = { userId: ctx.userId, isAdmin: false };
-      const { progress, report } = await runLinkedInImport(db, user, pack, {
-        onProgress: async (p, r) =>
-          await ctx.setResult({
-            progress: { ...p },
-            report: { ...r, errors: [...r.errors] },
-          } satisfies ImportResult),
-      });
-      // Issue #2: this used to be two writes (the final result, then the purge, once
-      // runLinkedInImport had already returned), so a crash in between left the pack behind
-      // for a (harmless, since imports are idempotent) retry to clean up. One write instead:
-      // the report that says the import is finished and the purge that says the pack is gone
-      // now commit together, so there is nothing left to observe in between.
-      await db
-        .update(jobs)
-        .set({
-          result: {
-            progress: { ...progress },
-            report: { ...report, errors: [...report.errors] },
-          } satisfies ImportResult,
-          payload: purgedLinkedInPayload(pack),
-          updatedAt: Date.now(),
-        })
-        .where(eq(jobs.id, ctx.jobId))
-        .run();
-    } catch (err) {
-      // Issue #2: a failed attempt still needs the pack for its retry, but the attempt about
-      // to exhaust the budget (the runner is about to mark this job dead) does not get one, so
-      // purge here or the pack sits in the row, and in every nightly backup, forever.
-      if (ctx.attempt >= ctx.maxAttempts) {
-        try {
-          await db
-            .update(jobs)
-            .set({ payload: purgedLinkedInPayload(pack), updatedAt: Date.now() })
-            .where(eq(jobs.id, ctx.jobId))
-            .run();
-        } catch {
-          // The database is the likeliest reason the import itself failed; that original
-          // error is more useful than this one, so it is what gets thrown below.
-        }
-      }
-      throw err;
-    }
-  },
-};

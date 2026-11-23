@@ -9,7 +9,7 @@ import {
   isResponseSerializationError,
 } from 'fastify-type-provider-zod';
 import { ZodError } from 'zod';
-import { HttpError } from '../lib/errors';
+import { HttpError, USER_MESSAGE_MAX } from '../lib/errors';
 
 declare module 'fastify' {
   interface FastifyContextConfig {
@@ -150,10 +150,28 @@ const CLIENT_CODES = new Map<number, string>([
   [429, 'rate_limited'],
 ]);
 
+/** A marked message, cut to USER_MESSAGE_MAX characters with an ellipsis. */
+function clipped(message: string): string {
+  return message.length <= USER_MESSAGE_MAX
+    ? message
+    : `${message.slice(0, USER_MESSAGE_MAX - 1)}\u2026`;
+}
+
 function errorHandler(err: FastifyError | Error, req: FastifyRequest, reply: FastifyReply) {
   if (err instanceof HttpError) {
     if (err.retryAfterSec !== undefined) reply.header('retry-after', String(err.retryAfterSec));
-    return reply.code(err.statusCode).send({ error: { ...err.details, code: err.code } });
+    // The rule for what reaches the client is on HttpError (#750). Only a marked sentence is sent
+    // as `message`: a `message` in the details is dropped, and the code and the sentence come
+    // after the details, so no details key can stand in for either.
+    const details = { ...err.details };
+    delete details.message;
+    return reply.code(err.statusCode).send({
+      error: {
+        ...details,
+        code: err.code,
+        ...(err.userMessage === undefined ? {} : { message: clipped(err.userMessage) }),
+      },
+    });
   }
   if (err instanceof ZodError) {
     return reply.code(400).send({ error: { code: 'validation', issues: zodIssues(err) } });

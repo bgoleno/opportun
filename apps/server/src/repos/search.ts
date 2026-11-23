@@ -24,6 +24,7 @@ import { sql } from 'drizzle-orm';
 import { rawAll, rawGet, rawRun } from '../db/client';
 import { SCHEMA_DIALECT } from '../db/schema';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedSql } from './base';
 import type { Page } from './list';
 
 export const SEARCH_KINDS = ['opportunity', 'activity', 'communication', 'contact'] as const;
@@ -91,6 +92,7 @@ function fold(token: string): string {
 function* tokenStream(text: string): Generator<SearchToken> {
   for (const m of text.matchAll(TOKEN)) {
     const token = fold(m[0]);
+    // eslint-disable-next-line security/detect-possible-timing-attacks -- an empty-string check on a search token, which is no secret
     if (token !== '') yield { token, start: m.index, end: m.index + m[0].length };
   }
 }
@@ -161,7 +163,7 @@ export async function removeFromIndex(
   await rawRun(
     exec,
     sql`DELETE FROM search_index
-        WHERE entity_kind = ${kind} AND entity_id = ${id} AND user_id = ${ctx.userId}`,
+        WHERE entity_kind = ${kind} AND entity_id = ${id} AND ${ownedSql('user_id', ctx)}`,
   );
 }
 
@@ -207,9 +209,9 @@ export async function removeOpportunityFromIndex(
   await rawRun(
     exec,
     sql`DELETE FROM search_index
-        WHERE user_id = ${ctx.userId} AND entity_kind = 'activity'
+        WHERE ${ownedSql('user_id', ctx)} AND entity_kind = 'activity'
           AND entity_id IN (SELECT id FROM activities
-                            WHERE user_id = ${ctx.userId} AND opportunity_id = ${opportunityId})`,
+                            WHERE ${ownedSql('user_id', ctx)} AND opportunity_id = ${opportunityId})`,
   );
   await removeFromIndex(exec, ctx, 'opportunity', opportunityId);
 }
@@ -340,14 +342,18 @@ function bestWindow(hits: Hit[]): { first: number; last: number } {
   let hi = 0;
   let best = { score: -1, first: 0, last: 0 };
   for (let k = 0; k < hits.length; k++) {
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     const s = hits[k]!.from;
     if (k > 0 && hits[k - 1]!.from === s) continue; // same start, same window
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     while (hits[lo]!.from < s) lo += 1;
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     while (hi < hits.length && hits[hi]!.from < s + n) hi += 1;
     const phrases = new Set<number>();
     let inside = 0;
     let last = s;
     for (let j = lo; j < hi; j++) {
+      // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
       const h = hits[j]!;
       if (h.to >= s + n) continue; // starts inside, ends past the window
       inside += 1;
@@ -383,7 +389,9 @@ export function pgSnippet(text: string, q: string): string {
   }
   const end = Math.min(tokens.length, start + n) - 1;
   const atEnd = complete && end === tokens.length - 1;
+  // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
   const from = start === 0 ? 0 : (tokens[start]?.start ?? 0);
+  // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
   const to = atEnd ? text.length : (tokens[end]?.end ?? text.length);
   let out = start === 0 ? '' : SNIPPET_ELLIPSIS;
   let at = from;
@@ -424,18 +432,18 @@ export async function search(
     FROM search_index
     LEFT JOIN opportunities o
       ON search_index.entity_kind = 'opportunity' AND o.id = search_index.entity_id
-     AND o.user_id = ${ctx.userId}
+     AND ${ownedSql('o.user_id', ctx)}
     LEFT JOIN activities a
       ON search_index.entity_kind = 'activity' AND a.id = search_index.entity_id
-     AND a.user_id = ${ctx.userId}
+     AND ${ownedSql('a.user_id', ctx)}
     LEFT JOIN communications c
       ON search_index.entity_kind = 'communication' AND c.id = search_index.entity_id
-     AND c.user_id = ${ctx.userId}
+     AND ${ownedSql('c.user_id', ctx)}
     LEFT JOIN network_contacts p
       ON search_index.entity_kind = 'contact' AND p.id = search_index.entity_id
-     AND p.user_id = ${ctx.userId}
+     AND ${ownedSql('p.user_id', ctx)}
     WHERE search_index MATCH ${match}
-      AND search_index.user_id = ${ctx.userId}
+      AND ${ownedSql('search_index.user_id', ctx)}
       AND coalesce(o.id, a.id, c.id, p.id) IS NOT NULL`;
   const rows = await rawAll<HitRow>(
     db,
@@ -474,18 +482,18 @@ async function searchPg(
     FROM search_index
     LEFT JOIN opportunities o
       ON search_index.entity_kind = 'opportunity' AND o.id = search_index.entity_id
-     AND o.user_id = ${ctx.userId}
+     AND ${ownedSql('o.user_id', ctx)}
     LEFT JOIN activities a
       ON search_index.entity_kind = 'activity' AND a.id = search_index.entity_id
-     AND a.user_id = ${ctx.userId}
+     AND ${ownedSql('a.user_id', ctx)}
     LEFT JOIN communications c
       ON search_index.entity_kind = 'communication' AND c.id = search_index.entity_id
-     AND c.user_id = ${ctx.userId}
+     AND ${ownedSql('c.user_id', ctx)}
     LEFT JOIN network_contacts p
       ON search_index.entity_kind = 'contact' AND p.id = search_index.entity_id
-     AND p.user_id = ${ctx.userId}
+     AND ${ownedSql('p.user_id', ctx)}
     WHERE search_index.tsv @@ to_tsquery('simple', ${query})
-      AND search_index.user_id = ${ctx.userId}
+      AND ${ownedSql('search_index.user_id', ctx)}
       AND coalesce(o.id, a.id, c.id, p.id) IS NOT NULL`;
   const rows = await rawAll<Omit<HitRow, 'snippet'> & { text: string }>(
     db,

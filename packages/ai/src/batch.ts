@@ -2,16 +2,26 @@
 // issuecomment-6794239917 and ruling on #441). A batch provider takes many structured requests at
 // once, at a lower price, and answers within hours. This file is the provider-neutral side: the
 // interface a provider's batch client implements, what a request is estimated to cost, how a
-// result is parsed, and its run record. Anthropic's client is anthropicBatch.ts (#509); for every
-// other provider batchProviderFor finds none and every request is made live.
+// result is parsed, and its run record. Anthropic's client is anthropicBatch.ts (#509) and
+// OpenAI's is openaiBatch.ts (#510); for every other provider batchProviderFor finds none and every
+// request is made live.
+import type { BatchCallLimits } from './batchLimits';
 import type { z } from 'zod';
 import { createAnthropicBatchProvider } from './anthropicBatch';
+import { createOpenAiBatchProvider, isOpenAiBatchBase } from './openaiBatch';
 import { batchMultiplier, estimateCost } from './pricing';
 import { CHARS_PER_TOKEN, STRUCTURED_OUTPUT_TOKENS, type StructuredRequest } from './router';
 import { ATTR, inBatchSpan, OPERATION_BATCH_COLLECT, OPERATION_BATCH_SUBMIT } from './telemetry';
 import type { ModelPolicy, ProviderFetchOptions, TaskKey, TaskRunRecord } from './types';
 
 export { batchMultiplier };
+export {
+  BATCH_ANSWER_MAX_BYTES,
+  BATCH_RESULTS_MAX_BYTES,
+  clampTokens,
+  MAX_TOKEN_COUNT,
+  readBatchText,
+} from './batchRead';
 
 /** One request in a batch: the caller's id for it, and what structuredRequest built. */
 export interface BatchRequest {
@@ -46,28 +56,64 @@ export type BatchResultItem =
  */
 export type BatchState = 'in_progress' | 'ended' | 'gone';
 
+export { BatchRefusedError } from './batchLimits';
+
 export interface BatchProvider {
   /** Sends the requests as one batch; resolves with the provider's id for it. */
   submit(requests: readonly BatchRequest[]): Promise<{ batchId: string }>;
   state(batchId: string): Promise<BatchState>;
   /** Every request's result, once the batch has ended. */
   results(batchId: string): Promise<BatchResultItem[]>;
+  /**
+   * Removes what the provider keeps of an ended batch whose results were applied: its requests and
+   * its results (#634). Throws when a removal is refused, so the caller can try again later; what
+   * is already gone counts as removed.
+   */
+  cleanup(batchId: string, refs?: readonly string[]): Promise<void>;
+  /**
+   * What cleanup will need to remove, read when the results are (#686, sec): OpenAI's file ids,
+   * so a later cleanup does not depend on the batch still naming them. None for a provider whose
+   * cleanup needs only the batch id. Never a key or any request text.
+   */
+  cleanupRefs(batchId: string): Promise<string[]>;
+  /**
+   * Asks the provider to stop a batch still in progress (#784: its account was deleted, so nobody
+   * will collect it). It ends on its own time, cancelled; its copy is then removed by cleanup. A
+   * batch the provider no longer has counts as stopped. Throws when the cancel is refused.
+   */
+  cancel(batchId: string): Promise<void>;
 }
+
+// Each call's time limit (#686): batchLimits.ts, which the two clients import (no cycle here).
+export {
+  BATCH_CONTROL_LIMIT_MS,
+  BATCH_TRANSFER_LIMIT_MS,
+  type BatchCallLimits,
+} from './batchLimits';
 
 /**
  * The batch client for this policy's provider, or null when it has none: then every request is
- * made live. Anthropic has one (#509, anthropicBatch.ts), built like every other provider client
- * here, with the explicit fetch and base URL and never the environment. OpenAI's is slice B; an
- * OpenAI-compatible endpoint has none.
+ * made live. Anthropic has one (#509, anthropicBatch.ts) and OpenAI has one (#510, openaiBatch.ts),
+ * each built like every other provider client here, with the explicit fetch and base URL and never
+ * the environment. OpenAI's only on OpenAI's own API: with the operator's OPENAI_BASE_URL set
+ * anywhere else, as for an OpenAI-compatible endpoint, there is none.
  */
 export function batchProviderFor(target: {
   policy: ModelPolicy;
   apiKey: string;
   providerFetch: ProviderFetchOptions;
+  limits?: BatchCallLimits;
 }): BatchProvider | null {
-  return target.policy.provider === 'anthropic'
-    ? withBatchSpans(createAnthropicBatchProvider(target), target.policy)
-    : null;
+  switch (target.policy.provider) {
+    case 'anthropic':
+      return withBatchSpans(createAnthropicBatchProvider(target), target.policy);
+    case 'openai':
+      return isOpenAiBatchBase(target.providerFetch)
+        ? withBatchSpans(createOpenAiBatchProvider(target), target.policy)
+        : null;
+    default:
+      return null;
+  }
 }
 
 /**
@@ -86,6 +132,10 @@ function withBatchSpans(provider: BatchProvider, policy: ModelPolicy): BatchProv
         return out;
       }),
     state: (batchId) => provider.state(batchId),
+    // No span: it carries no tokens or cost, and its failure is the cleanup job's to log.
+    cleanup: (batchId, refs) => provider.cleanup(batchId, refs),
+    cleanupRefs: (batchId) => provider.cleanupRefs(batchId),
+    cancel: (batchId) => provider.cancel(batchId),
     results: (batchId) =>
       inBatchSpan(OPERATION_BATCH_COLLECT, policy, async (set) => {
         set({ [ATTR.batchId]: batchId });

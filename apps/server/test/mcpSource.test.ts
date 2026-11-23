@@ -3,6 +3,7 @@
 // the configured paths, caps hostile strings, and the engine sanitizes what is stored. The child
 // runs without a shell and with PATH only, and is gone (reaped) after every call, including a
 // call that times out against a server that ignores SIGTERM.
+import { enqueue } from '../src/lib/jobQueue';
 import { existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,7 +14,6 @@ import { resetSources, type SourceContext } from '../src/adapters/discoverySourc
 import { MCP_FIELD_CAPS, mcpSource, valueAt } from '../src/adapters/sources/mcp';
 import { McpConfigSchema } from '../src/adapters/sources/mcpConfig';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
-import { enqueue } from '../src/jobs/runner';
 import {
   callMcpTool,
   guardedMcpFetch,
@@ -373,5 +373,87 @@ describe('who may configure a stdio MCP source', () => {
     expect(asB.json().error.code).toBe('mcp_stdio_admin_only');
     const asA = await a.request({ method: 'POST', url: '/api/v1/discovery/sources', payload });
     expect(asA.statusCode).toBe(201);
+  });
+});
+
+describe('stdio MCP sources on the demo', () => {
+  // A demo server's administrator is a shared login, so no stdio MCP source is configured or run
+  // there, whoever owns it. Off the demo, the rules above apply as before.
+  it('a stdio source owned by the administrator does not run on the demo', async () => {
+    const { app, a } = await boot({ demo: true });
+    const marker = join(tmpdir(), `opportun-mcp-demo-${a.userId}`);
+    rmSync(marker, { force: true });
+    onTestFinished(() => rmSync(marker, { force: true }));
+    const ctx = { userId: a.userId, isAdmin: true };
+    // Written as one already stored would be: the configure check is the next test's.
+    const src = await createSource(app.db, ctx, {
+      kind: 'mcp',
+      config: stdioConfig('jobs', {
+        args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x')`],
+      }),
+    });
+    await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: a.userId });
+    await app.jobs.drain();
+    expect(existsSync(marker)).toBe(false);
+    const row = await getSourceRow(app.db, ctx, src.id);
+    expect(row.status).toBe('error');
+    expect(row.statusDetail).toMatch(/SourceConfigError: stdio MCP sources do not run on the demo/);
+  });
+
+  it('a stdio source switched back on, with no config change, still does not run on the demo', async () => {
+    const { app, a } = await boot({ demo: true });
+    const marker = join(tmpdir(), `opportun-mcp-demo-on-${a.userId}`);
+    rmSync(marker, { force: true });
+    onTestFinished(() => rmSync(marker, { force: true }));
+    const ctx = { userId: a.userId, isAdmin: true };
+    // Stored switched off, as one already there would be.
+    const src = await createSource(app.db, ctx, {
+      kind: 'mcp',
+      enabled: false,
+      config: stdioConfig('jobs', {
+        args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x')`],
+      }),
+    });
+    // Switched on through the API: no config in the change, so the configure check is not asked.
+    const on = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/discovery/sources/${src.id}`,
+      payload: { enabled: true },
+    });
+    expect(on.statusCode, on.body).toBe(200);
+    await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: a.userId });
+    await app.jobs.drain();
+    expect(existsSync(marker)).toBe(false);
+    const row = await getSourceRow(app.db, ctx, src.id);
+    expect(row.status).toBe('error');
+    expect(row.statusDetail).toMatch(/SourceConfigError: stdio MCP sources do not run on the demo/);
+  });
+
+  it('the administrator cannot add one, or change a source to one, on the demo', async () => {
+    const { a } = await boot({ demo: true });
+    const payload = { kind: 'mcp', config: stdioConfig('jobs') };
+    const created = await a.request({ method: 'POST', url: '/api/v1/discovery/sources', payload });
+    expect(created.statusCode, created.body).toBe(403);
+    expect(created.json().error.code).toBe('mcp_stdio_unavailable_on_demo');
+    // An https source, then a change of its config to stdio.
+    const rest: Record<string, unknown> = { ...stdioConfig('jobs') };
+    delete rest.command;
+    delete rest.args;
+    const http = await a.request({
+      method: 'POST',
+      url: '/api/v1/discovery/sources',
+      payload: {
+        kind: 'mcp',
+        config: { ...rest, transport: 'http', url: 'https://mcp.example.com/mcp' },
+      },
+    });
+    expect(http.statusCode, http.body).toBe(201);
+    const changed = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/discovery/sources/${http.json().id}`,
+      payload: { config: stdioConfig('jobs') },
+    });
+    expect(changed.statusCode, changed.body).toBe(403);
+    expect(changed.json().error.code).toBe('mcp_stdio_unavailable_on_demo');
   });
 });

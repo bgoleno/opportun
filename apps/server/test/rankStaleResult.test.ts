@@ -3,17 +3,18 @@
 // and a posting's text can change during it: the user completes a partial lead, or a lead job finds
 // it on a board. The real route completes the lead here, and real jobs rank it. The provider is
 // mocked, and its score says which text it was given. Every posting is made up.
+import { enqueue } from '../src/lib/jobQueue';
+import { insertLeads } from '../src/lib/discoveryIngest';
 import { runStructured } from '@opportun/ai';
 import { newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { discoveryResults, jobs, taskRuns } from '../src/db/schema';
-import { RANK_WAITING_KIND } from '../src/jobs/discoveryKinds';
+import { RANK_WAITING_KIND } from '../src/lib/jobKinds';
 import { DISCOVERY_RANK_KIND, POSTING_CHANGED, rankResult } from '../src/jobs/discoveryRank';
 import { drainWaitingResults } from '../src/jobs/discoveryRankWaiting';
-import { insertLeads } from '../src/jobs/discoveryRun';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import type { safeFetch } from '../src/lib/safeFetch';
 import type { UserCtx } from '../src/repos/base';
 import {
@@ -26,6 +27,7 @@ import {
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { pauseAt } from './race';
+import { holdInstanceSchedules } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -114,7 +116,11 @@ async function captureIt(app: FastifyInstance, c: TestClient, id: string) {
   expect(res.statusCode, res.body).toBe(200);
 }
 
-const runJob = (app: FastifyInstance) => runNextJob(app.db, { services: app.jobs.services });
+// The test's own job, not a seeded schedule come due on the real clock (#615).
+const runJob = async (app: FastifyInstance) => {
+  await holdInstanceSchedules(app);
+  return await runNextJob(app.db, { services: app.jobs.services });
+};
 
 const queued = async (app: FastifyInstance, kind: string) =>
   await app.db

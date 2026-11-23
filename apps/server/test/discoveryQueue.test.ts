@@ -1,5 +1,6 @@
 // Review queue API (Task 7, FR-D3, FR-O7, FR-O10): list, accept (create or attach), dismiss,
 // opportunity merge, and the discovery sources API, each isolated between users.
+import { enqueue } from '../src/lib/jobQueue';
 import { dedupeKey, newId, type NormalizedPosting } from '@opportun/core';
 import { and, eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -17,7 +18,6 @@ import {
   stageHistory,
 } from '../src/db/schema';
 import { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX } from '../src/jobs/discoveryRun';
-import { enqueue } from '../src/jobs/runner';
 import {
   createRun,
   createSource,
@@ -1287,6 +1287,21 @@ describe('discovery sources API', () => {
       payload: { kind: 'ats_lever', config: { org: 'Not A Slug' } },
     });
     expect(bad.statusCode).toBe(422);
+    // Both refusals say what is wrong in words, as a marked sentence (#750).
+    expect(bad.json().error).toEqual({
+      code: 'invalid_config',
+      message: expect.stringMatching(/org/),
+    });
+    const badCron = await a.request({
+      method: 'POST',
+      url: '/api/v1/discovery/sources',
+      payload: { kind: 'ats_lever', config: { org: 'initech' }, scheduleCron: 'every tuesday' },
+    });
+    expect(badCron.statusCode).toBe(422);
+    expect(badCron.json().error).toEqual({
+      code: 'invalid_cron',
+      message: 'must be a valid cron expression',
+    });
 
     const run = await a.request({ method: 'POST', url: `/api/v1/discovery/sources/${id}/run` });
     expect(run.statusCode).toBe(202);

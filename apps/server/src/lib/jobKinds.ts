@@ -1,6 +1,7 @@
 // Discovery job kinds and shared constants, in a leaf module so the engine, ranking, lead
 // resolution and the discovery repo can reference each other's kinds without import cycles.
-// Each job module re-exports its own kind.
+// Each job module re-exports its own kind. In lib/ (moved from jobs/discoveryKinds.ts, #788) so
+// repos/ and lib/ name a kind without importing jobs/.
 
 /** One run of one source; payload {sourceId}. */
 export const DISCOVERY_RUN_KIND = 'discovery.run';
@@ -15,6 +16,12 @@ export const RANK_WAITING_KIND = 'discovery.rank_waiting';
 export const RANK_BATCH_SEND_KIND = 'discovery.rank_batch_send';
 /** Collects one ranking batch's results (#441); payload {batchId}. */
 export const RANK_BATCH_COLLECT_KIND = 'discovery.rank_batch_collect';
+/**
+ * Removes what the provider keeps of a collected ranking batch, its requests and results (#634);
+ * payload {batchId}. A job of its own, so a refused removal is retried later and never holds up
+ * applying the results.
+ */
+export const RANK_BATCH_CLEANUP_KIND = 'discovery.rank_batch_cleanup';
 /** Resolves one partial lead against ATS sources; payload {resultId}. */
 export const LEAD_RESOLVE_KIND = 'discovery.lead_resolve';
 /**

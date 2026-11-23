@@ -2,7 +2,7 @@
 // resource it creates: each user creates, the other must get 404, and the owner still reads it.
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
 import { expect, it } from 'vitest';
-import { DEMO_USERS } from '../src/cli/seedDemoFixture';
+import { DEMO_USERS } from '../src/lib/demo/fixture';
 import { settings, users } from '../src/db/schema';
 import { hashPassword, NO_PEPPERS } from '../src/lib/passwords';
 import { REGISTRATION_OPEN_KEY } from '../src/lib/registration';
@@ -113,7 +113,7 @@ async function register(app: FastifyInstance, email: string): Promise<TestClient
 // Written directly, not through PATCH /admin/registration: that route re-asks for the admin's
 // password (issue #10) and draws on the same 10-attempt budget the re-authentication tests
 // assert about, so a harness that used it would start every test with part of that spent.
-async function setRegistrationOpen(app: FastifyInstance, open: boolean): Promise<void> {
+export async function setRegistrationOpen(app: FastifyInstance, open: boolean): Promise<void> {
   const now = Date.now();
   await app.db
     .insert(settings)

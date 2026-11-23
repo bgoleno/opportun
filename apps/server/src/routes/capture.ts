@@ -12,20 +12,25 @@
 // needs_capture result) in place: the extracted description fills that lead, which becomes
 // 'full' and is ranked again. No second result is stored, so the lead is never flagged
 // multi-posted against itself.
+import { enqueue } from '../lib/jobQueue';
+import { insertLeads } from '../lib/discoveryIngest';
 import { AiUnavailableError, CaptureOutputSchema, renderPrompt, runStructured } from '@opportun/ai';
 import { NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { withTransaction, type Db } from '../db/client';
-import { DISCOVERY_RANK_KIND } from '../jobs/discoveryKinds';
-import { insertLeads } from '../jobs/discoveryRun';
-import { enqueue } from '../jobs/runner';
+import { DISCOVERY_RANK_KIND } from '../lib/jobKinds';
 import { buildAiDeps, expiredKeyHint } from '../lib/ai';
 import { CAPTURE_SLOT, captureUserLimit, withCaptureSlot } from '../lib/captureLimit';
 import { HttpError } from '../lib/errors';
 import { sanitizeDescriptionText, sanitizePosting } from '../lib/postingSanitize';
-import { FetchBlockedError, isPageFetchProhibited, type safeFetch } from '../lib/safeFetch';
+import {
+  FetchBlockedError,
+  isPageFetchProhibited,
+  type safeFetch,
+  keyedFetch,
+} from '../lib/safeFetch';
 import type { UserCtx } from '../repos/base';
 import {
   ensureChannelSource,
@@ -34,12 +39,11 @@ import {
   type DiscoveryResultView,
 } from '../repos/discovery';
 import { getActivePrompt } from '../repos/prompts';
+import { CAPTURE_MAX_TEXT } from '../lib/captureText';
 import { HttpsUrl } from './common';
 import type { Exec as AsyncExec } from '../db/client';
 import { continuesTrace, workflow } from '../obs/workflow';
 
-/** Characters of page or pasted text the model sees. */
-export const CAPTURE_MAX_TEXT = 50_000;
 const PAGE_MAX_BYTES = 3 * 1024 * 1024;
 
 export const PASTE_TEXT_HINT =
@@ -170,7 +174,13 @@ async function capturableLead(
 ): Promise<DiscoveryResultView> {
   const lead = await getResult(exec, ctx, resultId);
   if (lead.disposition !== 'pending' || lead.resolution !== 'needs_capture') {
-    throw new HttpError(409, 'not_capturable', 'That result no longer needs a capture.');
+    throw new HttpError(
+      409,
+      'not_capturable',
+      'That result no longer needs a capture.',
+      undefined,
+      { userFacing: true },
+    );
   }
   return lead;
 }
@@ -241,7 +251,11 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
         // Checked before any fetch or AI call, so a bad resultId costs nothing.
         if (resultId !== undefined) await capturableLead(db, ctx, resultId);
         const text =
-          req.body.text ?? (await fetchPageText(app.jobs.services.sourceFetch, url as string));
+          req.body.text ??
+          (await fetchPageText(
+            keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
+            url as string,
+          ));
         const posting = toPosting(await extract(db, ctx, url, text), url, text);
         if (resultId !== undefined) {
           const resolved = await resolveLeadInPlace(db, ctx, resultId, posting);

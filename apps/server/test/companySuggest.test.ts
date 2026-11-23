@@ -2,6 +2,8 @@
 // which land as status 'suggested' and wait for the user. Nothing is ever followed without the
 // user's accept; a denied company stays denied and is never suggested again, and no company the
 // user already has (any status) is suggested twice.
+import { ATS_DETECT_KIND, atsDetectDedupeKey } from '../src/lib/atsDetect';
+import { enqueue } from '../src/lib/jobQueue';
 import { AiUnavailableError, renderPrompt, runStructured, SuggestOutputSchema } from '@opportun/ai';
 import { companyMatchKey, naicsTitle, newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
@@ -17,7 +19,6 @@ import {
 } from '../src/db/schema';
 import { BOARD_PROBE_KIND } from '../src/jobs/companyBoardProbe';
 import { roleTargetsText } from '../src/jobs/classify';
-import { ATS_DETECT_KIND, atsDetectDedupeKey } from '../src/jobs/atsDetect';
 import {
   COMPANY_SUGGEST_CRON,
   COMPANY_SUGGEST_KIND,
@@ -26,7 +27,6 @@ import {
   pipelineText,
   suggestCompanies,
 } from '../src/jobs/companySuggest';
-import { enqueue } from '../src/jobs/runner';
 import { createCompany } from '../src/repos/companies';
 import { discoverySpentTodayUsd } from '../src/repos/discoveryBudget';
 import { startOfUtcDay } from '../src/repos/taskRuns';

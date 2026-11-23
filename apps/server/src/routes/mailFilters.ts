@@ -7,6 +7,8 @@
 // footgun into an obvious one, and the suggestion is offered, never applied: these rules decide
 // what Opportun may look at, and quietly broadening one is the surprise the page exists to
 // prevent.
+import { senderAddress } from '../lib/mailAddress';
+import { invalidateTriageContext } from '../lib/triageContext';
 import {
   JOB_SENDER_SEEDS,
   matchesMailPattern,
@@ -18,8 +20,6 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { MAIL_LABEL_SETTING } from '../adapters/gmail';
-import { invalidateTriageContext } from '../jobs/mailIngest';
-import { senderAddress } from '../adapters/sources/alertEmail';
 import { communications } from '../db/schema';
 import { MAIL_FILTER_EFFECTS } from '../db/schema.shared';
 import { HttpError } from '../lib/errors';
@@ -193,7 +193,13 @@ export async function mailFilterRoutes(app: FastifyInstance): Promise<void> {
       const ctx = app.requireUser(req);
       const label = req.body.label;
       if (label !== null && !labelIsSafe(label)) {
-        throw new HttpError(400, 'invalid_label', 'That label cannot be used in a Gmail query');
+        throw new HttpError(
+          400,
+          'invalid_label',
+          'That label cannot be used in a Gmail query',
+          undefined,
+          { userFacing: true },
+        );
       }
       await writeUserSetting(db, ctx, MAIL_LABEL_SETTING, label ?? '');
       return { label };
@@ -267,7 +273,9 @@ export async function mailFilterRoutes(app: FastifyInstance): Promise<void> {
       const ctx = app.requireUser(req);
       const pattern = req.body.pattern.trim().toLowerCase();
       if (!JOB_SENDER_SEEDS.some((seed) => seed.pattern === pattern)) {
-        throw new HttpError(404, 'not_found', `Not a built-in job sender: ${pattern}`);
+        throw new HttpError(404, 'not_found', `Not a built-in job sender: ${pattern}`, undefined, {
+          userFacing: true,
+        });
       }
       const existing = (await listRules(db, ctx)).find(
         (r) => r.effect === 'job_sender' && r.pattern === pattern,

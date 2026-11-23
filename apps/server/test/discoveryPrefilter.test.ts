@@ -2,6 +2,8 @@
 // #190): the outcome on every new board posting, nothing about ranking changed, title variants
 // from one AI call (a mocked provider here) and editable, and recall on what the user accepted.
 // Every posting and role target is made up.
+import { enqueue } from '../src/lib/jobQueue';
+import { insertLeads } from '../src/lib/discoveryIngest';
 import { AiUnavailableError, runStructured, TitleVariantsOutputSchema } from '@opportun/ai';
 import type { NormalizedPosting } from '@opportun/core';
 import { and, asc, eq } from 'drizzle-orm';
@@ -14,8 +16,7 @@ import {
 } from '../src/adapters/discoverySource';
 import { discoveryResults, jobs, roleTargets, settings } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
-import { DISCOVERY_RUN_KIND, insertLeads } from '../src/jobs/discoveryRun';
-import { enqueue } from '../src/jobs/runner';
+import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import {
   cleanTitleVariants,
   makeTitleVariants,

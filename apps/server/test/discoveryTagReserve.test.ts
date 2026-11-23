@@ -11,6 +11,7 @@
 // starts and ends at 0.6875, and the 12th does not start. Ranking spend is written one call to a
 // ledger row, as the router writes it, since the floor is priced from the day's average call. The
 // #317 tests at the end use calls a usual size, where the line is 90%.
+import { enqueue } from '../src/lib/jobQueue';
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { newId, type NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
@@ -22,6 +23,7 @@ import {
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
 import { companies, discoveryResults, jobs, taskRuns } from '../src/db/schema';
+import { suggestCompanies } from '../src/jobs/companySuggest';
 import { tagCompanies } from '../src/jobs/companyTags';
 import { DISCOVERY_RANK_KIND, rankResult } from '../src/jobs/discoveryRank';
 import {
@@ -33,10 +35,12 @@ import {
 } from '../src/jobs/discoveryRankWaiting';
 import { DISCOVERY_RUN_KIND, FIRST_RUN_RANK_CAP } from '../src/jobs/discoveryRun';
 import { rankBudgetHasRoom } from '../src/jobs/rankBudget';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { suggestIndustries } from '../src/lib/industryProfile';
+import { runNextJob } from '../src/jobs/runner';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';
+import { createRoleTarget } from '../src/repos/profile';
 import { countWaitingResults, createSource, listResults } from '../src/repos/discovery';
 import {
   discoverySpentTodayUsd,
@@ -45,6 +49,7 @@ import {
 } from '../src/repos/discoveryBudget';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { holdInstanceSchedules, runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -96,8 +101,13 @@ async function discover(app: FastifyInstance, c: TestClient, count: number): Pro
     config: { org: 'initech' },
     roleTargetId: null,
   });
-  await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: c.userId });
-  await runNextJob(app.db, { services: app.jobs.services });
+  const queued = await enqueue(
+    app.db,
+    DISCOVERY_RUN_KIND,
+    { sourceId: src.id },
+    { userId: c.userId },
+  );
+  await runQueuedJob(app, queued);
   await app.jobs.drain();
 }
 
@@ -357,6 +367,41 @@ describe('#299: the other covered tasks use the budget up to 100%', () => {
     expect(run).toMatchObject({ tagged: 20, calls: 1, stopped: 'budget_exceeded' });
     expect(await spentToday(app, a)).toBe(BUDGET_USD);
   });
+
+  // https://github.com/bgoleno/opportun/issues/597 (e): the reserve holds back ranking only. With a
+  // company waiting for a tag and spend between ranking's line and the budget, company.suggest and
+  // the industry profile still make their call (#315).
+  async function pastTheLine(app: FastifyInstance, c: TestClient) {
+    await writeDiscoveryBudget(app.db, ctxOf(c), BUDGET_USD);
+    await suggested(app, c, 'Waiting For A Tag');
+    await rankCalls(app, c, WHOLE - 1);
+    expect(await spentToday(app, c)).toBeLessThan(BUDGET_USD);
+    expect(await rankBudgetHasRoom(app.db, ctxOf(c))).toBe(false);
+  }
+
+  it('company.suggest goes ahead past the ranking line while a company waits for a tag', async () => {
+    const { app, a } = await boot();
+    await pastTheLine(app, a);
+    vi.mocked(runStructured).mockResolvedValue({ suggestions: [] } as never);
+    expect(await suggestCompanies(app.db, ctxOf(a))).toMatchObject({ status: 'suggested' });
+    expect(vi.mocked(runStructured).mock.calls.map(([, task]) => task)).toEqual([
+      'company.suggest',
+    ]);
+  });
+
+  it('the industry profile goes ahead past the ranking line while a company waits for a tag', async () => {
+    const { app, a } = await boot();
+    await pastTheLine(app, a);
+    await createRoleTarget(app.db, ctxOf(a), {
+      name: 'Platform',
+      titleFamily: 'Staff Engineer',
+      industries: ['Payments'],
+      keywords: ['ledger'],
+    } as never);
+    vi.mocked(runStructured).mockResolvedValue({ industries: [] } as never);
+    await expect(suggestIndustries(app.db, ctxOf(a), null)).resolves.toBeDefined();
+    expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
+  });
 });
 
 /**
@@ -442,13 +487,13 @@ describe('#299 criterion 3: the paths that queue the drain', () => {
       .run();
     await spendUpTo(app, a, 0.95);
     await bothWays(app, a, async () => {
-      await enqueue(
+      const queued = await enqueue(
         app.db,
         DISCOVERY_RANK_KIND,
         { resultId: second!.id },
         { userId: a.userId, dedupeKey: `${DISCOVERY_RANK_KIND}:${second!.id}:${newId()}` },
       );
-      await runNextJob(app.db, { services: app.jobs.services });
+      await runQueuedJob(app, queued);
     });
   });
 
@@ -462,13 +507,13 @@ describe('#299 criterion 3: the paths that queue the drain', () => {
       await writeKeyChangedAt(app.db, ctxOf(a), Date.now() + 60_000);
       throw new AiUnavailableError('provider_error', 'HTTP 401', { keyRejected: true });
     });
-    await enqueue(
+    const queued = await enqueue(
       app.db,
       DISCOVERY_RANK_KIND,
       { resultId: row!.id },
       { userId: a.userId, dedupeKey: `${DISCOVERY_RANK_KIND}:${row!.id}:${newId()}` },
     );
-    await runNextJob(app.db, { services: app.jobs.services });
+    await runQueuedJob(app, queued);
     expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
     expect(await queuedDrains(app)).toEqual([]);
   });
@@ -487,13 +532,13 @@ describe('#299 criterion 3: the paths that queue the drain', () => {
         .run();
       return { score: 60, rationale: 'A fair match.', disqualifiers: [] } as never;
     });
-    await enqueue(
+    const queued = await enqueue(
       app.db,
       DISCOVERY_RANK_KIND,
       { resultId: row!.id },
       { userId: a.userId, dedupeKey: `${DISCOVERY_RANK_KIND}:${row!.id}:${newId()}` },
     );
-    await runNextJob(app.db, { services: app.jobs.services });
+    await runQueuedJob(app, queued);
     expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
     expect(await queuedDrains(app)).toEqual([]);
   });
@@ -619,9 +664,19 @@ describe('#317: at a small budget, the calls that start together leave tagging r
       config: { org: 'initech' },
       roleTargetId: null,
     });
-    await enqueue(app.db, DISCOVERY_RUN_KIND, { sourceId: src.id }, { userId: a.userId });
-    await runNextJob(app.db, { services: app.jobs.services });
-    const worker = () => runNextJob(app.db, { services: app.jobs.services });
+    const queued = await enqueue(
+      app.db,
+      DISCOVERY_RUN_KIND,
+      { sourceId: src.id },
+      { userId: a.userId },
+    );
+    await runQueuedJob(app, queued);
+    // Only the run's own jobs: a seeded schedule come due (the company tags sweep among them) would
+    // spend from the same budget (#615).
+    const worker = async () => {
+      await holdInstanceSchedules(app);
+      return await runNextJob(app.db, { services: app.jobs.services });
+    };
     while ((await Promise.all([worker(), worker(), worker(), worker()])).some(Boolean));
     setRaceHook(undefined);
 

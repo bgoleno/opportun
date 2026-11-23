@@ -3,12 +3,12 @@
 // strongest strength, its follow state and its board state; Follow does what accepting a
 // suggestion does. Built from the user's own rows only: no AI call and no outbound request,
 // which the last tests prove. All names and companies are made up.
+import { ATS_DETECT_KIND } from '../src/lib/atsDetect';
 import { runStructured } from '@opportun/ai';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { companies, discoverySources, jobs, networkContacts, taskRuns } from '../src/db/schema';
-import { ATS_DETECT_KIND } from '../src/jobs/atsDetect';
 import type { safeFetch } from '../src/lib/safeFetch';
 import type { UserCtx } from '../src/repos/base';
 import { createContact } from '../src/repos/contacts';
@@ -165,6 +165,157 @@ describe('the list order and each user filter on its own (#211 items 4 and 5)', 
     const stray = await contact(app, a, 'Morgan Example', null, 2);
     await pointContactAt(app, stray.id, await companyId(app, b, 'Fabrikam'));
     expect((await list(a)).map((i) => i.company.name)).toEqual(['Contoso']);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/591: the list is paged like the other list endpoints
+// (limit 50 by default, 200 at most, with a total), a page reads only its own companies'
+// contacts, and `ids` asks for just the rows a board probe is waiting on.
+const page = async (c: TestClient, query = '') => {
+  const res = await c.request({
+    method: 'GET',
+    url: `/api/v1/discovery/network-companies${query}`,
+  });
+  expect(res.statusCode, res.body).toBe(200);
+  return res.json<{ items: NetworkCompanyJson[]; total: number }>();
+};
+
+/** `count` companies straight into the tables, company i with i % 7 + 1 contacts. */
+async function seedNetwork(app: FastifyInstance, c: TestClient, count: number) {
+  const now = Date.now();
+  const companyRows = Array.from({ length: count }, (_, i) => ({
+    id: crypto.randomUUID(),
+    userId: c.userId,
+    name: `Example Co ${String(i).padStart(4, '0')}`,
+    createdAt: now,
+    updatedAt: now,
+  }));
+  const contactRows = companyRows.flatMap((co, i) =>
+    Array.from({ length: (i % 7) + 1 }, (_, j) => ({
+      id: crypto.randomUUID(),
+      userId: c.userId,
+      name: `Sample Person ${i}-${j}`,
+      currentCompanyId: co.id,
+      strength: j % 4 === 0 ? null : (j % 3) + 1,
+      createdAt: now,
+      updatedAt: now,
+    })),
+  );
+  for (let i = 0; i < companyRows.length; i += 100) {
+    await app.db
+      .insert(companies)
+      .values(companyRows.slice(i, i + 100))
+      .run();
+  }
+  for (let i = 0; i < contactRows.length; i += 100) {
+    await app.db
+      .insert(networkContacts)
+      .values(contactRows.slice(i, i + 100))
+      .run();
+  }
+  return { companyRows, contactRows };
+}
+
+describe('#591: the list is paged, and a probe asks for its own rows only', () => {
+  it('limit and offset page the same order, with the total', async () => {
+    const { app, a } = await boot();
+    await contact(app, a, 'Riley Sample', 'Zeta Holdings', 1);
+    await contact(app, a, 'Morgan Example', 'Zeta Holdings', 1);
+    await contact(app, a, 'Casey Placeholder', 'Middle Works', 3);
+    await contact(app, a, 'Jordan Test', 'Beta Labs', 2);
+    await contact(app, a, 'Avery Demo', 'Alpha Labs', 2);
+    const first = await page(a, '?limit=2');
+    expect(first.total).toBe(4);
+    expect(first.items.map((i) => i.company.name)).toEqual(['Zeta Holdings', 'Middle Works']);
+    const second = await page(a, '?limit=2&offset=2');
+    expect(second.total).toBe(4);
+    expect(second.items.map((i) => i.company.name)).toEqual(['Alpha Labs', 'Beta Labs']);
+    expect((await page(a, '?limit=2&offset=4')).items).toEqual([]);
+  });
+
+  it('50 by default and 200 at most, as the other list endpoints', async () => {
+    const { app, a } = await boot();
+    await seedNetwork(app, a, 60);
+    const res = await page(a);
+    expect(res.total).toBe(60);
+    expect(res.items).toHaveLength(50);
+    const over = await a.request({
+      method: 'GET',
+      url: '/api/v1/discovery/network-companies?limit=201',
+    });
+    expect(over.statusCode).toBe(400);
+  });
+
+  // The order stays the one this list has always had, on both databases: a name tie goes by the
+  // locale's order, not the database's collation, and a missing strength counts as 0.
+  it("ties break on the name in the locale's order, mixed case and accents included", async () => {
+    const { app, a } = await boot();
+    for (const name of ['zulu Partners', 'Éclair Foods', 'beta Systems', 'Alpha Works']) {
+      await contact(app, a, `Sample at ${name}`, name, 2);
+    }
+    await contact(app, a, 'Casey Placeholder', 'Null Strength Inc', null);
+    await contact(app, a, 'Jordan Test', 'One Strength Inc', 1);
+    expect((await list(a)).map((i) => i.company.name)).toEqual([
+      'Alpha Works',
+      'beta Systems',
+      'Éclair Foods',
+      'zulu Partners',
+      'One Strength Inc',
+      'Null Strength Inc',
+    ]);
+  });
+
+  it('at 300 companies and over 1,000 contacts, every company once across the pages, each with its own contacts', async () => {
+    const { app, a } = await boot();
+    const { companyRows, contactRows } = await seedNetwork(app, a, 300);
+    expect(contactRows.length).toBeGreaterThan(1000);
+    const seen: NetworkCompanyJson[] = [];
+    for (let offset = 0; offset < 300; offset += 200) {
+      const res = await page(a, `?limit=200&offset=${offset}`);
+      expect(res.total).toBe(300);
+      seen.push(...res.items);
+    }
+    expect(new Set(seen.map((i) => i.company.id)).size).toBe(300);
+    expect(seen).toHaveLength(300);
+    const expected = new Map<string, number>(companyRows.map((co, i) => [co.id, (i % 7) + 1]));
+    for (const item of seen) {
+      expect(item.contactCount).toBe(expected.get(item.company.id));
+      expect(item.contacts).toHaveLength(item.contactCount);
+    }
+    // Most contacts first across the pages, as on one.
+    const counts = seen.map((i) => i.contactCount);
+    expect(counts).toEqual([...counts].sort((x, y) => y - x));
+  });
+
+  it("?ids= returns just those rows, in the same shape, and only the user's own", async () => {
+    const { app, a, b } = await boot();
+    await contact(app, a, 'Riley Sample', 'Contoso', 3);
+    await contact(app, a, 'Jordan Test', 'Northwind Traders', 2);
+    await contact(app, a, 'Casey Placeholder', 'Tailspin Toys', 1);
+    await contact(app, b, 'Quinn Mock', 'Fabrikam', 3);
+    const contoso = await companyId(app, a, 'Contoso');
+    const tailspin = await companyId(app, a, 'Tailspin Toys');
+    const fabrikam = await companyId(app, b, 'Fabrikam');
+    await setCompany(app, tailspin, { atsKind: 'none', atsVerifiedAt: Date.now() });
+    const res = await page(a, `?ids=${tailspin},${contoso},${fabrikam}&showDenied=true`);
+    expect(res.total).toBe(2);
+    expect(res.items.map((i) => [i.company.name, i.board, i.contactCount])).toEqual([
+      ['Contoso', 'not_checked', 1],
+      ['Tailspin Toys', 'not_found', 1],
+    ]);
+    expect(res.items[0]!.contacts.map((p) => p.name)).toEqual(['Riley Sample']);
+  });
+
+  it('?ids= refuses more than 200 ids, and an id that cannot be one', async () => {
+    const { a } = await boot();
+    const many = Array.from({ length: 201 }, () => crypto.randomUUID()).join(',');
+    for (const ids of [many, 'x'.repeat(65), '']) {
+      const res = await a.request({
+        method: 'GET',
+        url: `/api/v1/discovery/network-companies?ids=${ids}`,
+      });
+      expect(res.statusCode, ids.slice(0, 20)).toBe(400);
+    }
   });
 });
 

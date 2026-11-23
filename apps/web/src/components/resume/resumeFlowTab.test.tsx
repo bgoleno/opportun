@@ -109,14 +109,14 @@ function setup({ resumes = [], sends = [], attempts = [], opp = {}, extra = {} }
           'GET /opportunities/opp-1/submissions': { items: attempts, total: attempts.length },
         }),
     'GET /integrations/google': { connected: true, scopes: [] },
-    'GET /settings/document-store': { store: 'google' },
+    'GET /settings/document-store': { store: 'google_doc' },
     ...extra,
   });
   const user = userEvent.setup();
-  const { router } = renderWithProviders(
+  const { router, queryClient } = renderWithProviders(
     <OpportunityResumeTab opp={{ ...OPP, ...opp } as OpportunityView} />,
   );
-  return { api, user, router };
+  return { api, user, router, queryClient };
 }
 
 const flow = () => screen.findByRole('region', { name: 'Resume for this application' });
@@ -344,7 +344,10 @@ describe('the Resume tab flow: tl on #440', () => {
     });
     const region = await flow();
     await waitFor(() => expect(said(region)).toHaveTextContent(/This opportunity is In process/));
-    expect(within(region).queryAllByRole('link')).toHaveLength(0);
+    // Under the sentence; the finished steps above it link to what they made (#596).
+    const steps = within(region).getByRole('list', { name: 'Resume steps' });
+    const links = within(region).queryAllByRole('link');
+    expect(links.filter((l) => !steps.contains(l))).toHaveLength(0);
   });
 
   it('ruling 6: H with a Draft copy that went nowhere names it: "Continue tailoring" it', async () => {
@@ -558,11 +561,32 @@ describe('the Resume tab flow: the base-as-is branch when assisted apply cannot 
 });
 
 describe('the Resume tab: the cards around the flow (#440)', () => {
+  // It checks both halves of its name (#596): it said "closed from step 2 on" and looked only at 1.
   it('"Other ways to add a resume" is open at step 1, closed from step 2 on', async () => {
-    setup({ resumes: [BASE] });
+    let resumes: Resume[] = [BASE];
+    const { queryClient } = setup({
+      extra: {
+        'GET /resumes': (call: ApiCall) => {
+          const items = call.search.includes('opportunityId')
+            ? resumes.filter((r) => r.opportunityId === 'opp-1')
+            : call.search.includes('kind=base')
+              ? resumes.filter((r) => r.kind === 'base')
+              : resumes;
+          return { items, total: items.length };
+        },
+      },
+    });
+    const region = await flow();
     const other = (await screen.findByText('Other ways to add a resume')).closest('details');
     expect(other).not.toBeNull();
+    await waitFor(() => expect(currentStep(region)).toMatch(/^1 Base/));
     await waitFor(() => expect(other!.open).toBe(true));
+
+    // The same card, the flow moving on to step 2.
+    resumes = [BASE, copy({ status: 'draft' })];
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() => expect(currentStep(region)).toMatch(/^2 Tailor/));
+    await waitFor(() => expect(other!.open).toBe(false));
   });
 
   it('closed at step 2, and its buttons are outline: the flow has the one filled button', async () => {
@@ -587,10 +611,16 @@ describe('the Resume tab: the cards around the flow (#440)', () => {
     expect(screen.getByText('Other ways to add a resume')).toHaveFocus();
   });
 
+  // jsdom applies no media queries, so "at phone width" is the classes that make it so (#596): the
+  // short line shows below the sm breakpoint only, and the four steps from it up.
   it('at phone width the steps read "Step 2 of 4: Tailor"', async () => {
     setup({ resumes: [BASE, copy({ status: 'draft' })] });
     const region = await flow();
-    expect(await within(region).findByText('Step 2 of 4: Tailor')).toBeInTheDocument();
+    const short = await within(region).findByText('Step 2 of 4: Tailor');
+    expect(short).toHaveClass('sm:hidden');
+    expect(short).not.toHaveClass('hidden');
+    const list = within(region).getByRole('list', { name: 'Resume steps' });
+    expect(list).toHaveClass('hidden', 'sm:flex');
   });
 });
 
@@ -816,5 +846,201 @@ describe('the Resume tab flow: one copy per click burst (#484)', () => {
     await waitFor(() => expect(primary(region)).toBeEnabled());
     await user.click(primary(region));
     await waitFor(() => expect(posts(api.calls)).toHaveLength(2));
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/596: focus and announcements for keyboard and
+// screen-reader users, and finished steps as links back to what they made.
+describe('the Resume tab flow: focus in the forms it opens (#596)', () => {
+  it('"Register a base resume" puts focus on the link field, and Cancel gives it back', async () => {
+    const { user } = setup({});
+    const region = await flow();
+    await user.click(await within(region).findByRole('button', { name: 'Register a base resume' }));
+    await waitFor(() => expect(within(region).getByLabelText('Google Doc link')).toHaveFocus());
+
+    await user.click(within(region).getByRole('button', { name: 'Cancel' }));
+    expect(within(region).queryByLabelText('Google Doc link')).toBeNull();
+    await waitFor(() =>
+      expect(within(region).getByRole('button', { name: 'Register a base resume' })).toHaveFocus(),
+    );
+  });
+
+  const recordCases: { name: string; opener: string; setup: Setup }[] = [
+    {
+      name: 'F, "Record that you sent it"',
+      opener: 'Record that you sent it',
+      setup: {
+        resumes: [BASE, copy({ status: 'final' })],
+        opp: { postingState: 'needs_review' } as Partial<OpportunityView>,
+      },
+    },
+    {
+      name: 'E, "Record that you sent it yourself"',
+      opener: 'Record that you sent it yourself',
+      setup: { resumes: [BASE, copy({ status: 'final' })] },
+    },
+    {
+      name: 'H, "Record that you sent" the copy that went nowhere',
+      opener: 'Record that you sent Acme tailored',
+      setup: { resumes: [BASE, copy({ status: 'final' })], sends: [SEND] },
+    },
+    {
+      name: 'the base-as-is branch, "Record that you sent it"',
+      opener: 'Record that you sent it',
+      setup: { resumes: [BASE], attempts: null },
+    },
+  ];
+  for (const c of recordCases) {
+    it(`${c.name} puts focus on "Sent via", and Cancel gives it back`, async () => {
+      const { user } = setup(c.setup);
+      const region = await flow();
+      if (c.name.startsWith('the base-as-is')) {
+        await user.click(
+          await within(region).findByRole('button', { name: 'Send a base resume as it is' }),
+        );
+      }
+      await user.click(await within(region).findByRole('button', { name: c.opener }));
+      await waitFor(() => expect(within(region).getByLabelText('Sent via')).toHaveFocus());
+
+      await user.click(within(region).getByRole('button', { name: 'Cancel' }));
+      expect(within(region).queryByLabelText('Sent via')).toBeNull();
+      await waitFor(() =>
+        expect(within(region).getByRole('button', { name: c.opener })).toHaveFocus(),
+      );
+    });
+  }
+});
+
+describe('the Resume tab flow: each change of place is said once (#596)', () => {
+  it('the same message twice in a row is said twice, each once', async () => {
+    let status: Resume['status'] = 'in_review';
+    const { user, queryClient } = setup({
+      extra: {
+        'GET /resumes': (call: ApiCall) => {
+          const items = call.search.includes('kind=base')
+            ? [BASE]
+            : call.search.includes('opportunityId')
+              ? [copy({ status })]
+              : [BASE, copy({ status })];
+          return { items, total: items.length };
+        },
+        'PATCH /resumes/copy': (call: ApiCall) => {
+          status = (call.body as { status: Resume['status'] }).status;
+          return { status: 200, body: copy({ status }) };
+        },
+      },
+    });
+    const region = await flow();
+    const live = within(region).getByRole('status');
+    const heard: string[] = [];
+    // What a screen reader is given: each node added to the polite region, with its text.
+    const watcher = new MutationObserver((records) => {
+      for (const r of records) {
+        for (const n of r.addedNodes) if ((n.textContent ?? '') !== '') heard.push(n.textContent!);
+        if (r.type === 'characterData' && r.target.textContent !== '') {
+          heard.push(r.target.textContent ?? '');
+        }
+      }
+    });
+    watcher.observe(live, { childList: true, subtree: true, characterData: true });
+
+    await waitFor(() => expect(primary(region)).toHaveAccessibleName('Mark as final'));
+    await user.click(primary(region));
+    await waitFor(() => expect(said(region)).toHaveTextContent('Ready to apply.'));
+    await waitFor(() => expect(heard).toEqual(['Marked final. Next: apply.']));
+
+    // Back to In review from somewhere else (the resume page's "Change status"), then final again.
+    status = 'in_review';
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() => expect(said(region)).toHaveTextContent('Finished tailoring?'));
+    await user.click(primary(region));
+    await waitFor(() => expect(said(region)).toHaveTextContent('Ready to apply.'));
+    await waitFor(() =>
+      expect(heard).toEqual(['Marked final. Next: apply.', 'Marked final. Next: apply.']),
+    );
+    watcher.disconnect();
+  });
+});
+
+describe('the Resume tab flow: finished steps link to what they made (#596)', () => {
+  const steps = (region: HTMLElement) => within(region).getByRole('list', { name: 'Resume steps' });
+
+  it('D: Base links to the base the copy came from, Tailor to the copy; the current step and later ones are not links', async () => {
+    setup({ resumes: [BASE, copy({ status: 'in_review' })] });
+    const region = await flow();
+    await waitFor(() => expect(currentStep(region)).toMatch(/^3 Finish/));
+    const list = steps(region);
+    expect(
+      within(list).getByRole('link', { name: '1 Base (completed): Jane base' }),
+    ).toHaveAttribute('href', '/resumes/base');
+    expect(
+      within(list).getByRole('link', { name: '2 Tailor (completed): Acme tailored' }),
+    ).toHaveAttribute('href', '/resumes/copy');
+    expect(within(list).getAllByRole('link')).toHaveLength(2);
+    expect(list.querySelector('[aria-current="step"] a')).toBeNull();
+  });
+
+  it('E: Finish links to the copy too', async () => {
+    setup({ resumes: [BASE, copy({ status: 'final' })] });
+    const region = await flow();
+    await waitFor(() => expect(currentStep(region)).toMatch(/^4 Apply/));
+    expect(
+      within(steps(region)).getByRole('link', { name: '3 Finish (completed): Acme tailored' }),
+    ).toHaveAttribute('href', '/resumes/copy');
+    expect(within(steps(region)).getAllByRole('link')).toHaveLength(3);
+  });
+
+  it('a copy with no known base: Base stays plain, the unknown target is not guessed', async () => {
+    setup({ resumes: [BASE, copy({ status: 'final', parentResumeId: null })] });
+    const region = await flow();
+    await waitFor(() => expect(currentStep(region)).toMatch(/^4 Apply/));
+    const list = steps(region);
+    expect(within(list).queryByRole('link', { name: /^1 Base/ })).toBeNull();
+    expect(within(list).getByText(/^1 Base/)).toBeInTheDocument();
+    expect(within(list).getAllByRole('link')).toHaveLength(2);
+  });
+
+  it('the base-as-is branch: Base and Finish link to the base, Tailor stays plain', async () => {
+    const { user } = setup({ resumes: [BASE], attempts: null });
+    const region = await flow();
+    await user.click(
+      await within(region).findByRole('button', { name: 'Send a base resume as it is' }),
+    );
+    await waitFor(() => expect(currentStep(region)).toMatch(/^4 Apply/));
+    const list = steps(region);
+    expect(
+      within(list).getByRole('link', { name: '1 Base (completed): Jane base' }),
+    ).toHaveAttribute('href', '/resumes/base');
+    expect(
+      within(list).getByRole('link', { name: '3 Finish (completed): Jane base' }),
+    ).toHaveAttribute('href', '/resumes/base');
+    expect(within(list).queryByRole('link', { name: /^2 Tailor/ })).toBeNull();
+  });
+
+  it('H after an application: Apply links to it', async () => {
+    setup({
+      resumes: [BASE, copy({ status: 'final' })],
+      attempts: [attempt({ status: 'submitted', submittedAt: NOW })],
+    });
+    const region = await flow();
+    await waitFor(() => expect(currentStep(region)).toBeNull());
+    expect(
+      within(steps(region)).getByRole('link', {
+        name: '4 Apply (completed): your application through Greenhouse',
+      }),
+    ).toHaveAttribute('href', '/opportunities/opp-1/apply?step=open');
+  });
+
+  it('H after a recorded send of the base: Base and Finish link to it, Tailor and Apply stay plain', async () => {
+    setup({ resumes: [BASE], sends: [SEND] });
+    const region = await flow();
+    await waitFor(() => expect(currentStep(region)).toBeNull());
+    const list = steps(region);
+    expect(
+      within(list)
+        .getAllByRole('link')
+        .map((l) => l.getAttribute('href')),
+    ).toEqual(['/resumes/base', '/resumes/base']);
+    expect(within(list).queryByRole('link', { name: /^4 Apply/ })).toBeNull();
   });
 });

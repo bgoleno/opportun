@@ -7,6 +7,8 @@
 // on the client's key), read it, edit it while it is a draft, and cancel it. Review, handoff and
 // everything after them arrive with later milestones; their columns already exist and stay
 // unset here.
+import { enqueueSnapshot } from '../lib/submissionSnapshotQueue';
+import { destinationAllowed } from '../lib/submissionDestination';
 import {
   applySubmissionTransition,
   canSubmissionTransition,
@@ -33,11 +35,10 @@ import { demoResumeRefused, sameVisitor } from '../lib/demoOwnData';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { submissionDigest } from '../lib/submissionDigest';
-import { enqueueSnapshot } from '../jobs/submissionSnapshot';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 // A cycle (submissionReview imports this module's row helpers), safe because neither module uses
 // the other at load time: destinationAllowed is only called inside functions here.
-import { destinationAllowed } from './submissionReview';
 import { countWhere, type ListOpts, type Page } from './list';
 import { effectiveSubmission, latestSends } from './resumeSends';
 import { applicationDetailsFor } from './applicationDetails';
@@ -85,7 +86,7 @@ const USABLE_RESUME_STATUSES: readonly string[] = ['final', 'submitted'];
 
 /** 422 with the reason as its code (the message is server-side context; clients map codes). */
 const ineligible = (reason: IneligibleReason): HttpError =>
-  new HttpError(422, reason, INELIGIBLE_MESSAGES.get(reason));
+  new HttpError(422, reason, INELIGIBLE_MESSAGES.get(reason), undefined, { userFacing: true });
 
 /** The live statuses, as the partial unique index names them. */
 const LIVE: SubmissionStatus[] = ['draft', 'reviewed', 'handed_off'];
@@ -130,7 +131,7 @@ export function view(row: SubmissionRow): Submission {
 }
 
 export const owned = (ctx: UserCtx, id: string) =>
-  and(eq(applicationSubmissions.userId, ctx.userId), eq(applicationSubmissions.id, id));
+  and(ownedBy(applicationSubmissions.userId, ctx), eq(applicationSubmissions.id, id));
 
 export async function getRow(exec: Exec, ctx: UserCtx, id: string): Promise<SubmissionRow> {
   const row = await exec.select().from(applicationSubmissions).where(owned(ctx, id)).get();
@@ -144,7 +145,7 @@ async function byKey(exec: Exec, ctx: UserCtx, key: string): Promise<SubmissionR
     .from(applicationSubmissions)
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         eq(applicationSubmissions.idempotencyKey, key),
       ),
     )
@@ -161,7 +162,7 @@ async function liveFor(
     .from(applicationSubmissions)
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         eq(applicationSubmissions.opportunityId, opportunityId),
         inArray(applicationSubmissions.status, LIVE),
       ),
@@ -193,6 +194,7 @@ const liveExists = (live: SubmissionRow): HttpError =>
     {
       submissionId: live.id,
     },
+    { userFacing: true },
   );
 
 /** The chosen resume, owned by the caller, not archived, and marked final; or why not. */
@@ -200,7 +202,7 @@ async function finalResume(exec: Exec, ctx: UserCtx, resumeId: string) {
   const resume = await exec
     .select()
     .from(resumes)
-    .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, resumeId)))
+    .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, resumeId)))
     .get();
   // Another user's resume reads exactly like a missing one.
   if (resume === undefined || resume.archivedAt !== null) throw ineligible('resume_not_found');
@@ -253,7 +255,13 @@ export async function createSubmissionDraft(
     // A key belongs to one attempt. Reusing it for another opportunity, or with another
     // resume, is a client bug: never answer it silently with the first request's choice.
     if (prior.opportunityId !== opportunityId || prior.resumeId !== resumeId) {
-      throw new HttpError(409, 'idempotency_key_reused', 'That key was used for another request.');
+      throw new HttpError(
+        409,
+        'idempotency_key_reused',
+        'That key was used for another request.',
+        undefined,
+        { userFacing: true },
+      );
     }
     // A create interrupted between its insert and its enqueue is retried with the same key:
     // queue the snapshot here too (a no-op while it is queued or running; tl on #131).
@@ -272,7 +280,7 @@ export async function createSubmissionDraft(
   const opp = await db
     .select()
     .from(opportunities)
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, opportunityId)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
     .get();
   if (opp === undefined) throw notFound();
   // A live attempt first, ahead of the eligibility checks (#144, from qa on #142): when the
@@ -318,7 +326,10 @@ export async function createSubmissionDraft(
   ) {
     throw ineligible('destination_not_allowed');
   }
-  if (resumeId === null && !demo) throw new HttpError(422, 'resume_required', 'Choose a resume.');
+  if (resumeId === null && !demo)
+    throw new HttpError(422, 'resume_required', 'Choose a resume.', undefined, {
+      userFacing: true,
+    });
   // On the demo an attempt carries no resume: every resume there is the demo's own (#544, tl on
   // #550). The visitor attaches their own on the employer's form.
   if (demo && resumeId !== null) throw demoResumeRefused();
@@ -379,7 +390,13 @@ export async function createSubmissionDraft(
     if (winner !== undefined) throw liveExists(winner);
     // The row that won was finished in between (cancelled, say). The race is over: the client
     // retries as for any conflict, rather than seeing the raw driver error as a 500.
-    throw new HttpError(409, 'conflict', 'Another request changed this application. Try again.');
+    throw new HttpError(
+      409,
+      'conflict',
+      'Another request changed this application. Try again.',
+      undefined,
+      { userFacing: true },
+    );
   }
 }
 
@@ -393,11 +410,11 @@ export async function listSubmissionsForOpportunity(
   const opp = await db
     .select({ id: opportunities.id })
     .from(opportunities)
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, opportunityId)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
     .get();
   if (opp === undefined) throw notFound();
   const where = and(
-    eq(applicationSubmissions.userId, ctx.userId),
+    ownedBy(applicationSubmissions.userId, ctx),
     eq(applicationSubmissions.opportunityId, opportunityId),
   );
   const rows = await db
@@ -418,6 +435,7 @@ export const notNow = (row: SubmissionRow, to: SubmissionStatus): HttpError =>
     'invalid_transition',
     `This application is ${row.status.replace('_', ' ')}, so it cannot be changed that way.`,
     { submissionId: row.id, from: row.status, to },
+    { userFacing: true },
   );
 
 const FIELD_REFUSAL_MESSAGES = {
@@ -438,9 +456,15 @@ function refuseChangedFieldProblem(stored: SubmissionFields, next: SubmissionFie
   const changed = Object.fromEntries(Object.entries(next).filter(([k, v]) => before.get(k) !== v));
   const problem = submissionFieldProblem(changed);
   if (problem !== null) {
-    throw new HttpError(422, problem.code, FIELD_REFUSAL_MESSAGES[problem.code], {
-      field: problem.field,
-    });
+    throw new HttpError(
+      422,
+      problem.code,
+      FIELD_REFUSAL_MESSAGES[problem.code],
+      {
+        field: problem.field,
+      },
+      { userFacing: true },
+    );
   }
 }
 
@@ -477,6 +501,8 @@ export async function updateSubmissionDraft(
       403,
       'unavailable_on_demo',
       'On the demo, details stay on this application and are not saved to the profile.',
+      undefined,
+      { userFacing: true },
     );
   }
   if (demo && patch.resumeId !== undefined) throw demoResumeRefused();
@@ -573,12 +599,16 @@ export async function getSnapshotForDownload(
       : await db
           .select()
           .from(attachments)
-          .where(
-            and(eq(attachments.userId, ctx.userId), eq(attachments.id, row.resumeAttachmentId)),
-          )
+          .where(and(ownedBy(attachments.userId, ctx), eq(attachments.id, row.resumeAttachmentId)))
           .get();
   if (file === undefined) {
-    throw new HttpError(404, 'no_snapshot', 'This application has no saved resume file.');
+    throw new HttpError(
+      404,
+      'no_snapshot',
+      'This application has no saved resume file.',
+      undefined,
+      { userFacing: true },
+    );
   }
   return file;
 }
@@ -627,7 +657,7 @@ export async function handedOffForPage(
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         eq(applicationSubmissions.status, 'handed_off'),
       ),
     )
@@ -651,10 +681,7 @@ export async function handedOffForPage(
           .select({ filename: attachments.filename, bytes: attachments.bytes })
           .from(attachments)
           .where(
-            and(
-              eq(attachments.userId, ctx.userId),
-              eq(attachments.id, only.row.resumeAttachmentId),
-            ),
+            and(ownedBy(attachments.userId, ctx), eq(attachments.id, only.row.resumeAttachmentId)),
           )
           .get();
   const snapshotState =
@@ -707,7 +734,13 @@ export async function handedOffSnapshot(
   if (row.resumeId === null && row.resumeStore === null) throw notFound();
   // Served only for an attempt /current would return (tl on #185): what was reviewed, unchanged.
   if (row.reviewDigest === null || submissionDigest(row) !== row.reviewDigest) {
-    throw new HttpError(409, 'review_stale', 'This application changed after it was reviewed.');
+    throw new HttpError(
+      409,
+      'review_stale',
+      'This application changed after it was reviewed.',
+      undefined,
+      { userFacing: true },
+    );
   }
   const file =
     row.snapshotState !== 'ready' || row.resumeAttachmentId === null
@@ -715,15 +748,19 @@ export async function handedOffSnapshot(
       : await db
           .select()
           .from(attachments)
-          .where(
-            and(eq(attachments.userId, ctx.userId), eq(attachments.id, row.resumeAttachmentId)),
-          )
+          .where(and(ownedBy(attachments.userId, ctx), eq(attachments.id, row.resumeAttachmentId)))
           .get();
   if (file === undefined) {
-    throw new HttpError(409, 'snapshot_not_ready', 'This application has no resume file ready.', {
-      // The same effective state /current reports: a ready snapshot whose file is gone is deleted.
-      snapshotState: row.snapshotState === 'ready' ? 'deleted' : row.snapshotState,
-    });
+    throw new HttpError(
+      409,
+      'snapshot_not_ready',
+      'This application has no resume file ready.',
+      {
+        // The same effective state /current reports: a ready snapshot whose file is gone is deleted.
+        snapshotState: row.snapshotState === 'ready' ? 'deleted' : row.snapshotState,
+      },
+      { userFacing: true },
+    );
   }
   return { row, file };
 }
@@ -747,7 +784,7 @@ export async function lockLiveAttempt(
     .from(applicationSubmissions)
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         eq(applicationSubmissions.opportunityId, opportunityId),
         inArray(applicationSubmissions.status, [...NOT_YET_OPENED_STATUSES]),
       ),
@@ -777,7 +814,7 @@ export async function lockAttemptsOf(
     .from(applicationSubmissions)
     .where(
       and(
-        eq(applicationSubmissions.userId, ctx.userId),
+        ownedBy(applicationSubmissions.userId, ctx),
         inArray(applicationSubmissions.opportunityId, [...opportunityIds]),
       ),
     )

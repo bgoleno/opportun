@@ -319,7 +319,9 @@ Application settings (read by the server process):
 | `DB_POOL_MAX`                                      | `10`                                           | Postgres connection pool size                                                                                                                                                                                                                                                                                                            |
 | `DB_SSL`                                           | `disable` for localhost, else `require`        | Postgres TLS: `disable`, `require` (encrypted, certificate not verified) or `verify-full` (certificate and host checked); `sslmode` in the URL is honored when unset                                                                                                                                                                     |
 | `OPPORTUN_DEMO`                                    | (unset)                                        | `1` declares this deployment the invitation-only demo instance; see **Demo mode** below                                                                                                                                                                                                                                                  |
-| `OPPORTUN_SUBMISSIONS`                             | (unset: on)                                    | Assisted apply. Unset, empty or `1` is on; `0` turns it off (`OPPORTUN_SUBMISSIONS=0` in `deploy/.env`, then `docker compose up -d`). Any other value, `false` included, stops the server from starting. Never on the demo; see [Assisted apply](guide/pipeline.md#assisted-apply)                                                       |
+| `OPPORTUN_SUBMISSIONS`                             | (unset: on)                                    | Assisted apply. Unset, empty or `1` is on; `0` turns it off (`OPPORTUN_SUBMISSIONS=0` in `deploy/.env`, then `docker compose up -d`). Any other value, `false` included, stops the server from starting. On the demo too, limited on its shared accounts: see [Assisted apply](guide/pipeline.md#assisted-apply)                         |
+| `OPPORTUN_DEMO_TOKEN_CAP`                          | (unset: 20)                                    | Demo servers only: the most active device tokens one shared demo account keeps; minting past it revokes the oldest. `0` means no cap; a value that is not a whole number stops the server from starting. See [section 16](#16-demo-deployment)                                                                                           |
+| `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY`              | (unset: on)                                    | Demo servers only: `0` turns assisted apply off for the shared demo accounts only; unset, empty or `1` is on. Any other value stops the server from starting. See [section 16](#16-demo-deployment)                                                                                                                                      |
 | `OPPORTUN_DAILY_REVIEW_CAP`                        | `10`                                           | Assisted apply: most applications one user can confirm a review for in a rolling 24 hours, 1 to 25, digits only; anything else stops the server from starting. Users can lower theirs, never raise it; see [Settings](guide/settings.md#applications-and-the-review-limit)                                                               |
 | `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`           | (unset: the official API)                      | Send every Anthropic or OpenAI call to a proxy or gateway you run instead; see **AI provider requests** below                                                                                                                                                                                                                            |
 | `OPPORTUN_AI_ALLOW_LOOPBACK_HTTP`                  | (unset)                                        | `1` lets an OpenAI-compatible endpoint use plain http on `localhost`, `127.0.0.1` or `[::1]` (a local Ollama or LM Studio)                                                                                                                                                                                                               |
@@ -398,8 +400,12 @@ guess passwords. Keep it outside the database, like the master key (for example
 `openssl rand -hex 32` into the server's environment). Accounts created before you set
 it keep working: each one is re-hashed with the pepper the next time its owner signs in.
 **Removing the pepper still breaks every peppered hash**, and the only way back in is a
-password reset per account. Pass the same value to the reset CLI (it reads
-`OPPORTUN_PEPPER` from its environment). On a Compose deployment, set it in `deploy/.env`,
+password reset per account. The CLIs that set a password (the reset, and a demo's dedicated
+account) read the pepper from their own environment, so a run from source needs every pepper
+variable the server has: `OPPORTUN_PEPPER`, `OPPORTUN_PEPPER_VERSION` and each
+`OPPORTUN_PEPPER_V<N>` (`docker compose exec` inherits the server's). A run whose version is not
+the one the server last started with refuses and changes nothing: after a rotation, restart the
+server before running one. On a Compose deployment, set it in `deploy/.env`,
 which is outside the `data/` volume; make sure every later `docker compose up -d` runs
 against a compose file that passes it through, or the server comes back up with no pepper
 and the peppered hashes stop verifying.
@@ -443,8 +449,8 @@ also schedules a nightly job at 04:30 that re-runs the same seeder, discarding w
 day's visitors changed. What actually bounds that job to the demo's own five accounts is not
 the flag: it is that those five account ids are fixed and do not exist on a real database, so
 the same job registered on a real deployment by mistake would find nothing to delete. The
-flag only decides whether the job is scheduled at all, so a real deployment's Settings, Jobs
-page has no reason to show it.
+flag only decides whether the job is scheduled at all, so a real deployment's [Settings, Jobs
+page](guide/settings.md#jobs) has no reason to show it.
 
 Compose settings (`deploy/.env`, see `.env.example`):
 
@@ -679,7 +685,8 @@ opportun-YYYYMMDD-HHmm.dump` (the same `DATABASE_URL` as the server). Same guara
 - **Lost password**: from `deploy/`, run
   `docker compose exec opportun node --import tsx src/cli/resetPassword.ts you@example.com`
   (from source: `DATA_DIR=... SQLITE_DIR=... node --import tsx src/cli/resetPassword.ts
-you@example.com` in `apps/server`, with the same values as the server). It sets a new
+you@example.com` in `apps/server`, with the same values as the server: the database settings
+  and every `OPPORTUN_PEPPER*` variable, see "Password pepper" above). It sets a new
   random temporary password, signs that user out
   everywhere, and prints the password once to your terminal; it is not logged or stored
   anywhere else. Sign in with it and change it under Settings. An unknown email changes
@@ -1008,7 +1015,8 @@ When it cannot settle that, it changes nothing and flags the opportunity for you
   source, enter it in the extension's Settings: https anywhere, or plain http on a private
   network (localhost, a `.local`, `.lan` or `.home.arpa` name, a name with no dots, or a
   private address such as `192.168.x.x`). Add the token, Save, allow the access prompt for your
-  server, then **Test connection**.
+  server, then **Test connection**. Saving a plain-http address on your network (anything but
+  this computer) warns that the token crosses the network unencrypted; the save still works.
 - **Limits**: on LinkedIn, profiles (`/in/<name>`) and job pages (`/jobs/view/<id>`, or the
   jobs search view with a job selected) only; feeds, search results and company pages are
   refused. On Indeed (`www.indeed.com` only, not the country sites), a job page
@@ -1064,9 +1072,28 @@ name (`Recruiting`) matches that mailbox in every account and On My Mac, and
 `Account/Mailbox` (`iCloud/Recruiting`) picks one account's mailbox. The answers go to
 `~/.config/opportun-connector/config.json`, readable only by you (0600). `init` then sends
 an empty batch to check the token and prints the server's answer. Re-run `init` at any
-time; it offers your current answers as defaults and keeps the token if you press Enter.
-Every answer can also be given as a flag (`opportun-connector --help`); prefer the prompt
-for the token, since a flag can end up in your shell history.
+time; it offers your current answers as defaults and keeps the token if you press Enter,
+for the same server address: with another address it asks for that server's token.
+Every answer can also be given as a flag (`opportun-connector --help`). `init` asks for
+the server, the token, the mailboxes and the days only when you give none of `--server`, a
+token flag (`--token`, `--token-file` or `--token-stdin`), `--mailbox` and `--days`; once you
+give any of them, it asks only for the server, token or mailboxes you left out, and the days
+keep their saved value (else 180). `--interval` is never asked: unless you pass it, it keeps
+its saved value (else 15).
+
+To set the connector up from a script, pass the token from a file or from standard input,
+never on the command line:
+
+```bash
+# A file only you can read (init refuses one that others can read: chmod 600 it):
+opportun-connector init --server https://jobs.example.com --token-file ~/opportun-token
+# Or standard input, for example straight from the clipboard:
+pbpaste | opportun-connector init --server https://jobs.example.com --token-stdin
+```
+
+With `--token-stdin`, `--server` is required (the prompts would read standard input too), and
+the mailboxes default to the saved ones, or `Inbox`. `--token <token>` still works for older
+scripts, but a token typed in a flag stays in your shell history.
 
 **4. Sync.**
 
@@ -1082,10 +1109,11 @@ Integrations > Extensions and Connectors shows when the connector last pushed. T
 received date of the newest accepted message in `~/.config/opportun-connector/state.json`
 and only moves it forward after the server accepts a batch; it re-reads the last five
 minutes each time to catch late-filed mail (the server ignores duplicates). Because that
-position only covers what was already read, re-running `init` with an added mailbox or a
-longer lookback window resets it (and says so), and the next sync re-reads the whole
-window; the server skips what it already has. Removing a mailbox or shortening the window
-keeps it. Delete `state.json` to force the same full re-read.
+position only covers what was already read, re-running `init` with an added mailbox, a
+longer lookback window or another server address resets it (and says so), and the next
+sync re-reads the whole window; the server skips what it already has. Removing a mailbox,
+shortening the window, or giving the same address again (a trailing slash makes no
+difference) keeps it. Delete `state.json` to force the same full re-read.
 
 **5. Run it in the background with launchd.** The template
 [`deploy/opportun-connector.plist`](../deploy/opportun-connector.plist) runs `watch` at
@@ -1274,7 +1302,7 @@ because it never reads a page. A changed value means the backend has restarted s
 last check, which is what the crash above looks like from here, surfaced through
 `GET /healthz`'s `databaseIntegrity` the same way SQLite's page scan is, and from the same
 place on the Backups page under Settings -> Import/Export. It cannot, by itself, tell that
-crash apart from an entirely ordinary restart (an upgrade, a host reboot): Settings -> Jobs
+crash apart from an entirely ordinary restart (an upgrade, a host reboot): [Settings -> Jobs](guide/settings.md#jobs)
 is the other half, where a backup attempt that failed with "server closed the connection
 unexpectedly" around the same time is the sign that this specific restart was the crash,
 not routine maintenance.
@@ -1412,3 +1440,16 @@ On a demo server, an account for one person, not shared and not reset, comes fro
 `src/cli/createDemoAccount.ts <email> <display name>`, which prints its password once. The demo's
 shared admin has no power over it. See
 [A dedicated account for one person](demo-deployment.md#a-dedicated-account-for-one-person).
+
+Assisted apply is on for the demo. On its shared accounts (the five seeded logins) it fills only a
+visitor's own details, with no resume, and binds each application to the visitor who started it.
+A dedicated account has none of these limits. Two settings apply to the shared accounts only:
+
+- `OPPORTUN_DEMO_TOKEN_CAP`: the most active device tokens one shared account keeps. Minting past
+  it revokes the oldest. Default `20`, and `0` means no cap. Any other value that is not a whole
+  number stops the server from starting.
+- `OPPORTUN_DEMO_SHARED_ASSISTED_APPLY`: `0` turns assisted apply off for the shared accounts
+  only. Unset, empty or `1` is on; any other value stops the server from starting.
+
+`OPPORTUN_SUBMISSIONS=0` still turns it off for everyone. See
+[Device tokens and assisted apply on the demo](demo-deployment.md#device-tokens-and-assisted-apply-on-the-demo).

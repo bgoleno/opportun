@@ -1,23 +1,23 @@
 // ATS board detection (Task 10, FR-D9). Every request goes through the real safeFetch logic
 // (createSafeFetch over a scripted DNS table and transport), so the SSRF rules that guard the
 // careers-page fetch are exercised as they run in production (Review Focus 2).
-import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
-import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
-import { companies, jobs, settings } from '../src/db/schema';
 import {
   ATS_DETECT_KIND,
   ATS_REVERIFY_CRON,
   ATS_REVERIFY_KIND,
-  boardFromUrl,
   DEFAULT_DISCOVERY_CRON,
   detectAts,
   domainLabel,
-  queueReverification,
   REVERIFY_AFTER_MS,
   scanCareersHtml,
   slugCandidates,
-} from '../src/jobs/atsDetect';
+} from '../src/lib/atsDetect';
+import { boardFromUrl } from '../src/lib/atsBoard';
+import { eq } from 'drizzle-orm';
+import { afterEach, describe, expect, it } from 'vitest';
+import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
+import { companies, jobs, settings } from '../src/db/schema';
+import { queueReverification } from '../src/jobs/atsDetect';
 import { createSafeFetch, type RawResponse } from '../src/lib/safeFetch';
 import { createCompany, getCompany } from '../src/repos/companies';
 import { listSources } from '../src/repos/discovery';
@@ -156,6 +156,28 @@ describe('detectAts', () => {
     });
 
     expect(outcome).toMatchObject({ status: 'found', kind: 'ats_greenhouse', org: 'initech' });
+  });
+
+  // The Greenhouse site's fetch host is an exact rule (#769): that host only, on every hop.
+  it('does not follow a greenhouse probe onto a subdomain of its API host', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const company = await createCompany(app.db, ctx, { name: 'Initech', status: 'followed' });
+    const probe = 'https://boards-api.greenhouse.io/v1/boards/initech/jobs';
+    const elsewhere = 'https://x.boards-api.greenhouse.io/v1/boards/initech/jobs';
+    const { fetch, requested } = net(
+      { 'x.boards-api.greenhouse.io': [PUBLIC_IP] },
+      {
+        [probe]: () => respond(302, '', { location: elsewhere }),
+        [elsewhere]: () => respond(200, GREENHOUSE_JOBS),
+      },
+    );
+
+    // The refused hop is a failed probe, so detection is retried later: no board is recorded.
+    await expect(detectAts(app.db, ctx, company.id, { fetch, log })).rejects.toThrow(/retrying/);
+
+    expect(requested).toContain(probe);
+    expect(requested).not.toContain(elsewhere);
   });
 
   it('"Initech Labs" probes initechlabs, initech-labs, then the domain label, and registers the first hit', async () => {

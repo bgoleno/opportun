@@ -1,16 +1,14 @@
 // Backup status (FR-I4): the snapshots on disk, the nightly schedule, and an on-demand
 // backup. Snapshots hold every user's data, so this is admin only.
-import { and, asc, desc, eq } from 'drizzle-orm';
+import { enqueue, readSchedules, SCHEDULE_PREFIX } from '../lib/jobQueue';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { jobs } from '../db/schema';
 import { BACKUP_JOB_KIND, listBackups, MANUAL_BACKUP_DEDUPE_KEY } from '../jobs/backup';
 import { readLiveCheck } from '../jobs/dbIntegrityCheck';
-import { enqueue, readSchedules, SCHEDULE_PREFIX } from '../jobs/runner';
 import { audit } from '../lib/audit';
-import { forbidden } from '../lib/errors';
-import { requireUser } from '../repos/base';
+import { requireAdmin } from '../repos/base';
+import { latestJobOfKind, nextScheduledRun } from '../repos/jobs';
 
 /** issue #170: "exists and completed" is not "restorable". null: never checked (a snapshot
  *  from before this shipped, or the most recent boot's first night). */
@@ -56,32 +54,15 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
   const db = app.db;
 
   api.get('/backups', { schema: { response: { 200: BackupList } } }, async (req) => {
-    if (!requireUser(req).isAdmin) throw forbidden();
+    requireAdmin(req);
     const schedule =
       (await readSchedules(db)).find((s) => s.kind === BACKUP_JOB_KIND)?.schedule ?? null;
-    const next = await db
-      .select({ runAt: jobs.runAt })
-      .from(jobs)
-      .where(
-        and(
-          eq(jobs.kind, BACKUP_JOB_KIND),
-          eq(jobs.dedupeKey, `${SCHEDULE_PREFIX}${BACKUP_JOB_KIND}`),
-          eq(jobs.status, 'pending'),
-        ),
-      )
-      .orderBy(asc(jobs.runAt))
-      .get();
-    const lastJob = await db
-      .select({
-        status: jobs.status,
-        updatedAt: jobs.updatedAt,
-        attempts: jobs.attempts,
-        lastError: jobs.lastError,
-      })
-      .from(jobs)
-      .where(eq(jobs.kind, BACKUP_JOB_KIND))
-      .orderBy(desc(jobs.updatedAt), desc(jobs.id))
-      .get();
+    const next = await nextScheduledRun(
+      db,
+      BACKUP_JOB_KIND,
+      `${SCHEDULE_PREFIX}${BACKUP_JOB_KIND}`,
+    );
+    const lastJob = await latestJobOfKind(db, BACKUP_JOB_KIND);
     return {
       items: await listBackups(app.storage),
       schedule,
@@ -99,8 +80,7 @@ export async function backupRoutes(app: FastifyInstance): Promise<void> {
     '/backups',
     { schema: { response: { 202: z.object({ jobId: z.string() }) } } },
     async (req, reply) => {
-      const ctx = requireUser(req);
-      if (!ctx.isAdmin) throw forbidden();
+      const ctx = requireAdmin(req);
       const jobId = await enqueue(db, BACKUP_JOB_KIND, {}, { dedupeKey: MANUAL_BACKUP_DEDUPE_KEY });
       await audit(db, 'backup.requested', {
         userId: ctx.userId,

@@ -19,8 +19,10 @@
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { withTransaction, type Exec } from '../db/client';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
+import { requireAdmin } from '../repos/base';
 import { confirmPassword, reauthLimits } from '../lib/reauth';
 import { encryptSecret } from '../lib/secretBox';
 import { collectAvailable, collectInEffect, writeCollect } from '../obs/config';
@@ -90,13 +92,13 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
     '/obs/settings',
     { schema: { body: ObsSettings, response: { 200: ObsSettings } } },
     async (req) => {
-      const ctx = app.requireUser(req);
+      app.requireUser(req);
       // The demo deployment's admin account is public, so any visitor could turn collection on
       // (sec's O2 on #359; design 14.1). Refused before the admin check, so every caller gets
       // the same answer there, and for false as well as true: the switch is never on there.
       // The code is shared with export, which 14.10 rule 6 refuses on the demo too.
       if (app.config.demo) throw new HttpError(403, 'unavailable_on_demo');
-      if (!ctx.isAdmin) throw new HttpError(403, 'forbidden');
+      const ctx = requireAdmin(req);
       await writeCollect(db, req.body.collect, { userId: ctx.userId, ip: req.ip });
       return { collect: await collectInEffect(db, app.config) };
     },
@@ -141,9 +143,9 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
       schema: { body: ExportChangeBody, response: { 200: ExportView } },
     },
     async (req, reply) => {
-      const ctx = app.requireUser(req);
+      app.requireUser(req);
       if (app.config.demo) throw new HttpError(403, 'unavailable_on_demo');
-      if (!ctx.isAdmin) throw new HttpError(403, 'forbidden');
+      const ctx = requireAdmin(req);
       const confirmed = await confirmPassword(req, reply, {
         userId: ctx.userId,
         password: req.body.password,
@@ -173,27 +175,40 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
         if (!(await collectInEffect(db, app.config))) throw new HttpError(409, 'collect_off');
         await assertDestination(next.value);
       }
-      await writeExport(db, next.value);
+      // The type and the signals, never the host or the credential (rule 1).
+      const detailOf = (value: typeof prev) => {
+        const type = value.destination?.type ?? null;
+        return { enabled: value.enabled, type, signals: type === null ? [] : signalsOf(type) };
+      };
+      const record = (exec: Exec, detail: Record<string, unknown>) =>
+        audit(exec, 'telemetry.export.updated', { userId: ctx.userId, ip: req.ip, detail });
+      if (!next.value.enabled) {
+        // Turning export off is a stop (sec, tl on #826, as #815 ruled for removals): it commits
+        // and takes effect, then is recorded, so a failed audit write never keeps it sending.
+        await writeExport(db, next.value);
+        await applyExport(db, app.config);
+        await record(db, detailOf(next.value));
+        return await exportView(true);
+      }
+      // Turning it on, or to a new destination: the settings and their audit row commit
+      // together, and export starts only after (#819). A failed audit write stores nothing and
+      // sends nothing to the new destination.
+      await withTransaction(db, async (tx) => {
+        await writeExport(tx, next.value);
+        await record(tx, detailOf(next.value));
+      });
       try {
         await applyExport(db, app.config);
       } catch (err) {
         // The exporters could not be built: put the previous settings back, so the stored switch
-        // never says export is on while nothing is sent (tl on #377), and report the failure.
+        // never says export is on while nothing is sent (tl on #377), and report the failure. The
+        // restore is a stop: it commits and takes effect whatever its record does (tl, sec on
+        // #826), and is then recorded with its cause (#819).
         await writeExport(db, prev);
         await applyExport(db, app.config).catch(() => undefined);
+        await record(db, { ...detailOf(prev), cause: 'apply_failed' });
         throw err;
       }
-      const type = next.value.destination?.type ?? null;
-      // The type and the signals, never the host or the credential (rule 1).
-      await audit(db, 'telemetry.export.updated', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: {
-          enabled: next.value.enabled,
-          type,
-          signals: type === null ? [] : signalsOf(type),
-        },
-      });
       return await exportView(true);
     },
   );
@@ -216,9 +231,9 @@ export async function obsSettingsRoutes(app: FastifyInstance): Promise<void> {
       schema: { body: PasswordBody, response: { 200: TestResult } },
     },
     async (req, reply) => {
-      const ctx = app.requireUser(req);
+      app.requireUser(req);
       if (app.config.demo) throw new HttpError(403, 'unavailable_on_demo');
-      if (!ctx.isAdmin) throw new HttpError(403, 'forbidden');
+      const ctx = requireAdmin(req);
       const confirmed = await confirmPassword(req, reply, {
         userId: ctx.userId,
         password: req.body.password,

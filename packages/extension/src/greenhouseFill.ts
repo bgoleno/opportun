@@ -46,7 +46,16 @@ export interface FillPlan {
   /** Standard fields, by the form's own element id, with the reviewed value. */
   standard: { id: string; name: string; value: string }[];
   /** Questions matched by their label, normalised; any one of `labels` matches. */
-  questions: { labels: string[]; name: string; value: string }[];
+  questions: {
+    labels: string[];
+    name: string;
+    value: string;
+    /**
+     * A detail whose label a reviewed answer took (prefill.ts, #595): its question was filled with
+     * the answer, so when none of its other labels is on the form it is not reported as missing.
+     */
+    covered?: boolean;
+  }[];
   /**
    * Lists chosen in by the form's own control id (#402 slice 2): `country` (the phone's country
    * code), `candidate-location`, `school--0` and `degree--0`, with the reviewed value.
@@ -84,10 +93,22 @@ export type NotFilledReason =
   | 'attach_file_yourself'
   /** The resume could not be checked (the tab moved on): look at it on the form. */
   | 'resume_unchecked'
+  /**
+   * Why the resume copy was not attached (#653): set by the popup in place of attach_yourself,
+   * from the download. The filler never returns these, so NOT_FILLED_REASONS leaves them out.
+   */
+  | 'resume_preparing'
+  | 'resume_not_downloaded'
+  | 'resume_unusable'
   /** The server withheld the field: its stored value fails today's checks (#196). */
   | 'withheld'
   /** No option on the form's list equals the reviewed value (`detail`), by the bound. */
   | 'no_option'
+  /**
+   * An option equals the value (`detail`) but sits inside a link or a control, so it was not
+   * clicked (#738: said so, rather than that it is missing).
+   */
+  | 'option_unclickable'
   /** More than one option equals the reviewed value (`detail`): none is chosen. */
   | 'several_options'
   /** The form's list did not appear (no list named by aria-controls) by the bound. */
@@ -232,6 +253,8 @@ export async function fillGreenhouseForm(
     | { kind: 'one'; option: Element }
     | { kind: 'several' }
     | { kind: 'none' }
+    // An equal option is there, but inside a link or a control: optionsOf leaves it out (#738).
+    | { kind: 'unclickable' }
     | { kind: 'no_list' }
     | { kind: 'theirs'; reason: 'choose_on_form' | 'has_value' };
 
@@ -274,12 +297,13 @@ export async function fillGreenhouseForm(
     const list = listId === '' ? null : doc.getElementById(listId);
     if (shell === null || list === null) return null;
     if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
-    // Never one that is, or sits inside, a link or a control under the listbox (#537, sec's
-    // audit #524): a click there would follow the link or press the control. In upper case: an
-    // SVG link's tagName is "a", and it follows its link too (sec at 7b7f5b3).
+    // Never one that is, or sits inside, a link or a control (#537, sec's audit #524): a click
+    // there would follow the link or press the control. In upper case: an SVG link's tagName is
+    // "a", and it follows its link too (sec at 7b7f5b3). All the way up, not only to the listbox
+    // (#620): a list inside a link or a label is clicked through it just the same.
     return Array.from(list.querySelectorAll('[role="option"]')).filter((o) => {
       if (o.closest('[role="listbox"]') !== list) return false;
-      for (let at: Element | null = o; at !== null && at !== list; at = at.parentElement) {
+      for (let at: Element | null = o; at !== null; at = at.parentElement) {
         const tag = at.tagName.toUpperCase();
         if (['A', 'AREA', 'BUTTON', 'INPUT', 'LABEL', 'SUMMARY'].includes(tag)) return false;
       }
@@ -528,7 +552,9 @@ export async function fillGreenhouseForm(
     if (!used.has(`s${i}`)) notFilled.push({ label: s.name, reason: 'no_matching_question' });
   });
   plan.questions.forEach((q, i) => {
-    if (!used.has(`q${i}`)) notFilled.push({ label: q.name, reason: 'no_matching_question' });
+    if (!used.has(`q${i}`) && q.covered !== true) {
+      notFilled.push({ label: q.name, reason: 'no_matching_question' });
+    }
   });
   // A withheld field the form does not ask for is still listed, by its name.
   (plan.withheld ?? []).forEach((w, i) => {
@@ -632,6 +658,17 @@ export async function fillGreenhouseForm(
       const equal = job.country
         ? (t: string): boolean => same(t).replace(/ \+\d{1,4}$/, '') === want
         : (t: string): boolean => same(t) === want;
+      // Whether the list this box names holds an equal option that optionsOf left out for where
+      // it sits (inside a link or a control): read only, so the report can say why it was not
+      // chosen rather than that it is missing (#738). Nothing here is clicked.
+      const unclickableEqual = (b: Element): boolean => {
+        const list = doc.getElementById(b.getAttribute('aria-controls') ?? '');
+        if (list === null) return false;
+        const usable = optionsOf(b) ?? [];
+        return Array.from(list.querySelectorAll('[role="option"]')).some(
+          (o) => !usable.includes(o) && equal(o.textContent ?? ''),
+        );
+      };
       // Emptied only while it still holds what this fill wrote, never over the user's own text.
       const empty = (): void => {
         if (box.value !== value) return;
@@ -678,7 +715,13 @@ export async function fillGreenhouseForm(
               if (first === undefined) return null;
               return equals.length === 1 ? { kind: 'one', option: first } : { kind: 'several' };
             },
-            () => theirs() ?? (optionsOf(box) === null ? { kind: 'no_list' } : { kind: 'none' }),
+            () =>
+              theirs() ??
+              (optionsOf(box) === null
+                ? { kind: 'no_list' }
+                : unclickableEqual(box)
+                  ? { kind: 'unclickable' }
+                  : { kind: 'none' }),
             3000,
           );
       // The page moved during this list's wait: nothing more is written, not the click, not the
@@ -732,7 +775,9 @@ export async function fillGreenhouseForm(
                   ? 'several_options'
                   : found.kind === 'no_list'
                     ? 'list_not_shown'
-                    : 'no_option',
+                    : found.kind === 'unclickable'
+                      ? 'option_unclickable'
+                      : 'no_option',
               detail: shown(value),
             },
       );
@@ -941,12 +986,13 @@ export function greenhouseListHelpers(doc: Document, form: Element) {
     const list = listId === '' ? null : doc.getElementById(listId);
     if (shell === null || list === null) return null;
     if (list.getAttribute('role') !== 'listbox' || !shell.contains(list)) return null;
-    // Never one that is, or sits inside, a link or a control under the listbox (#537, sec's
-    // audit #524): a click there would follow the link or press the control. In upper case: an
-    // SVG link's tagName is "a", and it follows its link too (sec at 7b7f5b3).
+    // Never one that is, or sits inside, a link or a control (#537, sec's audit #524): a click
+    // there would follow the link or press the control. In upper case: an SVG link's tagName is
+    // "a", and it follows its link too (sec at 7b7f5b3). All the way up, not only to the listbox
+    // (#620): a list inside a link or a label is clicked through it just the same.
     return Array.from(list.querySelectorAll('[role="option"]')).filter((o) => {
       if (o.closest('[role="listbox"]') !== list) return false;
-      for (let at: Element | null = o; at !== null && at !== list; at = at.parentElement) {
+      for (let at: Element | null = o; at !== null; at = at.parentElement) {
         const tag = at.tagName.toUpperCase();
         if (['A', 'AREA', 'BUTTON', 'INPUT', 'LABEL', 'SUMMARY'].includes(tag)) return false;
       }

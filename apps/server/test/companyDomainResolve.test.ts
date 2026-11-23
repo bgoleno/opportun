@@ -1,6 +1,11 @@
 // Company homepage resolution (issue #239): a candidate domain is only ever written once a
 // fetched homepage actually names the company. Mirrors opportunityEnrich.test.ts's net() fixture
 // since this reuses that module's candidateDomains/getPage/pageNamesCompany.
+import {
+  COMPANY_DOMAIN_RESOLVE_KIND,
+  companyDomainResolveDedupeKey,
+  enqueueCompanyDomainResolve,
+} from '../src/lib/companyDomainQueue';
 import { newId } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
@@ -8,10 +13,7 @@ import { communications, companies, jobs } from '../src/db/schema';
 import {
   backfillCompanyDomains,
   COMPANY_DOMAIN_BACKFILL_KIND,
-  COMPANY_DOMAIN_RESOLVE_KIND,
-  companyDomainResolveDedupeKey,
   enqueueCompanyDomainBackfillOnce,
-  enqueueCompanyDomainResolve,
   resolveCompanyDomain,
 } from '../src/jobs/companyDomainResolve';
 import { createSafeFetch } from '../src/lib/safeFetch';

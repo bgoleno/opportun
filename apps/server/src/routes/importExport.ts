@@ -2,14 +2,14 @@
 // job; its progress and report are read back by job id. The export is built from the
 // caller's rows only and streamed as a zip.
 import multipart from '@fastify/multipart';
-import { and, eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { JOB_STATUSES, jobs } from '../db/schema';
-import { enqueue } from '../jobs/runner';
+import { JOB_STATUSES } from '../db/schema';
+import { enqueue } from '../lib/jobQueue';
 import { audit } from '../lib/audit';
 import { HttpError, notFound } from '../lib/errors';
+import { isSharedDemoAccount } from '../lib/demoAccounts';
 import { buildExport, zipStream } from '../lib/exporter';
 import {
   IMPORT_JOB_KIND,
@@ -26,6 +26,7 @@ import {
   type LinkedInPack,
 } from '../lib/linkedinExport';
 import { requireUser } from '../repos/base';
+import { userJobOfKinds } from '../repos/jobs';
 
 const MAX_FILES = 2000;
 const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
@@ -58,6 +59,11 @@ const isZip = (name: string, data: Buffer): boolean =>
 
 function yyyymmdd(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+/** A refused pack, its sentence marked for the client (PackError's text is written for users). */
+function packRefused(problem: PackError): HttpError {
+  return new HttpError(422, 'invalid_pack', problem.userText, undefined, { userFacing: true });
 }
 
 export async function importExportRoutes(app: FastifyInstance): Promise<void> {
@@ -100,7 +106,7 @@ export async function importExportRoutes(app: FastifyInstance): Promise<void> {
             : packFromFiles(files);
       } catch (err) {
         if (err instanceof PackError) {
-          throw new HttpError(422, 'invalid_pack', err.message, { message: err.message });
+          throw packRefused(err);
         }
         throw err;
       }
@@ -139,7 +145,7 @@ export async function importExportRoutes(app: FastifyInstance): Promise<void> {
         pack = linkedInPackFromZip(upload);
       } catch (err) {
         if (err instanceof PackError) {
-          throw new HttpError(422, 'invalid_pack', err.message, { message: err.message });
+          throw packRefused(err);
         }
         throw err;
       }
@@ -163,17 +169,7 @@ export async function importExportRoutes(app: FastifyInstance): Promise<void> {
     },
     async (req) => {
       const ctx = requireUser(req);
-      const job = await db
-        .select()
-        .from(jobs)
-        .where(
-          and(
-            eq(jobs.id, req.params.jobId),
-            inArray(jobs.kind, IMPORT_KINDS),
-            eq(jobs.userId, ctx.userId),
-          ),
-        )
-        .get();
+      const job = await userJobOfKinds(db, ctx, req.params.jobId, IMPORT_KINDS);
       if (job === undefined) throw notFound();
       const result = (job.result ?? null) as ImportResult | null;
       return {
@@ -190,7 +186,10 @@ export async function importExportRoutes(app: FastifyInstance): Promise<void> {
   api.get('/export', async (req, reply) => {
     const ctx = requireUser(req);
     const now = Date.now();
-    const entries = await buildExport(db, ctx, now);
+    // A shared demo account's trail holds other visitors' addresses: the export leaves them out.
+    const entries = await buildExport(db, ctx, now, {
+      withoutRequestAddresses: isSharedDemoAccount(app.config, ctx.userId),
+    });
     await audit(db, 'data.export', { userId: ctx.userId, ip: req.ip });
     return reply
       .header('content-type', 'application/zip')

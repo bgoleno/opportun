@@ -63,7 +63,7 @@ function resumeRoutes(opts: {
       return { items: opts.all ?? [], total: (opts.all ?? []).length };
     },
     'GET /integrations/google': { connected: true, scopes: [] },
-    'GET /settings/document-store': { store: 'google' },
+    'GET /settings/document-store': { store: 'google_doc' },
   };
 }
 

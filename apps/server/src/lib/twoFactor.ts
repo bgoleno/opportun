@@ -3,7 +3,7 @@
 // the database through decryptSecret, inside this module and the enroll route.
 import { createHash, randomBytes } from 'node:crypto';
 import { and, eq, gt, isNull, lt, or } from 'drizzle-orm';
-import type { Db } from '../db/client';
+import { withTransaction, type Db } from '../db/client';
 import { sessions, users } from '../db/schema';
 import type { Exec } from '../repos/base';
 import { racePoint } from './racePoints';
@@ -108,7 +108,35 @@ export async function pendingTokenStored(exec: Exec, token: string): Promise<boo
   const row = await exec
     .select({ id: sessions.id })
     .from(sessions)
-    .where(and(eq(sessions.id, sha256(token)), eq(sessions.kind, 'pending_2fa')))
+    .where(
+      and(
+        eq(sessions.id, sha256(token)),
+        eq(sessions.kind, 'pending_2fa'),
+        // A token a change or reset marked is not stored for this check (#662, tl): it may have
+        // been claimed before the change, and must still start no session.
+        isNull(sessions.revokedReason),
+      ),
+    )
+    .get();
+  return row !== undefined;
+}
+
+/**
+ * Deletes the pending token if a password change or reset marked it, and says whether it did
+ * (#662): its code step then answers password_changed. Asked again, the token is simply unknown.
+ */
+export async function takeRevokedPending(exec: Exec, token: string): Promise<boolean> {
+  if (token.length === 0) return false;
+  const row = await exec
+    .delete(sessions)
+    .where(
+      and(
+        eq(sessions.id, sha256(token)),
+        eq(sessions.kind, 'pending_2fa'),
+        eq(sessions.revokedReason, 'password_changed'),
+      ),
+    )
+    .returning({ id: sessions.id })
     .get();
   return row !== undefined;
 }
@@ -189,15 +217,24 @@ export async function replaceRecoveryCodes(
 }
 
 /**
+ * What must commit with a recovery code's spend, or not at all: its audit row (tl on #801, #779).
+ * Given the executor of the spend's own transaction and how many codes are left.
+ */
+export type OnRecoverySpent = (tx: Exec, remaining: number) => Promise<void>;
+
+/**
  * Spends one recovery code: read the list, drop the code, compare-and-set. A miss means
  * another spend changed the list first, so it re-reads and tries once more (a different
- * code is still there and is spent; the same code is gone and is refused).
+ * code is still there and is spent; the same code is gone and is refused). With `onSpent`, the
+ * compare-and-set and onSpent commit together: only those, after the race point, so nothing is
+ * held open across the wait.
  */
 async function spendRecoveryCode(
   exec: Exec,
   userId: string,
   code: string,
   race: boolean,
+  onSpent?: OnRecoverySpent,
 ): Promise<boolean> {
   const hash = hashRecoveryCode(code);
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -206,7 +243,16 @@ async function spendRecoveryCode(
     if (!user.recovery.includes(hash)) return false;
     if (race && attempt === 0) await racePoint('twoFactor.recovery');
     const remaining = user.recovery.filter((h) => h !== hash);
-    if (await replaceRecoveryCodes(exec, userId, user.recovery, remaining)) return true;
+    const previous = user.recovery;
+    const spent =
+      onSpent === undefined
+        ? await replaceRecoveryCodes(exec, userId, previous, remaining)
+        : await withTransaction(exec, async (tx) => {
+            if (!(await replaceRecoveryCodes(tx, userId, previous, remaining))) return false;
+            await onSpent(tx, remaining.length);
+            return true;
+          });
+    if (spent) return true;
   }
   return false;
 }
@@ -222,6 +268,7 @@ export async function checkSecondFactor(
   userId: string,
   factor: SecondFactor,
   now: number = Date.now(),
+  onRecoverySpent?: OnRecoverySpent,
 ): Promise<'totp' | 'recovery' | null> {
   if (factor.code !== undefined) {
     const user = await twoFactorState(db, userId);
@@ -232,14 +279,16 @@ export async function checkSecondFactor(
     return (await claimTotpStep(db, userId, step)) ? 'totp' : null;
   }
   if (factor.recoveryCode !== undefined) {
-    return (await spendRecoveryCode(db, userId, factor.recoveryCode, true)) ? 'recovery' : null;
+    return (await spendRecoveryCode(db, userId, factor.recoveryCode, true, onRecoverySpent))
+      ? 'recovery'
+      : null;
   }
   return null;
 }
 
 export type RedeemResult =
   | { ok: true; userId: string; method: 'totp' | 'recovery' }
-  | { ok: false; code: 'invalid_pending' | 'token_used' }
+  | { ok: false; code: 'invalid_pending' | 'token_used' | 'password_changed' }
   | { ok: false; code: 'invalid_code'; userId: string; tokenRevoked: boolean };
 
 /**
@@ -262,6 +311,7 @@ export async function claimPendingToken(
         eq(sessions.id, id),
         eq(sessions.kind, 'pending_2fa'),
         isNull(sessions.usedAt),
+        isNull(sessions.revokedReason),
         gt(sessions.expiresAt, now),
       ),
     )
@@ -281,12 +331,14 @@ export async function redeemPendingToken(
   token: string,
   factor: SecondFactor,
   now: number = Date.now(),
+  onRecoverySpent?: (userId: string) => OnRecoverySpent,
 ): Promise<RedeemResult> {
   if (token.length === 0) return { ok: false, code: 'invalid_pending' };
   const id = sha256(token);
   await racePoint('twoFactor.pendingClaim');
   const claimed = await claimPendingToken(db, id, now);
   if (claimed === undefined) {
+    if (await takeRevokedPending(db, token)) return { ok: false, code: 'password_changed' };
     const row = await db
       .select({ usedAt: sessions.usedAt, expiresAt: sessions.expiresAt })
       .from(sessions)
@@ -303,7 +355,13 @@ export async function redeemPendingToken(
     // Claimed by a concurrent verify (or released by it a moment ago): not this request's.
     return { ok: false, code: 'token_used' };
   }
-  const method = await checkSecondFactor(db, claimed.userId, factor, now);
+  const method = await checkSecondFactor(
+    db,
+    claimed.userId,
+    factor,
+    now,
+    onRecoverySpent?.(claimed.userId),
+  );
   if (method !== null) return { ok: true, userId: claimed.userId, method };
   const failed = claimed.failedAttempts + 1;
   if (failed >= MAX_PENDING_FAILURES) {

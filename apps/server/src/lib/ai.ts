@@ -1,6 +1,7 @@
 // Wires the IO-free router in @opportun/ai to this server: keys from the secrets vault,
 // per-user policy overrides and budget from settings, and the task_runs ledger. One AiDeps
 // is built per request for the signed-in user, so every AI call is user-scoped.
+import { currentHoldStop } from './demoResetGate';
 import {
   AiUnavailableError,
   ATTR,
@@ -35,6 +36,7 @@ import {
 } from './aiProviderFetch';
 import { getSecretValue } from './secretBox';
 import { processLogger } from '../obs/log';
+import { aiLoopbackHttpAllowed, operatorEnv } from '../config';
 
 export const DEFAULT_PER_TASK_DAILY_USD = 5;
 
@@ -185,6 +187,21 @@ const resolveOverrides = new WeakMap<Db, ResolveHost>();
 
 export function setProviderResolveOverride(db: Db, resolve: ResolveHost): void {
   resolveOverrides.set(db, resolve);
+}
+
+/**
+ * A time limit on every AI call for one app's database (#656): set on a demo server only
+ * (app.ts). There a call that runs on holds the demo reset's gate for as long as it runs
+ * (lib/demoResetGate.ts), so it is aborted below the gate's hold bound, and its caller gets the
+ * usual AI-unavailable outcome (the AI SDK reports the abort as a provider failure). It is one
+ * deadline for the whole call, its retries included (AiDeps.callTimeLimitMs; tl on #670): a limit
+ * per request would let a provider answering 503 slowly keep a call going three times as long.
+ * Unset elsewhere: no limit, as before.
+ */
+const callLimits = new WeakMap<Db, number>();
+
+export function setAiCallLimit(db: Db, ms: number): void {
+  callLimits.set(db, ms);
 }
 
 /**
@@ -373,12 +390,12 @@ export async function buildAiDeps(
   // keeps it out of a running server, so a correctly configured production is the only thing
   // that keeps it off. While one is registered, policyFor above ignores the user's stored
   // policies, so a user-supplied baseUrl is never fetched under the override's allowance.
-  const baseUrls = operatorBaseUrls(opts.env ?? process.env);
+  const baseUrls = operatorBaseUrls(opts.env ?? operatorEnv());
   const allowLoopbackHttp =
-    override?.allowLoopbackHttp ??
-    opts.allowLoopbackHttp ??
-    process.env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1';
+    override?.allowLoopbackHttp ?? opts.allowLoopbackHttp ?? aiLoopbackHttpAllowed();
   const fetches = providerFetchesFor(allowLoopbackHttp, baseUrls, resolveOverrides.get(db));
+  const limit = callLimits.get(db);
+  const stop = currentHoldStop();
   return {
     getKey: async (provider) =>
       override === undefined ? getProviderKey(db, ctx, provider) : override.getKey(provider),
@@ -394,6 +411,11 @@ export async function buildAiDeps(
     },
     // The user of every call: on its span (user.id), and what keeps one user per trace (14.6).
     userId: ctx.userId,
+    // One deadline per call, retries included (the router makes it: tl on #670).
+    ...(limit === undefined ? {} : { callTimeLimitMs: limit }),
+    // On a demo server, the stop of the reset gate's hold this runs under (#684): built in a
+    // handler or a job, so the call ends while that request or job still holds the gate.
+    ...(stop === undefined ? {} : { stopSignal: stop }),
     budget: await readBudget(db, ctx),
     spentTodayUsd: async (task) => await spentTodayUsd(db, ctx, task),
     providerFetch: {

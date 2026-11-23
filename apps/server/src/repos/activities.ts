@@ -5,6 +5,7 @@ import {
   count,
   desc,
   eq,
+  inArray,
   isNotNull,
   isNull,
   lte,
@@ -36,6 +37,7 @@ import {
 } from '../db/schema';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy, ownedSql } from './base';
 import { countWhere, orderBy, sortColumns, type ListOpts, type Page } from './list';
 import { indexActivity, removeFromIndex } from './search';
 import { runCount, rawGet, rawAll, withTransaction } from '../db/client';
@@ -57,7 +59,7 @@ export async function assertOpportunityOwned(
   const row = await exec
     .select({ id: opportunities.id })
     .from(opportunities)
-    .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, opportunityId)))
+    .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
     .get();
   if (row === undefined) throw notFound();
 }
@@ -72,7 +74,7 @@ export const ACTIVITY_SORTS = sortColumns({
 });
 
 function ownedActivity(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(activities.userId, ctx.userId), eq(activities.id, id));
+  return and(ownedBy(activities.userId, ctx), eq(activities.id, id));
 }
 
 export async function listActivities(
@@ -82,7 +84,7 @@ export async function listActivities(
   opts: ListOpts,
 ): Promise<Page<ActivityRow>> {
   await assertOpportunityOwned(db, ctx, opportunityId);
-  const where = and(eq(activities.userId, ctx.userId), eq(activities.opportunityId, opportunityId));
+  const where = and(ownedBy(activities.userId, ctx), eq(activities.opportunityId, opportunityId));
   const items = await db
     .select()
     .from(activities)
@@ -196,7 +198,7 @@ export async function createReferral(
     const contact = await tx
       .select({ id: networkContacts.id, name: networkContacts.name })
       .from(networkContacts)
-      .where(and(eq(networkContacts.userId, ctx.userId), eq(networkContacts.id, input.contactId)))
+      .where(and(ownedBy(networkContacts.userId, ctx), eq(networkContacts.id, input.contactId)))
       .get();
     if (contact === undefined) throw notFound();
     const existing = await tx
@@ -204,7 +206,7 @@ export async function createReferral(
       .from(activities)
       .where(
         and(
-          eq(activities.userId, ctx.userId),
+          ownedBy(activities.userId, ctx),
           eq(activities.opportunityId, opportunityId),
           eq(activities.kind, 'referral'),
           linksContact(contact.id),
@@ -241,9 +243,15 @@ export interface OpportunityReferral {
   status: ReferralStatus | null;
   note: string | null;
   occurredAt: number;
+  /** The contact was deleted (#694): `name` is the one the ask recorded, and nothing links to it. */
+  removed: boolean;
 }
 
-/** The opportunity's referral asks linked to a contact, newest first. */
+/**
+ * The opportunity's referral asks linked to a contact, newest first. Each names the contact as
+ * they are now (#694, qa on #688): the ask records the name it was made with, which a rename
+ * leaves behind; a deleted contact keeps that recorded name and is marked removed.
+ */
 export async function listOpportunityReferrals(
   db: Db,
   ctx: UserCtx,
@@ -255,27 +263,40 @@ export async function listOpportunityReferrals(
     .from(activities)
     .where(
       and(
-        eq(activities.userId, ctx.userId),
+        ownedBy(activities.userId, ctx),
         eq(activities.opportunityId, opportunityId),
         eq(activities.kind, 'referral'),
       ),
     )
     .orderBy(desc(activities.occurredAt), desc(activities.id))
     .all();
-  const items = rows.flatMap((r) => {
+  const linked = rows.flatMap((r) => {
     const contact = contactOf(r.participants);
-    return contact === undefined
+    return contact === undefined ? [] : [{ r, contact }];
+  });
+  const ids = [...new Set(linked.map((l) => l.contact.contactId))];
+  const current = new Map(
+    ids.length === 0
       ? []
-      : [
-          {
-            activityId: r.id,
-            contactId: contact.contactId,
-            name: contact.name,
-            status: referralStatusOf(r.bodyMd),
-            note: referralNoteOf(r.bodyMd),
-            occurredAt: r.occurredAt,
-          },
-        ];
+      : (
+          await db
+            .select({ id: networkContacts.id, name: networkContacts.name })
+            .from(networkContacts)
+            .where(and(ownedBy(networkContacts.userId, ctx), inArray(networkContacts.id, ids)))
+            .all()
+        ).map((c) => [c.id, c.name] as const),
+  );
+  const items = linked.map(({ r, contact }) => {
+    const name = current.get(contact.contactId);
+    return {
+      activityId: r.id,
+      contactId: contact.contactId,
+      name: name ?? contact.name,
+      status: referralStatusOf(r.bodyMd),
+      note: referralNoteOf(r.bodyMd),
+      occurredAt: r.occurredAt,
+      removed: name === undefined,
+    };
   });
   return { items, total: items.length };
 }
@@ -308,12 +329,12 @@ export async function listContactReferrals(
       .from(activities)
       .innerJoin(
         opportunities,
-        and(eq(opportunities.id, activities.opportunityId), eq(opportunities.userId, ctx.userId)),
+        and(eq(opportunities.id, activities.opportunityId), ownedBy(opportunities.userId, ctx)),
       )
       .innerJoin(companies, eq(companies.id, opportunities.companyId))
       .where(
         and(
-          eq(activities.userId, ctx.userId),
+          ownedBy(activities.userId, ctx),
           eq(activities.kind, 'referral'),
           linksContact(contactId),
         ),
@@ -336,7 +357,7 @@ export const NEXT_STEP_SORTS = sortColumns({
 });
 
 function ownedStep(ctx: UserCtx, id: string): SQL | undefined {
-  return and(eq(nextSteps.userId, ctx.userId), eq(nextSteps.id, id));
+  return and(ownedBy(nextSteps.userId, ctx), eq(nextSteps.id, id));
 }
 
 export async function listNextSteps(
@@ -346,7 +367,7 @@ export async function listNextSteps(
   opts: ListOpts,
 ): Promise<Page<NextStepRow>> {
   await assertOpportunityOwned(db, ctx, opportunityId);
-  const where = and(eq(nextSteps.userId, ctx.userId), eq(nextSteps.opportunityId, opportunityId));
+  const where = and(ownedBy(nextSteps.userId, ctx), eq(nextSteps.opportunityId, opportunityId));
   const items = await db
     .select()
     .from(nextSteps)
@@ -461,7 +482,7 @@ const activitySource: TimelineSource = (scope) => sql`
            ['externalUrl', sql`a.external_url`],
          ])} AS data
   FROM activities a JOIN opportunities o ON o.id = a.opportunity_id AND o.user_id = a.user_id
-  WHERE a.user_id = ${scope.userId}
+  WHERE ${ownedSql('a.user_id', scope)}
   ${scope.opportunityId === undefined ? sql`` : sql`AND a.opportunity_id = ${scope.opportunityId}`}`;
 
 const stageSource: TimelineSource = (scope) => sql`
@@ -473,7 +494,7 @@ const stageSource: TimelineSource = (scope) => sql`
            ['note', sql`h.note`],
          ])} AS data
   FROM stage_history h JOIN opportunities o ON o.id = h.opportunity_id AND o.user_id = h.user_id
-  WHERE h.user_id = ${scope.userId}
+  WHERE ${ownedSql('h.user_id', scope)}
   ${scope.opportunityId === undefined ? sql`` : sql`AND h.opportunity_id = ${scope.opportunityId}`}`;
 
 /** Which linked mail (alias `c`) the timeline shows; lastActivityAt uses the same test. */
@@ -490,7 +511,7 @@ const communicationSource: TimelineSource = (scope) => sql`
            ['classification', sql`c.classification`],
          ])} AS data
   FROM communications c JOIN opportunities o ON o.id = c.opportunity_id AND o.user_id = c.user_id
-  WHERE c.user_id = ${scope.userId}
+  WHERE ${ownedSql('c.user_id', scope)}
     AND ${MAIL_ON_TIMELINE}
   ${scope.opportunityId === undefined ? sql`` : sql`AND c.opportunity_id = ${scope.opportunityId}`}`;
 
@@ -547,17 +568,32 @@ function toItem(row: TimelineRow): TimelineItem {
   };
 }
 
+/** A page of the timeline, newest first, without its total (the dashboard's recent activity). */
+async function timelineItems(
+  exec: Exec,
+  scope: TimelineScope,
+  page: { limit: number; offset: number },
+): Promise<TimelineItem[]> {
+  const rows = await rawAll<TimelineRow>(
+    exec,
+    // The derived table needs an alias on Postgres (SQLite accepts one too).
+    sql`SELECT * FROM (${timelineUnion(scope)}) AS timeline ORDER BY occurred_at DESC, id DESC LIMIT ${page.limit} OFFSET ${page.offset}`,
+  );
+  return rows.map(toItem);
+}
+
+/**
+ * A page of the timeline and its total, for a timeline that pages (an opportunity's). The total
+ * counts the whole UNION, every activity, stage change and linked message in scope, so a caller
+ * that shows only a few entries uses timelineItems instead (#592: the dashboard).
+ */
 async function timeline(
   exec: Exec,
   scope: TimelineScope,
   page: { limit: number; offset: number },
 ): Promise<Page<TimelineItem>> {
   const union = timelineUnion(scope);
-  const rows = await rawAll<TimelineRow>(
-    exec,
-    // The derived table needs an alias on Postgres (SQLite accepts one too).
-    sql`SELECT * FROM (${union}) AS timeline ORDER BY occurred_at DESC, id DESC LIMIT ${page.limit} OFFSET ${page.offset}`,
-  );
+  const items = await timelineItems(exec, scope, page);
   const total = Number(
     (
       await rawGet<{ n: number | string }>(
@@ -566,7 +602,7 @@ async function timeline(
       )
     )?.n ?? 0,
   );
-  return { items: rows.map(toItem), total };
+  return { items, total };
 }
 
 /**
@@ -597,14 +633,14 @@ export async function lastActivityAt(
     exec,
     sql`SELECT opportunity_id, max(at) AS at FROM (
       SELECT a.opportunity_id AS opportunity_id, a.occurred_at AS at FROM activities a
-        WHERE a.user_id = ${ctx.userId} AND a.opportunity_id IN (${idList})
+        WHERE ${ownedSql('a.user_id', ctx)} AND a.opportunity_id IN (${idList})
       UNION ALL
       SELECT h.opportunity_id, h.at FROM stage_history h
-        WHERE h.user_id = ${ctx.userId} AND h.opportunity_id IN (${idList})
+        WHERE ${ownedSql('h.user_id', ctx)} AND h.opportunity_id IN (${idList})
           AND h.from_stage IS NOT NULL
       UNION ALL
       SELECT c.opportunity_id, c.sent_at FROM communications c
-        WHERE c.user_id = ${ctx.userId} AND c.opportunity_id IN (${idList}) AND ${MAIL_ON_TIMELINE}
+        WHERE ${ownedSql('c.user_id', ctx)} AND c.opportunity_id IN (${idList}) AND ${MAIL_ON_TIMELINE}
     ) AS entries WHERE at <= ${now} GROUP BY opportunity_id`,
   );
   for (const row of rows) out.set(row.opportunity_id, row.at);
@@ -643,7 +679,7 @@ export async function dashboard(db: Db, ctx: UserCtx, now = Date.now()): Promise
   const grouped = await db
     .select({ stage: opportunities.stage, n: count() })
     .from(opportunities)
-    .where(eq(opportunities.userId, ctx.userId))
+    .where(ownedBy(opportunities.userId, ctx))
     .groupBy(opportunities.stage)
     .all();
   const byStage = new Map(grouped.map(({ stage, n }) => [stage, n]));
@@ -671,12 +707,12 @@ export async function dashboard(db: Db, ctx: UserCtx, now = Date.now()): Promise
     .from(nextSteps)
     .innerJoin(
       opportunities,
-      and(eq(opportunities.id, nextSteps.opportunityId), eq(opportunities.userId, ctx.userId)),
+      and(eq(opportunities.id, nextSteps.opportunityId), ownedBy(opportunities.userId, ctx)),
     )
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
     .where(
       and(
-        eq(nextSteps.userId, ctx.userId),
+        ownedBy(nextSteps.userId, ctx),
         isNull(nextSteps.doneAt),
         isNotNull(nextSteps.dueAt),
         lte(nextSteps.dueAt, now + DUE_WINDOW_MS),
@@ -687,16 +723,19 @@ export async function dashboard(db: Db, ctx: UserCtx, now = Date.now()): Promise
     .limit(MAX_DUE_STEPS)
     .all();
 
-  const recentActivity = (
-    await timeline(db, { userId: ctx.userId }, { limit: RECENT_ACTIVITY, offset: 0 })
-  ).items;
+  // The newest few only: counting the whole timeline here grew with the user's history (#592).
+  const recentActivity = await timelineItems(
+    db,
+    { userId: ctx.userId },
+    { limit: RECENT_ACTIVITY, offset: 0 },
+  );
 
   // The Inbox "Needs review" view: flagged messages that are not spam or irrelevant outreach.
   const triage = await countWhere(
     db,
     communications,
     and(
-      eq(communications.userId, ctx.userId),
+      ownedBy(communications.userId, ctx),
       eq(communications.needsReview, true),
       or(
         isNull(communications.outreachKind),

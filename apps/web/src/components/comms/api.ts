@@ -65,6 +65,8 @@ export interface GmailStatus {
    * whichever Google account the browser lists first. Null until a sync has read the profile.
    */
   accountEmail: string | null;
+  /** This user's messages still being classified (#645); the Inbox reads on until it is 0. */
+  pendingClassify?: number;
 }
 
 export interface ReclassifyInput {
@@ -140,17 +142,38 @@ function filterQuery(f: InboxFilters): string {
   return parts.length > 0 ? `&${parts.join('&')}` : '';
 }
 
-export function useInbox(view: InboxTab, filters: InboxFilters = {}) {
+/** One page of a tab: the server's cap (routes/common.ts MAX_LIMIT), and so the most it returns. */
+export const INBOX_PAGE = 200;
+
+/**
+ * One page of a tab (#646): `page` is 0-based. Each page is its own cache entry under the view's
+ * key, so a refresh of the view refreshes every page. The page on screen stays while the next
+ * loads, rather than flashing to a loading state.
+ */
+export function useInbox(
+  view: InboxTab,
+  filters: InboxFilters = {},
+  page = 0,
+  pageSize: number = INBOX_PAGE,
+) {
   return useQuery({
-    queryKey: [...ck.view(view), filterKey(filters)] as const,
+    queryKey: [...ck.view(view), filterKey(filters), page, pageSize] as const,
     queryFn: () =>
-      api<Page<CommunicationView>>(`/communications?view=${view}&limit=200${filterQuery(filters)}`),
+      api<Page<CommunicationView>>(
+        `/communications?view=${view}&limit=${pageSize}&offset=${page * pageSize}` +
+          filterQuery(filters),
+      ),
+    // The rows on screen stay while the next page or a new filter loads (#646, #678): without
+    // them the selection, and a confirmation open for it, would be dropped for that moment.
+    placeholderData: keepPreviousData,
   });
 }
 
 export interface BulkTriageResult {
   succeeded: number;
   skipped: number;
+  /** Linked differently since the user saw them (#666); left untouched. */
+  changed: number;
 }
 
 // Reject only: bulk reclassify is not exposed server-side (see routes/communications.ts).
@@ -160,8 +183,11 @@ export type BulkAction = { kind: 'reject'; reason: RejectPayload['reason']; note
 export function useBulkTriage() {
   const refresh = useRefresh();
   return useMutation({
-    mutationFn: (v: { ids: string[]; action: BulkAction }) =>
-      api<BulkTriageResult>('/communications/bulk', { method: 'POST', body: v }),
+    // Each message with the link it was seen under (#666): the server leaves a changed one alone.
+    mutationFn: (v: {
+      items: { id: string; opportunityId: string | null }[];
+      action: BulkAction;
+    }) => api<BulkTriageResult>('/communications/bulk', { method: 'POST', body: v }),
     onSettled: refresh,
   });
 }
@@ -285,8 +311,12 @@ export interface RejectResult {
 export function useReject() {
   const refresh = useRefresh();
   return useMutation({
-    mutationFn: (v: { id: string; input: RejectPayload }) =>
-      api<RejectResult>(`/communications/${enc(v.id)}/reject`, { method: 'POST', body: v.input }),
+    // With the link the message was seen under (#666): the server refuses if it changed since.
+    mutationFn: (v: { id: string; input: RejectPayload; expectedOpportunityId: string | null }) =>
+      api<RejectResult>(`/communications/${enc(v.id)}/reject`, {
+        method: 'POST',
+        body: { ...v.input, expectedOpportunityId: v.expectedOpportunityId },
+      }),
     onSettled: refresh,
   });
 }
@@ -325,14 +355,63 @@ export function useOpportunitySearch(q: string) {
   });
 }
 
+/** When Sync now was pressed, kept beside the status so every reader of it sees one value. */
+const SYNC_WATCH_KEY = ['integrations', 'gmail-sync-watch'] as const;
+/** How often the status is read while a sync's mail is on its way, and for how long at most. */
+const SYNC_POLL_MS = 2500;
+const SYNC_WATCH_MAX_MS = 2 * 60_000;
+
+/**
+ * Whether the mail a Sync now asked for may still be on its way (#645): the sync has not reported
+ * since the click, it is running, or messages from it are still being classified. Never past
+ * SYNC_WATCH_MAX_MS, so a sync that never reports does not poll for good.
+ */
+function syncInFlight(status: GmailStatus | undefined, since: number | undefined): boolean {
+  if (since === undefined || Date.now() - since > SYNC_WATCH_MAX_MS) return false;
+  if (status === undefined) return true;
+  return (
+    status.status === 'running' ||
+    (status.lastSyncAt ?? 0) < since ||
+    (status.pendingClassify ?? 0) > 0
+  );
+}
+
 export function useGmailStatus() {
-  return useQuery({ queryKey: ck.gmail, queryFn: () => api<GmailStatus>('/integrations/gmail') });
+  const qc = useQueryClient();
+  return useQuery({
+    queryKey: ck.gmail,
+    queryFn: () => api<GmailStatus>('/integrations/gmail'),
+    // Read again while a sync's mail is on its way, then stop (#645).
+    refetchInterval: (q) =>
+      syncInFlight(q.state.data, qc.getQueryData<number>(SYNC_WATCH_KEY)) ? SYNC_POLL_MS : false,
+  });
+}
+
+/**
+ * Each new Gmail status can mean new or newly classified mail: the message lists and their counts
+ * are read again, so they show without a reload or a tab switch (#645). Called once, by the
+ * Inbox's sync control, never by every reader of the status: each row's Open original reads it
+ * too, and one refresh per reader cost (rows + 1) times the list reads (qa on #668).
+ */
+export function useGmailSyncRefresh() {
+  const qc = useQueryClient();
+  const { data } = useGmailStatus();
+  const seen = useRef<string | null>(null);
+  useEffect(() => {
+    if (data === undefined) return;
+    const now = `${data.lastSyncAt ?? ''}|${data.count}|${data.pendingClassify ?? ''}|${data.status ?? ''}`;
+    if (seen.current !== null && seen.current !== now) {
+      void qc.invalidateQueries({ queryKey: ck.all });
+    }
+    seen.current = now;
+  }, [data, qc]);
 }
 
 export function useGmailSync() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api<{ jobId: string }>('/integrations/gmail/sync', { method: 'POST' }),
+    onSuccess: () => qc.setQueryData(SYNC_WATCH_KEY, Date.now()),
     onSettled: () => qc.invalidateQueries({ queryKey: ck.gmail }),
   });
 }

@@ -118,6 +118,19 @@ describe('LinkedAccountsCard', () => {
     expect(await screen.findByText(/already linked to another account/)).toBeInTheDocument();
   });
 
+  it('a link whose callback did not verify says it was not completed, and how to retry (#662)', async () => {
+    mockApi({
+      'GET /auth/oauth/providers': { providers: ['github'] },
+      'GET /auth/oauth/accounts': { hasPassword: true, accounts: [] },
+    });
+    renderWithProviders(<LinkedAccountsCard flash="not_completed" />);
+    expect(
+      await screen.findByText(
+        'That link was not completed: it was out of date, already used, or started in another session. Choose Link again to try once more.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('hides itself when no provider is configured', async () => {
     const { calls } = mockApi({
       'GET /auth/oauth/providers': { providers: [] },

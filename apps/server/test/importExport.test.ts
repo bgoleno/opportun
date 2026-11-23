@@ -1,5 +1,6 @@
 // Import pipeline and data export (FR-I1, I2, I3). The fixture pack under
 // fixtures/import/ is synthetic: every company, person, address and URL in it is made up.
+import { enqueue } from '../src/lib/jobQueue';
 import { randomBytes } from 'node:crypto';
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -24,7 +25,7 @@ import {
 import { formatCsv, parseCsv, unguardFormula } from '../src/lib/csv';
 import { EXPORT_EXCLUDED_TABLES } from '../src/lib/exporter';
 import { IMPORT_JOB_KIND, packFromZip } from '../src/lib/importer';
-import { enqueue, runNextJob } from '../src/jobs/runner';
+import { runNextJob } from '../src/jobs/runner';
 import { useApi } from './api';
 import { fakeReactiveResume, RR_BASE_ID, RR_ORIGIN } from './fakeReactiveResume';
 import { assertIsolated, type TestClient } from './isolation';
@@ -963,6 +964,19 @@ describe('network.csv, and contacts.csv from before the rename', () => {
     }
   });
 
+  it('refuses a row whose LinkedIn link is on another host (#655)', async () => {
+    const { app, a } = await boot();
+    const bad = `${NETWORK_HEADER}\nJordan Example,,https://example.com/in/jordan,,\n`;
+    const status = await importAndRun(
+      app,
+      a,
+      zip({ 'opportunities.csv': HEADER, 'network.csv': bad }),
+    );
+    expect(status.report?.errors).toEqual([
+      { line: 2, message: 'network.csv: linkedin_url must be a LinkedIn profile URL' },
+    ]);
+  });
+
   it('queues networkCsv only, whichever name the pack used', async () => {
     const { app, a } = await boot();
     const res = await uploadZip(a, zip(asOldPack(await fixtureFiles())));
@@ -1048,3 +1062,73 @@ describe('network.csv, and contacts.csv from before the rename', () => {
 });
 
 const byTitle = (x: { title: string }, y: { title: string }) => x.title.localeCompare(y.title);
+
+// #736 (qa's regression pass at 1a5f9f4): opportunities.csv had no closed_reason column, so a
+// closed opportunity exported and imported into another account lost its reason.
+describe('the closed reason survives an export and import (#736)', () => {
+  async function exportedZip(c: TestClient): Promise<Buffer> {
+    const res = await c.request({ method: 'GET', url: '/api/v1/export' });
+    expect(res.statusCode).toBe(200);
+    return Buffer.from(res.rawPayload);
+  }
+  const listOf = async (c: TestClient) =>
+    (
+      (await c.request({ method: 'GET', url: '/api/v1/opportunities?limit=100' })).json() as {
+        items: { title: string; stage: string; closedReason: string | null }[];
+      }
+    ).items;
+
+  it('an opportunity closed with a reason, exported and imported into a new account, keeps it', async () => {
+    const { app, a, b } = await boot();
+    const opp = await a.request({
+      method: 'POST',
+      url: '/api/v1/opportunities',
+      payload: { companyName: 'Initech', title: 'Staff Engineer', sourceKind: 'manual' },
+    });
+    expect(opp.statusCode, opp.body).toBe(201);
+    const id = (opp.json() as { id: string }).id;
+    for (const body of [{ to: 'applied' }, { to: 'closed', closedReason: 'withdrawn' }]) {
+      const moved = await a.request({
+        method: 'POST',
+        url: `/api/v1/opportunities/${id}/stage`,
+        payload: body,
+      });
+      expect(moved.statusCode, moved.body).toBe(200);
+    }
+    const status = await importAndRun(app, b, await exportedZip(a));
+    expect(status.report?.errors).toEqual([]);
+    expect(await listOf(b)).toEqual([
+      expect.objectContaining({
+        title: 'Staff Engineer',
+        stage: 'closed',
+        closedReason: 'withdrawn',
+      }),
+    ]);
+  });
+
+  it('an export from before the column still imports cleanly, closed with no reason', async () => {
+    const { app, a } = await boot();
+    const status = await importAndRun(
+      app,
+      a,
+      csvZip([HEADER, 'Initech,Staff Engineer,closed,,,,,,,'].join('\n')),
+    );
+    expect(status.report).toMatchObject({ created: 1, errors: [] });
+    expect(await listOf(a)).toEqual([
+      expect.objectContaining({ stage: 'closed', closedReason: null }),
+    ]);
+  });
+
+  it('a closed_reason that is not a known reason names the row', async () => {
+    const { app, a } = await boot();
+    const header = `${HEADER.replace('dismissed_reason', 'dismissed_reason,closed_reason')}`;
+    const status = await importAndRun(
+      app,
+      a,
+      csvZip([header, 'Initech,Staff Engineer,closed,,,,,,bored,,'].join('\n')),
+    );
+    expect(status.report?.errors).toEqual([
+      { line: 2, message: expect.stringMatching(/closed_reason must be one of/) },
+    ]);
+  });
+});

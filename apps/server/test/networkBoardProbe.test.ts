@@ -2,14 +2,14 @@
 // on the issue, on by default as the owner decided, sec's conditions folded in. Every request goes through the real safeFetch over a
 // scripted DNS table and transport, as in atsDetect.test.ts, and every call the probe makes is
 // counted before safeFetch sees it, so a refused request to a private address counts too.
+import { slugCandidates } from '../src/lib/atsDetect';
+import { enqueue } from '../src/lib/jobQueue';
 import { runStructured } from '@opportun/ai';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
 import { companies, jobs, settings } from '../src/db/schema';
-import { slugCandidates } from '../src/jobs/atsDetect';
-import { enqueue } from '../src/jobs/runner';
 import {
   NETWORK_BOARD_CHECK_SETTING,
   NETWORK_PROBE_FAILED_NIGHTS,
@@ -976,5 +976,87 @@ describe('the nightly network probe (#296)', () => {
     expect(nightStart(new Date(2026, 10, 12, 5, 10).getTime())).toBe(
       new Date(2026, 10, 11, 5, 15).getTime(),
     );
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/617 (sec's audit): a deadline that passed while a
+// request waited for its host's local token says nothing about the vendor; and one user's failing
+// companies may stop a vendor for every user only within a budget.
+describe('the vendor stop, for local waits and per user (#617)', () => {
+  const instanceStops = (app: FastifyInstance) =>
+    app.db
+      .select()
+      .from(settings)
+      .where(and(eq(settings.key, vendorStopKey('ats_greenhouse'))))
+      .all();
+
+  it("a deadline passed in the local token wait is not the vendor's: no stop, no park, nothing recorded, and the night goes on", async () => {
+    const { app, a } = await boot();
+    const first = await inNetwork(a, 'Initech', 2);
+    const second = await inNetwork(a, 'Hooli');
+    await turnOn(app, a);
+    const n = unreachable(() => new FetchBlockedError('rate_wait', 'boards-api.greenhouse.io'));
+    expect(await night(app, at0520(12), n.fetch)).toBe(2);
+    // Both companies were asked about: the night was not ended by the first wait.
+    expect(n.called.some((u) => u.includes('initech'))).toBe(true);
+    expect(n.called.some((u) => u.includes('hooli'))).toBe(true);
+    for (const kind of ['ats_greenhouse', 'ats_lever', 'ats_ashby'] as const) {
+      expect(
+        await app.db
+          .select()
+          .from(settings)
+          .where(eq(settings.key, vendorStopKey(kind)))
+          .all(),
+      ).toEqual([]);
+    }
+    for (const id of [first, second]) {
+      expect(await rowOf(app, id)).toMatchObject({
+        atsKind: null,
+        boardProbedAt: null,
+        boardProbeFailedNights: 0,
+        boardProbeStops: 0,
+        boardProbeParkedUntil: null,
+      });
+    }
+  });
+
+  it("one user's failing companies stop a vendor for everyone once, not again the next night", async () => {
+    const { app, a, b } = await boot();
+    // b's companies all fail on Greenhouse; a's has a Greenhouse board.
+    await inNetwork(b, 'Initech', 3);
+    await inNetwork(b, 'Hooli', 2);
+    await inNetwork(b, 'Globex', 1);
+    const umbrella = await inNetwork(a, 'Umbrella');
+    await turnOn(app, a);
+    await turnOn(app, b);
+    const routes = {
+      [greenhouse('initech')]: () => respond(503),
+      [greenhouse('hooli')]: () => respond(503),
+      [greenhouse('globex')]: () => respond(503),
+      ...boardFor('umbrella', 'Platform Engineer'),
+    };
+    /** b's night first, then a's, half an hour later. */
+    const nightOf = async (day: number) => {
+      app.jobs.services.sourceFetch = net(routes).fetch;
+      vi.setSystemTime(at0520(day));
+      await queueNightForUser(app.db, ctxOf(b), at0520(day));
+      await app.jobs.drain();
+      const later = at0520(day) + 30 * 60_000;
+      vi.setSystemTime(later);
+      await queueNightForUser(app.db, ctxOf(a), later);
+      await app.jobs.drain();
+    };
+
+    await nightOf(12);
+    // Night 12: b's first failure stops Greenhouse for every user, as before.
+    const [stop] = await instanceStops(app);
+    expect(stop?.updatedAt).toBeGreaterThanOrEqual(nightStart(at0520(12)));
+
+    await nightOf(13);
+    // Night 13: b's next failing company ends b's night, but b has used its stop: Greenhouse is
+    // not stopped for a again, and a's board is found.
+    const [again] = await instanceStops(app);
+    expect(again?.updatedAt).toBeLessThan(nightStart(at0520(13)));
+    expect(await rowOf(app, umbrella)).toMatchObject({ atsKind: 'ats_greenhouse' });
   });
 });

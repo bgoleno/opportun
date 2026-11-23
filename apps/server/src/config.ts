@@ -2,7 +2,8 @@ import { isIP } from 'node:net';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { inspect } from 'node:util';
-import { parseDbDialect } from './db/dialectName';
+import { parseDbDialect, type DbDialect } from './db/dialectName';
+import { readBuildInfo, type BuildInfo } from './lib/buildInfo';
 import { NO_PEPPERS, pepperSet, type PepperSet } from './lib/pepperSet';
 import { readOperatorFile } from './lib/storage';
 
@@ -384,12 +385,14 @@ export function loadPeppers(env: NodeJS.ProcessEnv): PepperSet {
     if (value.length < PEPPER_MIN) {
       throw new ConfigError(`${key} must be at least ${PEPPER_MIN} characters`);
     }
+    // eslint-disable-next-line security/detect-object-injection -- an integer parsed from the OPPORTUN_PEPPER_V<n> name (1 to 4 digits)
     secrets[v] = value;
   }
   // Rotating without keeping the previous secret strands every hash made under it, which is
   // the failure #5 exists to prevent. Refuse at boot rather than one locked-out login at a
   // time: every version below the current one must still be supplied.
   for (let v = 1; v < current; v += 1) {
+    // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
     if (secrets[v] === undefined) {
       throw new ConfigError(
         `OPPORTUN_PEPPER_VERSION is ${current}, so OPPORTUN_PEPPER_V${v} must supply the pepper that version ${v} hashes were made with, or those accounts can never log in`,
@@ -546,9 +549,7 @@ export function submissionsEnabled(cfg: Pick<Config, 'submissions'>): boolean {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const masterKey = loadMasterKey(env);
   const baseUrl = loadBaseUrl(env);
-  const dataDir = resolve(
-    env.DATA_DIR === undefined || env.DATA_DIR === '' ? './data' : env.DATA_DIR,
-  );
+  const dataDir = loadDataDir(env);
   const cfg: Config = {
     port: loadPort(env),
     host: loadHost(env),
@@ -564,7 +565,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     demoTokenCap: loadDemoTokenCap(env),
     demoSharedAssistedApply: loadDemoSharedAssistedApply(env),
     dailyReviewCap: loadDailyReviewCap(env),
-    aiAllowLoopbackHttp: env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1',
+    aiAllowLoopbackHttp: aiLoopbackHttpAllowed(env),
     telemetryAllowPrivate: env.OPPORTUN_TELEMETRY_ALLOW_PRIVATE === '1',
     trustedProxies: loadTrustedProxies(env),
     webDir: resolve(
@@ -578,4 +579,58 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
   if (env.SMTP_URL !== undefined && env.SMTP_URL !== '') cfg.smtpUrl = env.SMTP_URL;
   return cfg;
+}
+
+// The environment readers the rest of the server uses (https://github.com/bgoleno/opportun/issues/773):
+// apps/server/src reads process.env here only (eslint.config.js). Each keeps the name, default and
+// validation it had where it was read before, and takes the environment as a parameter, so a test
+// passes a literal object rather than mutating the real one.
+
+/** DATA_DIR, resolved: './data' when unset or empty (loadConfig, and every CLI that opens data). */
+export function loadDataDir(env: NodeJS.ProcessEnv = process.env): string {
+  return resolve(env.DATA_DIR === undefined || env.DATA_DIR === '' ? './data' : env.DATA_DIR);
+}
+
+/**
+ * OPPORTUN_JOB_WORKERS: a whole number of at least one, or undefined when unset, blank or not one,
+ * and the runner then uses its own default (jobs/runner.ts).
+ */
+export function jobWorkersSetting(env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const raw = env.OPPORTUN_JOB_WORKERS;
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n >= 1 ? n : undefined;
+}
+
+/**
+ * LOG_LEVEL for the process logger a CLI or reporter writes to (obs/log.ts processLogger): 'info'
+ * when unset, otherwise passed on unchecked, as it was there. loadConfig checks it for the app.
+ */
+export function logLevelSetting(env: NodeJS.ProcessEnv = process.env): string {
+  return env.LOG_LEVEL ?? 'info';
+}
+
+/** DB_DIALECT for the schema module, read once as it loads (db/schema.ts SCHEMA_DIALECT). */
+export function schemaDialect(env: NodeJS.ProcessEnv = process.env): DbDialect {
+  return parseDbDialect(env.DB_DIALECT);
+}
+
+/** OPPORTUN_AI_ALLOW_LOOPBACK_HTTP: on only for '1' (issue #334). */
+export function aiLoopbackHttpAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.OPPORTUN_AI_ALLOW_LOOPBACK_HTTP === '1';
+}
+
+/**
+ * The two variables lib/aiProviderFetch.ts operatorBaseUrls parses (ANTHROPIC_BASE_URL,
+ * OPENAI_BASE_URL), handed on alone, so lib/ai.ts reads no process.env of its own.
+ */
+export function operatorEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): Pick<NodeJS.ProcessEnv, 'ANTHROPIC_BASE_URL' | 'OPENAI_BASE_URL'> {
+  return { ANTHROPIC_BASE_URL: env.ANTHROPIC_BASE_URL, OPENAI_BASE_URL: env.OPENAI_BASE_URL };
+}
+
+/** The build's own facts, as its environment names them (lib/buildInfo.ts; Settings shows them). */
+export function loadBuildInfo(env: NodeJS.ProcessEnv = process.env): BuildInfo {
+  return readBuildInfo(env);
 }

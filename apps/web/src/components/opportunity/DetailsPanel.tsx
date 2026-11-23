@@ -1,3 +1,4 @@
+import { SharedDemoNotice } from '@/components/SharedDemoNotice';
 import { Download, ExternalLink, Paperclip, Trash2 } from 'lucide-react';
 import { useRef, useState, type ChangeEvent } from 'react';
 import { useOpportunitySubmissions } from '@/components/apply/api';
@@ -42,7 +43,7 @@ import {
 /** Mirrors the server's upload cap (apps/server/src/routes/attachments.ts). */
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
-function Attachments({ opportunityId }: { opportunityId: string }) {
+export function Attachments({ opportunityId }: { opportunityId: string }) {
   const { data, error } = useAttachments(opportunityId);
   const upload = useUploadAttachment(opportunityId);
   const remove = useDeleteAttachment(opportunityId);
@@ -112,6 +113,8 @@ function Attachments({ opportunityId }: { opportunityId: string }) {
           ))}
         </ul>
         <FormError message={uploadError} />
+        {/* What an attached file means on a shared demo account (#671, decision 133). */}
+        <SharedDemoNotice about="files" />
         <div>
           <input
             ref={input}
@@ -210,6 +213,10 @@ function LinkEditor({ opp, onDone }: { opp: OpportunityView; onDone: () => void 
   const [value, setValue] = useState(opp.postingUrl ?? '');
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  // Cancelled while a save was in flight (#737). The server stores the link whatever the editor
+  // does, and the card then switches to it, so a save that settles after Cancel says how it ended
+  // rather than changing the card with nothing said.
+  const cancelled = useRef(false);
 
   async function save() {
     const raw = value.trim();
@@ -219,12 +226,35 @@ function LinkEditor({ opp, onDone }: { opp: OpportunityView; onDone: () => void 
     }
     setFieldError(undefined);
     setError(null);
+    cancelled.current = false;
+    const sent = raw === '' ? null : raw;
     try {
-      await update.mutateAsync({ postingUrl: raw === '' ? null : raw });
-      onDone();
+      const saved = await update.mutateAsync({ postingUrl: sent });
+      if (cancelled.current) {
+        // Named (#785): a later save of another link may have landed first, and the answer is the
+        // row as it now is (#714), so this one says when it was replaced rather than reading as
+        // that save's.
+        const replaced = saved.postingUrl !== sent;
+        toast({
+          title: replaced ? 'Posting link saved, then replaced' : 'Posting link saved',
+          description: sent ?? 'The link was cleared.',
+          variant: replaced ? 'default' : 'success',
+        });
+      } else onDone();
     } catch (err) {
-      setError(errorMessage(err));
+      if (cancelled.current) {
+        toast({
+          title: 'Posting link not saved',
+          description: errorMessage(err),
+          variant: 'destructive',
+        });
+      } else setError(errorMessage(err));
     }
+  }
+
+  function cancel() {
+    if (update.isPending) cancelled.current = true;
+    onDone();
   }
 
   return (
@@ -246,7 +276,7 @@ function LinkEditor({ opp, onDone }: { opp: OpportunityView; onDone: () => void 
         <Button type="button" size="sm" onClick={() => void save()} disabled={update.isPending}>
           Save
         </Button>
-        <Button type="button" size="sm" variant="outline" onClick={onDone}>
+        <Button type="button" size="sm" variant="outline" onClick={cancel}>
           Cancel
         </Button>
       </div>
@@ -262,14 +292,39 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   const rederive = useRederivePosting(opp.id);
   const [found, setFound] = useState<FindPostingResult | null>(null);
   const [findError, setFindError] = useState<string | null>(null);
+  /** The board could not be read (#835): said as such, with a retry, not as "no match". */
+  const [unreachable, setUnreachable] = useState(false);
   const [editing, setEditing] = useState<'description' | 'link' | null>(null);
   const described = opp.descriptionMd != null && opp.descriptionMd.trim() !== '';
 
   // The posting is looked up only when asked for: nothing searches a board on its own.
   async function runFind() {
     setFindError(null);
+    setUnreachable(false);
     try {
-      const result = await find.mutateAsync();
+      const result = await find.mutateAsync(opp.postingState ?? 'none');
+      if (result.outcome === 'already_confirmed') {
+        // A background check finished while the page was open (#852): nothing searched again.
+        toast({
+          title: 'Already confirmed',
+          description: "The board check finished while this page was open; it's up to date now.",
+          variant: 'success',
+        });
+        return;
+      }
+      if (result.outcome === 'unreachable') {
+        setUnreachable(true);
+        return;
+      }
+      if (result.outcome === 'attached' && result.unchanged === true) {
+        // A Refetch that found the same job, link and description (#835, qa on #830).
+        toast({
+          title: 'Nothing changed',
+          description: "The posting matches the company's board.",
+          variant: 'success',
+        });
+        return;
+      }
       if (result.outcome === 'attached') {
         const title = result.candidate?.posting.title ?? opp.title;
         // #114: a single confident match from a board read only in part (result.note) is
@@ -317,13 +372,17 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
       const title =
         result.outcome === 'no_description_found'
           ? 'Nothing to re-derive'
-          : result.outcome === 'merged'
-            ? 'Description re-derived from a board match'
-            : 'Description re-derived from the capture';
+          : result.outcome === 'left_alone'
+            ? 'Left as it is'
+            : result.outcome === 'merged'
+              ? 'Description re-derived from a board match'
+              : 'Description re-derived from the capture';
       const description =
         result.outcome === 'no_description_found'
           ? "The captured page didn't carry a recognizable job description."
-          : undefined;
+          : result.outcome === 'left_alone'
+            ? 'The description changed while the board was being checked, so it was kept.'
+            : undefined;
       toast({ title, description, variant: 'success' });
     } catch (err) {
       toast({
@@ -347,7 +406,9 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
           <CardTitle>Description</CardTitle>
           {editing === null ? (
             <div className="flex flex-wrap gap-2">
-              {described ? null : (
+              {/* Until the posting is confirmed, Find posting is what confirms it, a described
+                  one included (#756): the user's own description is kept. */}
+              {described && opp.postingState === 'confirmed' ? null : (
                 <Button
                   type="button"
                   size="sm"
@@ -371,6 +432,22 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         </CardHeader>
         <CardContent className="grid gap-3">
           {findError !== null ? <FormError message={findError} /> : null}
+          {unreachable ? (
+            <div role="status" className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="flex-1">
+                Couldn't read the company's board just now, so nothing was checked.
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={find.isPending}
+                onClick={() => void runFind()}
+              >
+                Try again
+              </Button>
+            </div>
+          ) : null}
           <PostingStateBanner
             opp={opp}
             busy={find.isPending}

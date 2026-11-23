@@ -1,6 +1,6 @@
 # Network
 
-[Guide home](README.md) · Previous: [Discovery](discovery.md) · Next: [Settings](settings.md)
+[Guide home](README.md) · Previous: [Browser extension](browser-extension.md) · Next: [Settings](settings.md)
 
 Your network is the people who can tell you about a team or refer you in. Each of them is a
 contact, and Opportun maps each contact to a company, so each opportunity can show who you know
@@ -19,7 +19,8 @@ _Contacts imported from a LinkedIn data export, each mapped to a company._
 
 Open a contact to edit their details: current company, emails, LinkedIn profile URL, how well
 you know them (acquaintance, know well, close), tags and notes. The page also lists the
-referral asks you have made of them and their company history.
+referral asks you have made of them and their company history. The LinkedIn profile URL must
+be a `linkedin.com` address; Opportun stores it as a link and never opens it itself.
 
 ## Import your LinkedIn export
 
@@ -54,8 +55,13 @@ click.
 
 On an opportunity, the **Referrals** tab lists **Who could refer you**: your contacts at that
 company first, then people who used to work there. The `referral.rationale` AI task ranks them
-and writes a one-line reason for each. Opening the tab makes one AI call; the browser reuses
-the answer for about ten minutes before asking again.
+and writes a one-line reason for each. The first time you open the tab makes one AI call; the
+ranking is then kept, so opening it again (on another device, or after a reload) makes none. It is
+ranked again only when something it was built from changes: a contact that could match, the
+opportunity or its company, the ranking prompt, or the model. A ranked list says "Ranked by AI"
+with the date and time, and **Re-rank** next to it asks for a fresh ranking and replaces the kept
+one. If AI is unavailable (no key, or the task's budget is spent), the kept ranking is not shown,
+and **Re-rank** leaves it as it was.
 
 - **Ask** records that you asked that person. Opportun does not send anything: you write and
   send the message yourself.

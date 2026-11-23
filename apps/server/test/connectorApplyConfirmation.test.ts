@@ -2,13 +2,13 @@
 // https://github.com/bgoleno/opportun/issues/121; design Part A 5.2 and 6.2, tl's four rulings on
 // the issue). Every attempt is made through the real session routes (submissionFixtures.ts);
 // tokens are minted through POST /device-tokens.
+import { capturedPage } from '../src/lib/postingReconcile';
 import { and, eq } from 'drizzle-orm';
 import { strFromU8, unzipSync } from 'fflate';
 import type { FastifyInstance } from 'fastify';
 import { describe, expect, it } from 'vitest';
 import { activities, applicationSubmissions, auditLog, jobs, nextSteps } from '../src/db/schema';
 import { loggedUrl } from '../src/app';
-import { capturedPage } from '../src/jobs/postingReconcile';
 import { FOLLOWUP_MS, followUpSubmissions } from '../src/repos/submissionOutcome';
 import { useApi } from './api';
 import { captureLogs } from './helpers';

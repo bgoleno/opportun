@@ -10,6 +10,7 @@ import {
   createSafeFetch,
   OFFICIAL_API_URLS,
   FetchBlockedError,
+  RATE_KEY_SLOTS,
   isPageFetchProhibited,
   isPrivateAddress,
   isProhibitedHost,
@@ -106,6 +107,46 @@ describe('safeFetch', () => {
     expect((await fetch('https://careers.example.org/', ALLOW)).status).toBe(200);
   });
 
+  // A site's HostRule (#769) matches exactly what it says, on every hop; a string entry keeps its
+  // subdomains until the sites still written out move to the registry (step 6).
+  it("matches a site's exact rule on that host only, and a pattern on the whole host", async () => {
+    const exact = { allowHosts: [{ exact: 'boards-api.greenhouse.io' }] };
+    const h = harness(
+      { 'boards-api.greenhouse.io': [PUBLIC_IP], 'x.boards-api.greenhouse.io': [PUBLIC_IP] },
+      [ok()],
+    );
+    const fetch = createSafeFetch(h);
+    expect(await reason(fetch('https://x.boards-api.greenhouse.io/', exact))).toBe(
+      'host_not_allowed',
+    );
+    expect(await reason(fetch('https://boards-api.greenhouse.io.evil.example/', exact))).toBe(
+      'host_not_allowed',
+    );
+    expect((await fetch('https://BOARDS-API.greenhouse.io./v1/boards/a/jobs', exact)).status).toBe(
+      200,
+    );
+    const pattern = {
+      allowHosts: [
+        {
+          pattern: /^[a-z0-9]+\.wd[0-9]{1,3}\.myworkdayjobs\.com$/,
+          example: 'a.wd1.myworkdayjobs.com',
+        },
+      ],
+    };
+    expect(await reason(fetch('https://a.wd1.myworkdayjobs.com.evil.example/', pattern))).toBe(
+      'host_not_allowed',
+    );
+    expect(await reason(fetch('https://evil-myworkdayjobs.com/', pattern))).toBe(
+      'host_not_allowed',
+    );
+    const hop = harness({ 'boards-api.greenhouse.io': [PUBLIC_IP] }, [
+      { status: 307, headers: { location: 'https://x.boards-api.greenhouse.io/' }, body: body() },
+    ]);
+    expect(await reason(createSafeFetch(hop)('https://boards-api.greenhouse.io/', exact))).toBe(
+      'host_not_allowed',
+    );
+  });
+
   it('never fetches linkedin.com, even when a caller allowlists it', async () => {
     const h = harness({ 'www.linkedin.com': [PUBLIC_IP] }, [ok()]);
     const opts = { allowHosts: ['linkedin.com', 'www.linkedin.com'] };
@@ -168,6 +209,35 @@ describe('safeFetch', () => {
     expect(await reason(createSafeFetch(offList)('https://jobs.example.com/', ALLOW))).toBe(
       'host_not_allowed',
     );
+  });
+
+  it('a hostname longer than DNS allows is refused before it is fetched', async () => {
+    // 265 characters, under an allowed domain: DNS names stop at 253.
+    const allow = { allowHosts: ['example.com'] };
+    const long = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(60)}.example.com`;
+    expect(long.length).toBeGreaterThan(253);
+    const start = harness({ [long]: [PUBLIC_IP] }, [ok()]);
+    expect(await reason(createSafeFetch(start)(`https://${long}/`, allow))).toBe('scheme');
+    expect(start.requests).toEqual([]);
+    const hop = harness({ 'jobs.example.com': [PUBLIC_IP], [long]: [PUBLIC_IP] }, [
+      { status: 307, headers: { location: `https://${long}/next` }, body: body() },
+      ok(),
+    ]);
+    expect(await reason(createSafeFetch(hop)('https://jobs.example.com/', allow))).toBe('scheme');
+    expect(hop.requests.map((r) => r.url.hostname)).toEqual(['jobs.example.com']);
+    // At the limit, it is still fetched.
+    const at = `${'a'.repeat(63)}.${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(49)}.example.com`;
+    expect(at.length).toBe(253);
+    const ok253 = harness({ [at]: [PUBLIC_IP] }, [ok()]);
+    expect((await createSafeFetch(ok253)(`https://${at}/`, allow)).status).toBe(200);
+  });
+
+  it('trailing dots are stripped from a long hostname', () => {
+    const started = performance.now();
+    expect(isProhibitedHost(`a${'.'.repeat(100_000)}x`)).toBe(false);
+    expect(isProhibitedHost(`linkedin.com${'.'.repeat(100_000)}`)).toBe(true);
+    expect(isPageFetchProhibited(`www.indeed.com${'.'.repeat(100_000)}`)).toBe(true);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 
   it('follows up to 3 redirects (relative ones included) and blocks the 4th', async () => {
@@ -346,8 +416,9 @@ describe('safeFetch per-host buckets (#524)', () => {
     };
     const fetch = createSafeFetch(h);
     await fetch('https://jobs.example.com/1', ALLOW);
+    // Its own reason (#617): the deadline passed while waiting for a local token, no request sent.
     expect(await reason(fetch('https://jobs.example.com/2', { ...ALLOW, timeoutMs: 20 }))).toBe(
-      'timeout',
+      'rate_wait',
     );
     await fetch('https://jobs.example.com/3', ALLOW);
     // The aborted request reserved 1000..2000 ms; it gave that back, so the third waits 1000, not 2000.
@@ -388,7 +459,7 @@ describe('safeFetch per-host buckets (#524)', () => {
     await settle();
     const b = fetch('https://jobs.example.com/b', ALLOW); // 2000..3000, reserved after a
     await settle();
-    expect(await reason(a)).toBe('timeout');
+    expect(await reason(a)).toBe('rate_wait');
     const c = fetch('https://jobs.example.com/c', ALLOW);
     await settle();
     const d = fetch('https://jobs.example.com/d', ALLOW);
@@ -433,6 +504,99 @@ describe('safeFetch per-host buckets (#524)', () => {
     clock += 5000;
     await fetch('https://c.example.org/', ALLOW);
     expect(fetch.bucketCount()).toBe(1);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/617 (sec's audit): the per-host bucket is shared by
+// the whole process, so one user's burst could push the next free slot past another user's
+// deadline, and that fetch timed out before it sent anything.
+describe('safeFetch per-host buckets, shared fairly (#617)', () => {
+  /** A fake clock: sleeps wait for advanceTo, requests record when they go out. */
+  function clocked() {
+    let clock = 0;
+    const waiting: { until: number; resolve: () => void }[] = [];
+    const sent: { at: number; path: string }[] = [];
+    const h = harness({ 'boards-api.greenhouse.io': [PUBLIC_IP] }, []);
+    h.now = () => clock;
+    h.sleep = (ms) => {
+      h.sleeps.push(ms);
+      return new Promise<void>((resolve) => waiting.push({ until: clock + ms, resolve }));
+    };
+    h.request = async (target) => {
+      sent.push({ at: clock, path: target.url.pathname });
+      return ok();
+    };
+    const settle = () => new Promise((r) => setTimeout(r, 0));
+    const advanceTo = async (t: number) => {
+      clock = t;
+      for (const w of waiting.splice(0)) {
+        if (w.until <= t) w.resolve();
+        else waiting.push(w);
+      }
+      for (let i = 0; i < 5; i++) await settle();
+    };
+    return { h, sent, settle, advanceTo, now: () => clock };
+  }
+  const GH = { allowHosts: ['boards-api.greenhouse.io'] };
+
+  it("one user's burst to a host does not hold another user's request back past a few slots", async () => {
+    const { h, sent, settle, advanceTo } = clocked();
+    const fetch = createSafeFetch(h);
+    // User a: 30 requests at once (handlers that each call the board up to 3 times).
+    const burst = Array.from({ length: 30 }, (_, i) =>
+      fetch(`https://boards-api.greenhouse.io/a/${i}`, { ...GH, rateKey: 'user-a' }),
+    );
+    await settle();
+    // User b's background fetch, with the default 15 s deadline.
+    const b = fetch('https://boards-api.greenhouse.io/b/0', { ...GH, rateKey: 'user-b' });
+    await settle();
+    for (let t = 1000; t <= 31_000; t += 1000) await advanceTo(t);
+    await b;
+    await Promise.all(burst);
+    const bSent = sent.find((s) => s.path === '/b/0')!;
+    // On main b waited behind all 30 of a's: 30 s, past its deadline. Now it waits behind a's
+    // slots ahead (RATE_KEY_SLOTS) and the one a sent at once.
+    expect(bSent.at).toBeLessThanOrEqual((RATE_KEY_SLOTS + 1) * 1000);
+    // The host still sees one request a second.
+    const times = sent.map((s) => s.at).sort((x, y) => x - y);
+    times.slice(1).forEach((t, i) => expect(t - times.at(i)!).toBeGreaterThanOrEqual(1000));
+    expect(sent).toHaveLength(31);
+  });
+
+  it('a request with no rate key shares one key with the others that have none', async () => {
+    const { h, sent, settle, advanceTo } = clocked();
+    const fetch = createSafeFetch(h);
+    const unkeyed = Array.from({ length: 10 }, (_, i) =>
+      fetch(`https://boards-api.greenhouse.io/x/${i}`, GH),
+    );
+    await settle();
+    const b = fetch('https://boards-api.greenhouse.io/b/0', { ...GH, rateKey: 'user-b' });
+    await settle();
+    for (let t = 1000; t <= 11_000; t += 1000) await advanceTo(t);
+    await Promise.all([b, ...unkeyed]);
+    expect(sent.find((s) => s.path === '/b/0')!.at).toBeLessThanOrEqual(
+      (RATE_KEY_SLOTS + 1) * 1000,
+    );
+  });
+
+  it("a request whose deadline passes while it waits behind its own key's slots ends rate_wait, sending nothing", async () => {
+    const { h, sent, settle, advanceTo } = clocked();
+    const fetch = createSafeFetch(h);
+    const held = Array.from({ length: RATE_KEY_SLOTS + 1 }, (_, i) =>
+      fetch(`https://boards-api.greenhouse.io/a/${i}`, { ...GH, rateKey: 'user-a' }),
+    );
+    await settle();
+    const late = fetch('https://boards-api.greenhouse.io/a/late', {
+      ...GH,
+      rateKey: 'user-a',
+      timeoutMs: 20,
+    });
+    expect(await reason(late)).toBe('rate_wait');
+    expect(sent.map((s) => s.path)).not.toContain('/a/late');
+    // Let the held ones go out and settle here, so none is left pending past this test (tl on #667).
+    for (let t = 1000; t <= RATE_KEY_SLOTS * 1000; t += 1000) await advanceTo(t);
+    await Promise.all(held);
+    expect(sent.map((s) => s.path).sort()).toEqual(held.map((_, i) => `/a/${i}`).sort());
   });
 });
 
@@ -798,8 +962,11 @@ describe('allowlists and linkedin.com (grep)', () => {
         allowlistContents.push(m[1] ?? '');
       }
     }
-    // The scan must see the real allowlist, or it proves nothing.
-    expect(allowlists.some((l) => l.includes('safeFetch.ts') && l.includes('greenhouse'))).toBe(
+    // The scan must see the real allowlist, or it proves nothing. Its hand-written part, that is:
+    // the registered sites' fetch hosts are not literals here (#769), and test/siteContract.test.ts
+    // checks every one of those against the prohibited hosts, and the whole built list against
+    // one written out in that test.
+    expect(allowlists.some((l) => l.includes('safeFetch.ts') && l.includes('api.lever.co'))).toBe(
       true,
     );
     for (const content of allowlistContents)

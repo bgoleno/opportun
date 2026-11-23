@@ -13,6 +13,7 @@ import type { Db } from '../db/client';
 import { mailFilterRules, users } from '../db/schema';
 import { HttpError } from '../lib/errors';
 import type { Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { readUserSetting, writeUserSetting } from './userSettings';
 
 export type MailFilterRuleRow = typeof mailFilterRules.$inferSelect;
@@ -33,7 +34,7 @@ export async function listRules(db: Db, ctx: UserCtx): Promise<MailFilterRuleRow
   return await db
     .select()
     .from(mailFilterRules)
-    .where(eq(mailFilterRules.userId, ctx.userId))
+    .where(ownedBy(mailFilterRules.userId, ctx))
     .orderBy(asc(mailFilterRules.createdAt), asc(mailFilterRules.id))
     .all();
 }
@@ -42,9 +43,12 @@ async function getOwned(db: Db, ctx: UserCtx, id: string): Promise<MailFilterRul
   const row = await db
     .select()
     .from(mailFilterRules)
-    .where(and(eq(mailFilterRules.userId, ctx.userId), eq(mailFilterRules.id, id)))
+    .where(and(ownedBy(mailFilterRules.userId, ctx), eq(mailFilterRules.id, id)))
     .get();
-  if (row === undefined) throw new HttpError(404, 'not_found', 'No such mail filter rule');
+  if (row === undefined)
+    throw new HttpError(404, 'not_found', 'No such mail filter rule', undefined, {
+      userFacing: true,
+    });
   return row;
 }
 
@@ -73,7 +77,13 @@ export async function createRule(
 ): Promise<MailFilterRuleRow> {
   const pattern = input.pattern.trim().toLowerCase();
   if (parseMailPattern(pattern) === null) {
-    throw new HttpError(400, 'invalid_pattern', `Not a sender pattern: ${input.pattern}`);
+    throw new HttpError(
+      400,
+      'invalid_pattern',
+      `Not a sender pattern: ${input.pattern}`,
+      undefined,
+      { userFacing: true },
+    );
   }
   const now = Date.now();
   const row = {
@@ -95,16 +105,22 @@ export async function createRule(
       .from(mailFilterRules)
       .where(
         and(
-          eq(mailFilterRules.userId, ctx.userId),
+          ownedBy(mailFilterRules.userId, ctx),
           eq(mailFilterRules.effect, input.effect),
           eq(mailFilterRules.pattern, pattern),
         ),
       )
       .get();
     if (existing === undefined) throw err;
-    throw new HttpError(409, 'duplicate', `Already a ${input.effect} rule: ${pattern}`, {
-      existingId: existing.id,
-    });
+    throw new HttpError(
+      409,
+      'duplicate',
+      `Already a ${input.effect} rule: ${pattern}`,
+      {
+        existingId: existing.id,
+      },
+      { userFacing: true },
+    );
   }
   return row;
 }
@@ -129,7 +145,7 @@ export async function updateRule(
   await db
     .update(mailFilterRules)
     .set(next)
-    .where(and(eq(mailFilterRules.userId, ctx.userId), eq(mailFilterRules.id, id)))
+    .where(and(ownedBy(mailFilterRules.userId, ctx), eq(mailFilterRules.id, id)))
     .run();
   return { ...current, ...next };
 }
@@ -138,7 +154,7 @@ export async function deleteRule(db: Db, ctx: UserCtx, id: string): Promise<void
   await getOwned(db, ctx, id);
   await db
     .delete(mailFilterRules)
-    .where(and(eq(mailFilterRules.userId, ctx.userId), eq(mailFilterRules.id, id)))
+    .where(and(ownedBy(mailFilterRules.userId, ctx), eq(mailFilterRules.id, id)))
     .run();
 }
 
@@ -156,7 +172,7 @@ export async function accountAddress(db: Db, ctx: UserCtx): Promise<string | nul
   const row = await db
     .select({ email: users.email })
     .from(users)
-    .where(eq(users.id, ctx.userId))
+    .where(ownedBy(users.id, ctx))
     .get();
   return row?.email.trim().toLowerCase() ?? null;
 }

@@ -1,6 +1,12 @@
 // The Network section's contacts (FR-C1) and referrals (FR-C3, C4): queries and mutations.
 import type { ReferralStatus } from '@opportun/core';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  type QueryClient,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { qk, type Page } from '@/lib/opportunities';
 
@@ -67,15 +73,20 @@ export interface ReferralCandidate {
 export interface ReferralCandidates extends Page<ReferralCandidate> {
   ranked: boolean;
   aiUnavailable: string | null;
+  /** When the ranking shown was made: a kept one keeps its time (#590). Null when unranked. */
+  rankedAt?: number | null;
 }
 
 export interface OpportunityReferral {
   activityId: string;
   contactId: string;
+  /** The contact's current name, or the one the ask recorded once they were deleted (#694). */
   name: string;
   status: ReferralStatus | null;
   note: string | null;
   occurredAt: number;
+  /** The contact was deleted: there is nobody to link to (#694). */
+  removed: boolean;
 }
 
 /** The server's own cap (routes/common.ts MAX_LIMIT): the most a page can ever hold. */
@@ -117,12 +128,26 @@ export function useContact(id: string) {
   });
 }
 
+/**
+ * After a contact is added, changed or deleted: the network list, and everything on an
+ * opportunity's Referrals tab built from contacts (#651). The candidates are kept ten minutes
+ * (useReferralCandidates), so without this the tab showed the contacts as they were. The server
+ * keys its kept ranking on the candidate set, so a changed set is ranked afresh on the next read.
+ */
+export function contactsChanged(qc: QueryClient) {
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: ck.network }),
+    qc.invalidateQueries({ queryKey: ['referral-candidates'] }),
+    qc.invalidateQueries({ queryKey: ['referrals'] }),
+  ]);
+}
+
 export function useCreateContact() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (body: ContactInput & { name: string }) =>
       api<Contact>('/network', { method: 'POST', body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ck.network }),
+    onSuccess: () => contactsChanged(qc),
   });
 }
 
@@ -131,7 +156,7 @@ export function useUpdateContact(id: string) {
   return useMutation({
     mutationFn: (body: ContactInput) =>
       api<Contact>(`/network/${enc(id)}`, { method: 'PATCH', body }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ck.network }),
+    onSuccess: () => contactsChanged(qc),
   });
 }
 
@@ -139,7 +164,7 @@ export function useDeleteContact(id: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: () => api<null>(`/network/${enc(id)}`, { method: 'DELETE' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ck.network }),
+    onSuccess: () => contactsChanged(qc),
   });
 }
 
@@ -147,8 +172,19 @@ export function useReferralCandidates(oppId: string) {
   return useQuery({
     queryKey: ck.candidates(oppId),
     queryFn: () => api<ReferralCandidates>(`/opportunities/${enc(oppId)}/referral-candidates`),
-    // Ranking calls the model: keep the answer for the session unless something changes.
+    // The server keeps the ranking (#590), so a read costs no model call while nothing changed;
+    // this only spares the request within a session.
     staleTime: 10 * 60_000,
+  });
+}
+
+/** Re-rank (#590): a fresh ranking, one model call, kept in place of the one before. */
+export function useReRankReferrals(oppId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      api<ReferralCandidates>(`/opportunities/${enc(oppId)}/referral-candidates?refresh=true`),
+    onSuccess: (data) => qc.setQueryData(ck.candidates(oppId), data),
   });
 }
 

@@ -8,6 +8,7 @@ import { and, asc, desc, eq, isNull, like, or, type SQL } from 'drizzle-orm';
 import { prompts, roleTargets, settings } from '../db/schema';
 import { notFound } from '../lib/errors';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { lockScope, runCount, withTransaction } from '../db/client';
 import { racePoint } from '../lib/racePoints';
 
@@ -32,7 +33,7 @@ export interface PromptVersion {
 
 /** Rows the caller may read: system defaults plus their own versions. */
 function visible(ctx: UserCtx): SQL {
-  return or(isNull(prompts.userId), eq(prompts.userId, ctx.userId)) as SQL;
+  return or(isNull(prompts.userId), ownedBy(prompts.userId, ctx)) as SQL;
 }
 
 async function visibleRows(exec: Exec, ctx: UserCtx, taskKey?: string): Promise<PromptRow[]> {
@@ -191,7 +192,7 @@ export async function activatePrompt(db: Db, ctx: UserCtx, id: string): Promise<
       .set({ isActive: false, updatedAt: now })
       .where(
         and(
-          eq(prompts.userId, ctx.userId),
+          ownedBy(prompts.userId, ctx),
           eq(prompts.taskKey, target.taskKey),
           eq(prompts.isActive, true),
         ),
@@ -202,7 +203,7 @@ export async function activatePrompt(db: Db, ctx: UserCtx, id: string): Promise<
       await tx
         .update(prompts)
         .set({ isActive: true, proposed: false, updatedAt: now })
-        .where(and(eq(prompts.id, target.id), eq(prompts.userId, ctx.userId)))
+        .where(and(eq(prompts.id, target.id), ownedBy(prompts.userId, ctx)))
         .run();
     }
     const view = await activeSync(tx, ctx, target.taskKey);
@@ -218,7 +219,7 @@ async function ownProposal(exec: Exec, ctx: UserCtx, id: string): Promise<Prompt
   const row = await exec
     .select()
     .from(prompts)
-    .where(and(eq(prompts.id, id), eq(prompts.userId, ctx.userId), eq(prompts.proposed, true)))
+    .where(and(eq(prompts.id, id), ownedBy(prompts.userId, ctx), eq(prompts.proposed, true)))
     .get();
   if (row === undefined) throw notFound();
   return row;
@@ -244,7 +245,7 @@ async function discardPendingProposals(db: Db, ctx: UserCtx, taskKey: string): P
     .delete(prompts)
     .where(
       and(
-        eq(prompts.userId, ctx.userId),
+        ownedBy(prompts.userId, ctx),
         eq(prompts.taskKey, taskKey),
         eq(prompts.proposed, true),
         eq(prompts.isActive, false),
@@ -285,7 +286,7 @@ export async function discardProposal(db: Db, ctx: UserCtx, id: string): Promise
     await ownProposal(tx, ctx, id);
     await tx
       .delete(prompts)
-      .where(and(eq(prompts.id, id), eq(prompts.userId, ctx.userId), eq(prompts.proposed, true)))
+      .where(and(eq(prompts.id, id), ownedBy(prompts.userId, ctx), eq(prompts.proposed, true)))
       .run();
     await dropProposalPointer(tx, ctx, id);
   });
@@ -308,7 +309,7 @@ export async function roleTargetOfProposal(
     await exec
       .select({ value: settings.value })
       .from(settings)
-      .where(and(eq(settings.key, proposalPointerKey(promptId)), eq(settings.userId, ctx.userId)))
+      .where(and(eq(settings.key, proposalPointerKey(promptId)), ownedBy(settings.userId, ctx)))
       .get()
   )?.value;
   return typeof value === 'string' ? value : null;
@@ -317,7 +318,7 @@ export async function roleTargetOfProposal(
 async function dropProposalPointer(exec: Exec, ctx: UserCtx, promptId: string): Promise<void> {
   await exec
     .delete(settings)
-    .where(and(eq(settings.key, proposalPointerKey(promptId)), eq(settings.userId, ctx.userId)))
+    .where(and(eq(settings.key, proposalPointerKey(promptId)), ownedBy(settings.userId, ctx)))
     .run();
 }
 
@@ -331,7 +332,7 @@ export async function roleTargetProposal(
     await exec
       .select({ key: settings.key, value: settings.value })
       .from(settings)
-      .where(and(eq(settings.userId, ctx.userId), like(settings.key, 'discovery_proposal:%')))
+      .where(and(ownedBy(settings.userId, ctx), like(settings.key, 'discovery_proposal:%')))
       .all()
   ).filter((p) => p.value === roleTargetId);
   for (const p of pointers) {
@@ -355,13 +356,13 @@ export async function linkProposalToRoleTarget(
   await exec
     .update(prompts)
     .set({ proposed: false, updatedAt: now })
-    .where(and(eq(prompts.id, promptId), eq(prompts.userId, ctx.userId)))
+    .where(and(eq(prompts.id, promptId), ownedBy(prompts.userId, ctx)))
     .run();
   const changes = await runCount(
     exec
       .update(roleTargets)
       .set({ discoveryPromptId: promptId, updatedAt: now })
-      .where(and(eq(roleTargets.userId, ctx.userId), eq(roleTargets.id, roleTargetId))),
+      .where(and(ownedBy(roleTargets.userId, ctx), eq(roleTargets.id, roleTargetId))),
   );
   if (changes === 0) throw notFound();
   await dropProposalPointer(exec, ctx, promptId);

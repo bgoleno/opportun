@@ -1,6 +1,7 @@
 // Every writer of a posting's identity, for a Greenhouse job embedded on a company's own careers
 // page (https://github.com/bgoleno/opportun/issues/398, criteria 2, 3 and 6, with tl's note on
 // board reads). Every host here is synthetic; the only "requests" are to a counting fake.
+import { destinationRefusal } from '../src/lib/submissionDestination';
 import type { AtsJobRef, NormalizedPosting } from '@opportun/core';
 import { eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -10,7 +11,12 @@ import {
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
 import type { Db } from '../src/db/client';
-import { communications, opportunities, resumes } from '../src/db/schema';
+import {
+  activities as activitiesTable,
+  communications,
+  opportunities,
+  resumes,
+} from '../src/db/schema';
 import { backfillAtsJobRefs } from '../src/jobs/atsJobRefBackfill';
 import { reconcilePosting } from '../src/jobs/postingReconcile';
 import { attachPosting } from '../src/lib/postingAttach';
@@ -26,7 +32,6 @@ import {
   updateOpportunity,
 } from '../src/repos/opportunities';
 import { insertResume } from '../src/repos/resumes';
-import { destinationRefusal } from '../src/repos/submissionReview';
 import { createSubmissionDraft } from '../src/repos/submissions';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
@@ -210,24 +215,41 @@ describe("Find posting resolves the opportunity's own careers link (tl on #414, 
     expect(res.json().outcome).toBe('identified');
     expect(board.reads).toBe(0);
     expect(await refOf(app, a, id)).toMatchObject({ org: 'examplecorp', url: BOARD_PAGE });
-    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd).toBe(
-      'My own notes about this role.',
-    );
+    // #756 (tl): the API's answer now confirms the posting too, as the user's own.
+    expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+      descriptionMd: 'My own notes about this role.',
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
   });
 
-  it('a description the user wrote and no board holds the job: 409 as before, and no identity', async () => {
+  // #756: no board holds the job, so the board is read (unconfirmed) and nothing is found; with the
+  // posting confirmed, the refusal stands as before.
+  it('a description the user wrote and no board holds the job: no identity, and once confirmed still none, the description kept (#812)', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a);
     await updateOpportunity(app.db, ctxOf(a), id, {
       postingUrl: CAREERS,
       descriptionMd: 'My own notes about this role.',
     });
-    const res = await a.request({
-      method: 'POST',
-      url: `/api/v1/opportunities/${id}/find-posting`,
-    });
-    expect(res.statusCode).toBe(409);
+    const find = () =>
+      a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    const res = await find();
+    expect(res.statusCode, res.body).toBe(200);
     expect(await refOf(app, a, id)).toBeNull();
+    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd).toBe(
+      'My own notes about this role.',
+    );
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: null,
+    });
+    // #812 (tl): a Refetch on it re-checks the board and keeps the description; nothing found.
+    expect((await find()).statusCode).toBe(200);
+    expect(await refOf(app, a, id)).toBeNull();
+    expect((await getOpportunity(app.db, ctxOf(a), id)).descriptionMd).toBe(
+      'My own notes about this role.',
+    );
   });
 
   it('the same careers link arriving only in mail gets no identity, and no request (criterion 6)', async () => {
@@ -691,5 +713,100 @@ describe('the handoff destination (criterion 2)', () => {
     const sub = { atsKind: 'ats_greenhouse' as const, atsExternalId: JID, atsRef: 'examplecorp' };
     expect(destinationRefusal(BOARD_PAGE, sub)).toBeNull();
     expect(destinationRefusal(CAREERS, sub)).toBe('not_ats_board');
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/813 (qa on #804): Find posting identifying a posting
+// through its own gh_jid link wrote no timeline entry, where every other way a posting is found
+// writes one (postingAttach's "Job posting attached"). It writes the same kind now, saying how.
+describe('Find posting by the own gh_jid link writes a timeline entry (#813)', () => {
+  const linkEntries = async (app: Awaited<ReturnType<typeof boot>>['app'], id: string) =>
+    (
+      await app.db
+        .select({
+          kind: activitiesTable.kind,
+          title: activitiesTable.title,
+          bodyMd: activitiesTable.bodyMd,
+          externalUrl: activitiesTable.externalUrl,
+        })
+        .from(activitiesTable)
+        .where(eq(activitiesTable.opportunityId, id))
+        .all()
+    ).filter((a) => a.kind === 'link');
+
+  it('identifying and confirming a posting the user described says so, and that the description was kept', async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ examplecorp: [JID] });
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, {
+      postingUrl: CAREERS,
+      descriptionMd: 'My own notes about this role.',
+    });
+    embeddedBoardServes([]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.json().outcome).toBe('identified');
+    expect(await linkEntries(app, id)).toEqual([
+      {
+        kind: 'link',
+        title: 'Job posting identified',
+        bodyMd:
+          'Recognised on Greenhouse, by the job its posting link names. Your own description was kept.',
+        externalUrl: BOARD_PAGE,
+      },
+    ]);
+  });
+
+  // tl on #847: the third way Find posting identifies by the own link, with no description of the
+  // user's, when no board read answered the careers link.
+  it('identifying a posting with no description, when no board read answered, says so too', async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ examplecorp: [JID] });
+    const id = await seed(app, a, { title: 'Staff Platform Engineer' });
+    await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
+    embeddedBoardServes([]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.json().outcome).toBe('identified');
+    expect(await linkEntries(app, id)).toEqual([
+      {
+        kind: 'link',
+        title: 'Job posting identified',
+        bodyMd: 'Recognised on Greenhouse, by the job its posting link names.',
+        externalUrl: BOARD_PAGE,
+      },
+    ]);
+  });
+
+  it('identifying a posting already confirmed says so too', async () => {
+    const { app, a } = await boot();
+    api = greenhouseApi({ examplecorp: [JID] });
+    const id = await seed(app, a);
+    await updateOpportunity(app.db, ctxOf(a), id, {
+      postingUrl: CAREERS,
+      descriptionMd: 'My own notes about this role.',
+    });
+    await setPostingState(app.db, ctxOf(a), id, {
+      postingState: 'confirmed',
+      postingStateDetail: 'user_confirmed',
+    });
+    embeddedBoardServes([]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.json().outcome).toBe('identified');
+    expect(await linkEntries(app, id)).toEqual([
+      {
+        kind: 'link',
+        title: 'Job posting identified',
+        bodyMd: 'Recognised on Greenhouse, by the job its posting link names.',
+        externalUrl: BOARD_PAGE,
+      },
+    ]);
   });
 });

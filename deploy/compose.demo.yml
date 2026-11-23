@@ -76,3 +76,8 @@ services:
       # file-vs-inline resolution once both reach the container.
       OPPORTUN_DEMO_AI_KEY: ${OPPORTUN_DEMO_AI_KEY:-}
       OPPORTUN_DEMO_AI_KEY_FILE: ${OPPORTUN_DEMO_AI_KEY_FILE:-}
+      # The shared accounts' limits (docs/demo-deployment.md, "Device tokens and assisted apply on
+      # the demo"): optional, so `:-`, never `:?`. Empty reads as unset, the default (20 tokens;
+      # on), as test/composeSettings.test.ts checks.
+      OPPORTUN_DEMO_TOKEN_CAP: ${OPPORTUN_DEMO_TOKEN_CAP:-}
+      OPPORTUN_DEMO_SHARED_ASSISTED_APPLY: ${OPPORTUN_DEMO_SHARED_ASSISTED_APPLY:-}

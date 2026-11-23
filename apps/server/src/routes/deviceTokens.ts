@@ -9,6 +9,7 @@ import { demoTokenCap, submissionsEnabled } from '../config';
 import { isSharedDemoAccount } from '../lib/demoAccounts';
 import { sharedAssistedApplyOff } from '../lib/demoOwnData';
 import { demoActorOf } from '../plugins/session';
+import { withTransaction } from '../db/client';
 import { audit } from '../lib/audit';
 import { HttpError } from '../lib/errors';
 import {
@@ -20,6 +21,7 @@ import {
 import { racePoint } from '../lib/racePoints';
 import { confirmedPasswordHash, reauthLimits } from '../lib/reauth';
 import { requireUser } from '../repos/base';
+import { ErrorResponse } from './common';
 
 const Meta = z.object({
   id: z.string(),
@@ -38,7 +40,6 @@ const CreateBody = z.object({
   /** The current password: minting a credential needs more than the session cookie. */
   password: z.string().min(1).max(1024),
 });
-const ErrorResponse = z.object({ error: z.object({ code: z.string() }) });
 const IdParams = z.object({ id: z.string().min(1).max(64) });
 /** A label only: renaming grants nothing, so it needs no password (design D6). */
 const RenameBody = z.object({ name: z.string().trim().min(1).max(100) });
@@ -74,7 +75,13 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
         req.body.scopes.includes('apply:assist') &&
         (!submissionsEnabled(app.config) || sharedAssistedApplyOff(app.config, ctx.userId))
       ) {
-        throw new HttpError(422, 'scope_unavailable', 'Assisted apply is not available here.');
+        throw new HttpError(
+          422,
+          'scope_unavailable',
+          'Assisted apply is not available here.',
+          undefined,
+          { userFacing: true },
+        );
       }
       const verified = await confirmedPasswordHash(req, reply, {
         userId: ctx.userId,
@@ -102,13 +109,16 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
           ...(sharedAccount
             ? { ...(cap > 0 ? { maxActive: cap } : {}), ip: req.ip, actor: demoActorOf(req) }
             : {}),
+          // With the token, in its transaction (#802): a failed write creates nothing.
+          onCreated: async (tx, created) => {
+            await audit(tx, 'device_token.created', {
+              userId: ctx.userId,
+              ip: req.ip,
+              detail: { id: created.id, name: created.name, scopes: created.scopes },
+            });
+          },
         },
       );
-      await audit(db, 'device_token.created', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { id: meta.id, name: meta.name, scopes: meta.scopes },
-      });
       // The only time the token leaves the server; it is stored as a SHA-256 hash.
       return reply.code(201).send({ ...meta, token });
     },
@@ -120,15 +130,17 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
     async (req) => {
       const ctx = requireUser(req);
       const before = (await listDeviceTokens(db, ctx)).find((t) => t.id === req.params.id);
-      const renamed = await renameDeviceToken(db, ctx, req.params.id, req.body.name);
       // Renaming is how a token someone wants to keep is made to look unremarkable in the
-      // list, so it belongs in the log beside creation and revocation.
-      await audit(db, 'device_token.renamed', {
-        userId: ctx.userId,
-        ip: req.ip,
-        detail: { id: renamed.id, from: before?.name, to: renamed.name },
+      // list, so it belongs in the log beside creation and revocation: in one transaction (#802).
+      return await withTransaction(db, async (tx) => {
+        const renamed = await renameDeviceToken(tx, ctx, req.params.id, req.body.name);
+        await audit(tx, 'device_token.renamed', {
+          userId: ctx.userId,
+          ip: req.ip,
+          detail: { id: renamed.id, from: before?.name, to: renamed.name },
+        });
+        return renamed;
       });
-      return renamed;
     },
   );
 
@@ -137,15 +149,15 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
     { schema: { params: IdParams, response: { 204: z.null() } } },
     async (req, reply) => {
       const ctx = requireUser(req);
-      const before = (await listDeviceTokens(db, ctx)).find((t) => t.id === req.params.id);
-      const revoked = await revokeDeviceToken(db, ctx, req.params.id);
-      if (before?.revokedAt === null) {
+      // Recorded by the call that revoked it, after the revocation has committed (#802, sec): a
+      // second revoke of a revoked token records nothing, and a failed write leaves it revoked.
+      await revokeDeviceToken(db, ctx, req.params.id, async (revoked) => {
         await audit(db, 'device_token.revoked', {
           userId: ctx.userId,
           ip: req.ip,
           detail: { id: revoked.id, name: revoked.name },
         });
-      }
+      });
       return reply.code(204).send(null);
     },
   );

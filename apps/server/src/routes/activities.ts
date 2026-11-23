@@ -98,6 +98,8 @@ const ReferralItem = z.object({
   status: z.enum(REFERRAL_STATUSES).nullable(),
   note: z.string().nullable(),
   occurredAt: z.number().int(),
+  /** Its contact was deleted (#694): `name` is the recorded one. */
+  removed: z.boolean(),
 });
 
 const stepFields = {
