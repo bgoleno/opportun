@@ -189,6 +189,44 @@ test('device token: one whose answer is lost is listed, and can be revoked', asy
   await expect(page.getByText(/its value was not shown here/)).toBeHidden();
 });
 
+// qa on https://github.com/bgoleno/opportun/pull/918: the browser's own close event of the dialog reads
+// the list again, and over a network the read before it is still out.
+test('device token: a retry that works leaves nothing said, with a list that is slow to read', async ({
+  page,
+}) => {
+  await registerUser(page);
+  let first = true;
+  await page.route('**/api/v1/device-tokens', async (route) => {
+    if (route.request().method() === 'GET') {
+      const answer = await route.fetch();
+      await new Promise((r) => setTimeout(r, 300));
+      // The page may have cancelled it meanwhile.
+      return route.fulfill({ response: answer }).catch(() => undefined);
+    }
+    if (!first) return route.continue();
+    first = false;
+    await route.abort('connectionrefused');
+  });
+  await page.goto('/settings/integrations');
+  await expect(page.getByText('No device tokens yet.')).toBeVisible();
+  await page.getByRole('button', { name: 'Create token' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Create a device token' });
+  await dialog.getByLabel('Name').fill('Second MacBook');
+  await dialog.getByLabel('Current password').fill(PASSWORD);
+  await dialog.getByRole('button', { name: 'Create' }).click();
+  await expect(
+    dialog.getByText(/^Could not confirm that "Second MacBook" was created/),
+  ).toBeVisible();
+  await dialog.getByRole('button', { name: 'Create' }).click();
+  await page
+    .getByRole('dialog', { name: 'Copy your device token' })
+    .getByRole('button', { name: 'I saved it' })
+    .click();
+  await expect(page.getByRole('listitem', { name: 'Second MacBook' })).toHaveCount(1);
+  await expect(page.getByText(/^Could not confirm that/)).toHaveCount(0);
+  await expect(page.getByText('Not shown here')).toHaveCount(0);
+});
+
 test('capture: a LinkedIn profile posted by the extension becomes a contact (FR-C5)', async ({
   page,
   playwright,
