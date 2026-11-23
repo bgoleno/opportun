@@ -1,7 +1,7 @@
 import type { CommChannel } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { ArrowDownWideNarrow, ArrowUpWideNarrow, RefreshCw } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { FormError } from '@/components/FormError';
 import { PageHeader } from '@/components/PageHeader';
@@ -14,17 +14,20 @@ import { errorMessage } from '@/lib/api';
 import { formatDateTime } from '@/lib/opportunities';
 import {
   channelLabel,
+  filterKey,
   useBulkTriage,
   useGmailStatus,
   useGmailSyncRefresh,
   useGmailSync,
   INBOX_PAGE,
+  tooLongFilters,
   useInbox,
   type InboxFilters,
   type InboxTab,
 } from './api';
 import { BlockedRow, STORED_ON_BLOCK } from './BlockedRow';
 import { InboxRow, type RowMode } from './InboxRow';
+import { INBOX_FILTER_MAX } from './limits';
 import type { RejectionReason } from './RejectForm';
 
 const TABS: { tab: InboxTab; label: string; mode: RowMode; empty: string; note?: string }[] = [
@@ -139,6 +142,7 @@ function FilterBar({
   sender,
   channel,
   order,
+  tooLong,
   onQ,
   onSender,
   onChannel,
@@ -148,6 +152,8 @@ function FilterBar({
   sender: string;
   channel: CommChannel | '';
   order: 'newest' | 'oldest';
+  /** The filters refused as too long (#894). */
+  tooLong: readonly ('keyword' | 'sender')[];
   onQ: (v: string) => void;
   onSender: (v: string) => void;
   onChannel: (v: CommChannel | '') => void;
@@ -159,6 +165,7 @@ function FilterBar({
         type="search"
         placeholder="Search subject, text or sender"
         aria-label="Keyword"
+        aria-invalid={tooLong.includes('keyword') || undefined}
         value={q}
         onChange={(e) => onQ(e.target.value)}
         className="h-9 w-full sm:w-64"
@@ -167,6 +174,7 @@ function FilterBar({
         type="search"
         placeholder="Filter by sender"
         aria-label="Sender"
+        aria-invalid={tooLong.includes('sender') || undefined}
         value={sender}
         onChange={(e) => onSender(e.target.value)}
         className="h-9 w-full sm:w-48"
@@ -205,11 +213,21 @@ function FilterBar({
 function BulkBar({
   rows,
   loading,
+  openedOn,
+  inFlight,
   onDone,
 }: {
   rows: { id: string; opportunityId: string | null }[];
   /** The list is still loading (a new filter or page): the rows shown may be about to go. */
   loading: boolean;
+  /**
+   * What the confirmation was opened on (#841), null while it is closed. A reload that changes it
+   * closes the confirmation with a message, so it never acts on a count the user did not see. The
+   * list's, since it outlives this bar: it is the list that says when a reload took every row.
+   */
+  openedOn: RefObject<readonly string[] | null>;
+  /** While the reject is in flight its own outcome is reported (ConfirmDialog), not the list's. */
+  inFlight: RefObject<boolean>;
   onDone: () => void;
 }) {
   const ids = rows.map((r) => r.id);
@@ -218,11 +236,6 @@ function BulkBar({
   // Asked first (#647): a reject wipes the messages' subject, snippet and body for good.
   const [confirming, setConfirming] = useState(false);
   const count = `${ids.length} message${ids.length === 1 ? '' : 's'}`;
-  // What the confirmation was opened on (#841). A reload that changes it closes the confirmation
-  // with a message, so it never acts on a count the user did not see; null while it is closed.
-  const openedOn = useRef<readonly string[] | null>(null);
-  // While the reject is in flight its own outcome is reported (ConfirmDialog), not the list's.
-  const inFlight = useRef(false);
   const idsKey = [...ids].sort().join(',');
   useEffect(() => {
     const seen = openedOn.current;
@@ -238,21 +251,6 @@ function BulkBar({
     // ids is read through idsKey, its contents.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsKey, confirming]);
-  // A reload that leaves none of them takes this bar, and its confirmation, away: say so then.
-  useEffect(
-    () => () => {
-      const seen = openedOn.current;
-      if (seen === null || inFlight.current) return;
-      toast({
-        title: 'Nothing was rejected',
-        description:
-          seen.length === 1
-            ? 'The selected message is no longer listed.'
-            : `None of the ${seen.length} selected messages are listed any more.`,
-      });
-    },
-    [],
-  );
   // Escape or Cancel returns focus to the button that opened the confirmation (#841). A native
   // <dialog> does that itself, but not to a disabled button, so the button is never disabled
   // while the confirmation can be open, only marked so (aria-disabled), and focus is put back
@@ -347,24 +345,33 @@ function BulkBar({
   );
 }
 
-/** "Showing 201–400 of 523", and the way to the pages before and after (#646). */
+/**
+ * "Showing 201–400 of 523", and the way to the pages before and after (#646). `shownPage` is the
+ * page the rows on screen are from, which is what the range describes (#894); `page` is the one the
+ * buttons step from, and differs while another page loads. `locked`: the rows answer other filters
+ * than the ones set, so their other pages are not to be had.
+ */
 function Pager({
   page,
+  shownPage,
   pageSize,
   shown,
   total,
+  locked,
+  loading,
   onPage,
 }: {
   page: number;
+  shownPage: number;
   pageSize: number;
   shown: number;
   total: number;
+  locked: boolean;
+  loading: boolean;
   onPage: (page: number) => void;
 }) {
-  // Never past the total: while the next page loads, the page before is still on screen, and
-  // its rows counted from the new page read ahead ("401–600 of 450": #646's review).
-  const last = Math.min(page * pageSize + shown, total);
-  const first = Math.min(page * pageSize + 1, last);
+  const last = Math.min(shownPage * pageSize + shown, total);
+  const first = Math.min(shownPage * pageSize + 1, last);
   return (
     <nav aria-label="Message pages" className="flex flex-wrap items-center gap-2 text-sm">
       <span className="tabular-nums text-muted-foreground">
@@ -375,7 +382,7 @@ function Pager({
         variant="outline"
         size="sm"
         aria-label="Previous page"
-        disabled={page === 0}
+        disabled={locked || page === 0}
         onClick={() => onPage(page - 1)}
       >
         Previous
@@ -385,11 +392,14 @@ function Pager({
         variant="outline"
         size="sm"
         aria-label="Next page"
-        disabled={last >= total}
+        disabled={locked || (page + 1) * pageSize >= total}
         onClick={() => onPage(page + 1)}
       >
         Next
       </Button>
+      {loading && page !== shownPage ? (
+        <span className="text-muted-foreground">Loading page {page + 1}...</span>
+      ) : null}
     </nav>
   );
 }
@@ -418,7 +428,13 @@ function InboxList({
     channel: channel === '' ? undefined : channel,
     order,
   };
-  const { data: fresh, error, isPlaceholderData } = useInbox(tab, filters, page, pageSize);
+  // Too long to send (#894): said in plain words, with no rows, since none were asked for it.
+  const tooLong = tooLongFilters(filters);
+  const refused = tooLong.length > 0;
+  const query = useInbox(tab, filters, page, pageSize);
+  const fresh = refused ? undefined : query.data;
+  const error = refused ? null : query.error;
+  const { isPlaceholderData } = query;
   // A reload that fails keeps the list that last loaded on screen (#841), and with it the
   // selection made from it, with a note that the list could not refresh. Without it the rows,
   // the selection and an open confirmation all went at once.
@@ -427,6 +443,9 @@ function InboxList({
     if (fresh !== undefined) setLastLoaded(fresh);
   }, [fresh]);
   const data = fresh ?? (error ? lastLoaded : undefined);
+  // The rows on screen can answer an earlier request: while the next loads, or after it failed.
+  const otherFilters = data !== undefined && data.filters !== filterKey(filters);
+  const otherPage = data !== undefined && !otherFilters && data.page !== page;
   // What was asked for, not what is being typed: the list on screen answers the debounced values.
   const filtered =
     (filters.q ?? '').trim() !== '' ||
@@ -482,13 +501,37 @@ function InboxList({
   const bulkShown = actOn.length > 0;
   const root = useRef<HTMLDivElement>(null);
   const wasShown = useRef(false);
+  const openedOn = useRef<readonly string[] | null>(null);
+  const inFlight = useRef(false);
   useEffect(() => {
     if (wasShown.current && !bulkShown) {
+      // The bar's rows went, and with them an open confirmation (#841): say so. Here, not when the
+      // bar unmounts, which leaving the page does too, with every message still listed (#894).
+      const seen = openedOn.current;
+      openedOn.current = null;
+      if (seen !== null && !inFlight.current) {
+        toast({
+          title: 'Nothing was rejected',
+          description: refused
+            ? 'No messages are listed while a filter is too long.'
+            : seen.length === 1
+              ? 'The selected message is no longer listed.'
+              : `None of the ${seen.length} selected messages are listed any more.`,
+        });
+      }
       const active = document.activeElement;
       if (active === null || active === document.body) root.current?.focus();
     }
     wasShown.current = bulkShown;
+    // `refused` is read when the bar goes, which is what this follows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bulkShown]);
+
+  // Try again goes with the error it answers, so focus moves to the list first.
+  const retry = () => {
+    root.current?.focus();
+    void query.refetch();
+  };
 
   return (
     <div
@@ -504,6 +547,7 @@ function InboxList({
           sender={sender}
           channel={channel}
           order={order}
+          tooLong={tooLong}
           onQ={setQ}
           onSender={setSender}
           onChannel={setChannel}
@@ -512,26 +556,52 @@ function InboxList({
       ) : null}
 
       {selectable && bulkShown ? (
-        <BulkBar rows={actOn} loading={isPlaceholderData} onDone={clear} />
+        <BulkBar
+          rows={actOn}
+          loading={isPlaceholderData}
+          openedOn={openedOn}
+          inFlight={inFlight}
+          onDone={clear}
+        />
       ) : null}
 
       {/* Not over an empty page: during a step-back that page stands in for the next (#678). */}
       {data !== undefined && data.items.length > 0 && data.total > data.items.length ? (
         <Pager
-          page={page}
+          // After a failure the buttons step from the rows shown, so Next asks again.
+          page={error ? data.page : page}
+          shownPage={data.page}
           pageSize={pageSize}
           shown={data.items.length}
           total={data.total}
-          onPage={setPage}
+          locked={otherFilters}
+          loading={isPlaceholderData}
+          onPage={(p) => (p === page ? retry() : setPage(p))}
         />
       ) : null}
 
-      {error && data !== undefined ? (
-        <FormError message={`The list couldn't refresh. ${errorMessage(error)}`} />
+      {refused ? (
+        <FormError
+          message={`The ${tooLong.join(' and ')} ${tooLong.length === 1 ? 'filter is' : 'filters are'} too long: ${INBOX_FILTER_MAX} characters at most. No messages are listed until ${tooLong.length === 1 ? 'it is' : 'they are'} shorter.`}
+        />
       ) : null}
-      {error && data === undefined ? (
-        <FormError message={errorMessage(error)} />
-      ) : data === undefined ? (
+      {error ? (
+        <>
+          <FormError
+            message={
+              data === undefined
+                ? errorMessage(error)
+                : otherPage
+                  ? `Page ${page + 1} couldn't load. ${errorMessage(error)} Page ${data.page + 1} is still shown.`
+                  : `The list couldn't refresh. ${errorMessage(error)}${otherFilters ? ' The messages shown are from before the filters changed.' : ''}`
+            }
+          />
+          <Button type="button" variant="outline" size="sm" className="w-fit" onClick={retry}>
+            Try again
+          </Button>
+        </>
+      ) : null}
+      {refused || (error && data === undefined) ? null : data === undefined ? (
         <p className="text-sm text-muted-foreground">Loading...</p>
       ) : data.items.length === 0 && data.total > 0 ? (
         // An empty page of a tab that has messages: a step-back to a page not cached yet (#678).
