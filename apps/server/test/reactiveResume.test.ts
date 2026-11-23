@@ -481,7 +481,7 @@ describe('reactive resume integration API', () => {
   it('defaults the store to google, and only switches to reactive_resume once connected', async () => {
     const { a } = await boot();
     const def = await a.request({ method: 'GET', url: '/api/v1/settings/document-store' });
-    expect(def.json()).toEqual({ store: 'google' });
+    expect(def.json()).toEqual({ store: 'google_doc' });
     const early = await a.request({
       method: 'PUT',
       url: '/api/v1/settings/document-store',
@@ -613,7 +613,7 @@ describe('reactive resume integration API', () => {
     const bStatus = await b.request({ method: 'GET', url: '/api/v1/integrations/reactive-resume' });
     expect(bStatus.json()).toMatchObject({ baseUrl: null, keySet: false, connected: false });
     const bStore = await b.request({ method: 'GET', url: '/api/v1/settings/document-store' });
-    expect(bStore.json()).toEqual({ store: 'google' });
+    expect(bStore.json()).toEqual({ store: 'google_doc' });
     const bNoConfig = await registerRr(b, RR_BASE_ID, 'reactive_resume');
     expect(bNoConfig.statusCode).toBe(409);
     expect(bNoConfig.json().error.code).toBe('reactive_resume_not_connected');
@@ -689,7 +689,7 @@ describe('reactive resume integration API', () => {
     expect((await a.request({ method: 'GET', url: '/api/v1/secrets' })).json().items).toEqual([]);
     expect(
       (await a.request({ method: 'GET', url: '/api/v1/settings/document-store' })).json(),
-    ).toEqual({ store: 'google' });
+    ).toEqual({ store: 'google_doc' });
     const row = await a.request({ method: 'GET', url: `/api/v1/resumes/${id}` });
     expect(row.statusCode).toBe(200);
     expect(row.json().url).toBeNull();
