@@ -236,6 +236,31 @@ Signing in with Google, GitHub or LinkedIn still asks for the code. Lost both th
 authenticator and the codes? An administrator can reset your password, which also turns
 two-factor off. See [install guide section 13](../install.md#13-two-factor-sign-in).
 
+### Linked accounts
+
+**Settings > Security > Linked accounts** lists the sign-in providers your administrator has set
+up (Google, GitHub or LinkedIn; the card is absent when none is set up and none is linked). Once
+a provider is linked, **Continue with ...** on the sign-in page signs you in to this account with
+it. Two-factor sign-in, when it is on, still asks for a code.
+
+- **Link** asks for your current password, then takes you to the provider to sign in there. A
+  linked provider shows **Linked** with the date. If the provider account is already linked to
+  another account on this instance, or you already have a different account from that provider
+  linked (unlink it first), linking is refused and says so.
+- **Unlink** asks for your current password, then removes the provider; you can no longer sign in
+  with it.
+- **No password yet?** An account created through a provider starts without one. Set one first
+  (see [Password](#password)): without a password **Link** stays disabled, and **Unlink** is
+  refused with "Set a password first".
+- **A password reset unlinks every provider.** When an administrator resets your password
+  (**Settings > Users**) or the command-line reset runs, every provider linked to your account is
+  unlinked as part of it, and the reset says which ones, so that a provider someone else linked
+  cannot sign in after it. Link them again here once you have signed in with the temporary
+  password. Changing your own password keeps your linked providers.
+
+For how an instance sets providers up, and how a provider sign-in is matched to an account, see
+the [install guide](../install.md#14-sign-in-with-google-github-or-linkedin).
+
 ## Users and registration
 
 Administrators see **Settings > Users**:
