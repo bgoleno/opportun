@@ -286,6 +286,10 @@ export async function updateResume(
       row = await read();
       if (row === undefined) throw notFound();
     }
+    const aboutStatus =
+      patch.status !== undefined ||
+      patch.submittedTo !== undefined ||
+      patch.submittedAt !== undefined;
     const status = patch.status ?? row.status;
     let submittedTo: string | null = null;
     let submittedAt: number | null = null;
@@ -300,9 +304,8 @@ export async function updateResume(
       .update(resumes)
       .set({
         ...(patch.title === undefined ? {} : { title: patch.title }),
-        status,
-        submittedTo,
-        submittedAt,
+        // Only what the patch is about: another save can have changed the status since the read.
+        ...(aboutStatus ? { status, submittedTo, submittedAt } : {}),
         ...(relink ? { opportunityId: patch.opportunityId ?? null } : {}),
         updatedAt: Date.now(),
       })

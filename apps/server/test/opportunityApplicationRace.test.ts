@@ -25,7 +25,7 @@ import {
   deleteOpportunity,
   mergeOpportunities,
 } from '../src/repos/opportunities';
-import { insertResume, updateResume } from '../src/repos/resumes';
+import { insertResume, updateResume, type ResumePatch } from '../src/repos/resumes';
 import { recordResumeSend } from '../src/repos/resumeSends';
 import { confirmFromEmail } from '../src/repos/submissionConfirm';
 import { createSubmissionDraft } from '../src/repos/submissions';
@@ -405,8 +405,85 @@ describe.runIf(testDialect === 'postgres')(
         expect(row).toMatchObject({ opportunityId: p.other, status, title: 'Renamed' });
       },
     );
+
+    it('and what it says of the sending is read by the status it has then', async () => {
+      const p = await pair();
+      const id = await resumeOf(p, p.keep);
+      await start(p, p.keep);
+      await start(p, p.other);
+      const pause = pauseAt(LOCKED);
+      const merging = ended(merge(p));
+      await pause.reached;
+      const moving = ended(
+        updateResume(p.app.db, p.ctx, id, { opportunityId: p.other, submittedTo: 'Hooli' }),
+      );
+      const blocked = await someoneBlocked(p.app);
+      await updateResume(p.app.db, p.ctx, id, {
+        status: 'submitted',
+        submittedTo: 'Initech',
+        submittedAt: 5,
+      });
+      pause.release();
+      expect([await merging, await moving]).toEqual(['409 live_submission_conflict', 'ok']);
+      expect(blocked).toBe(true);
+      const row = await p.app.db.select().from(resumes).where(eq(resumes.id, id)).get();
+      expect(row).toMatchObject({
+        opportunityId: p.other,
+        status: 'submitted',
+        submittedTo: 'Hooli',
+        submittedAt: 5,
+      });
+    });
   },
 );
+
+// A save of one thing writes that thing (qa on #957): the status is saved and not yet committed when
+// the other is read.
+describe('a save of a resume beside a save of its status', () => {
+  const OTHERS: [string, (p: Pair) => ResumePatch, (p: Pair) => object][] = [
+    ['its title', () => ({ title: 'Renamed' }), () => ({ title: 'Renamed' })],
+    ['its opportunity', (p) => ({ opportunityId: p.other }), (p) => ({ opportunityId: p.other })],
+    ['no opportunity', () => ({ opportunityId: null }), () => ({ opportunityId: null })],
+  ];
+  it.each(OTHERS)('%s: both stay', async (_w, patch, saved) => {
+    const p = await pair();
+    const id = await resumeOf(p, p.keep);
+    const held = heldOpen(p.app, (tx) =>
+      updateResume(tx, p.ctx, id, { status: 'submitted', submittedTo: 'Initech', submittedAt: 5 }),
+    );
+    await held.reached;
+    const other = ended(updateResume(p.app.db, p.ctx, id, patch(p)));
+    const blocked = await someoneBlocked(p.app);
+    held.go();
+    await held.done;
+    expect(await other).toBe('ok');
+    expect(blocked).toBe(true);
+    const row = await p.app.db.select().from(resumes).where(eq(resumes.id, id)).get();
+    expect(row).toMatchObject({
+      status: 'submitted',
+      submittedTo: 'Initech',
+      submittedAt: 5,
+      ...saved(p),
+    });
+  });
+
+  it('control: a save of the status alone, of one that was submitted, clears what that needs', async () => {
+    const p = await pair();
+    const id = await resumeOf(p, p.keep);
+    await updateResume(p.app.db, p.ctx, id, { status: 'submitted', submittedTo: 'Initech' });
+    await updateResume(p.app.db, p.ctx, id, { title: 'Renamed' });
+    const between = await p.app.db.select().from(resumes).where(eq(resumes.id, id)).get();
+    expect(between).toMatchObject({
+      status: 'submitted',
+      submittedTo: 'Initech',
+      title: 'Renamed',
+    });
+    await updateResume(p.app.db, p.ctx, id, { submittedTo: 'Hooli' });
+    await updateResume(p.app.db, p.ctx, id, { status: 'final' });
+    const row = await p.app.db.select().from(resumes).where(eq(resumes.id, id)).get();
+    expect(row).toMatchObject({ status: 'final', submittedTo: null, submittedAt: null });
+  });
+});
 
 // The merge and the delete take the locks of the attempts there are, and then the user's. One made in
 // between has a lock they don't hold.
