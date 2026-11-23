@@ -535,11 +535,12 @@ A dedicated account:
 
 - **is an ordinary account**, never an administrator, and its data is its own;
 - **is not reset**: the nightly reset deletes and reseeds the five pinned accounts only, and
-  leaves a dedicated account and its data as they are. It still waits for the reset: a request
-  from a dedicated account that arrives while the reset runs is held until it is done, and then
-  answered as usual (its session stays valid), and a slow AI call on a dedicated account holds the
-  reset off like any other, up to the 40 second limit below, so it can delay the shared accounts'
-  reset by that long;
+  leaves a dedicated account and its data as they are. Its requests still wait for the reset: one
+  that arrives while the reset runs, or is waiting to start, is held until it is done and then
+  answered as usual (its session stays valid). A slow request of a dedicated account, one with a
+  slow AI call for example, holds the reset off like any other request, for up to 50 seconds (a
+  request's hold, below), so it can delay the shared accounts' reset by that long. Its background
+  jobs neither hold the reset off nor wait for it;
 - **is out of `demo-admin`'s reach**: on a demo server, `demo-admin` is an administrator only for
   the user list, the pepper rotation list, password resets, and the jobs list and its retry, and
   even there it sees and acts on the five pinned accounts only. It cannot reset a dedicated
@@ -628,8 +629,8 @@ On a shared account, enforced by the server:
 
   These time limits apply to every account on a demo server, a dedicated one included: the server
   sets them before it looks up whose request it is.
-  So a dedicated account is not reset, but its requests and its AI calls are held and limited by
-  the same gate.
+  So a dedicated account is not reset, but its requests are held and limited by the same gate.
+  Only the shared accounts' jobs, and the server's own, hold the gate.
 
   What this does not cover:
   - **Slow work that is not an AI call**: AI calls and the chat's reply end on the stop, and a job
