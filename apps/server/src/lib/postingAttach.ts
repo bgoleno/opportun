@@ -52,6 +52,44 @@ const HOW_SAID_REFETCH: ReadonlyMap<AttachSource, string> = new Map([
   ['paste', 'Replaced by hand.'],
 ]);
 
+/** Whether two identities name the same job on the same board. */
+function sameRef(
+  a: { kind: string; org: string | null; externalId: string } | null | undefined,
+  b: { kind: string; org: string | null; externalId: string } | null | undefined,
+): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  return a.kind === b.kind && a.org === b.org && a.externalId === b.externalId;
+}
+
+/** What an attach on a posting already confirmed can change, in the order it is said. */
+export const POSTING_CHANGES = [
+  'link',
+  'job',
+  'description',
+  'location',
+  'remote',
+  'compensation',
+] as const;
+export type PostingChange = (typeof POSTING_CHANGES)[number];
+
+type PostingFields = Pick<
+  OpportunityView,
+  'postingUrl' | 'atsJobRef' | 'descriptionMd' | 'location' | 'remote' | 'compNote'
+>;
+
+/** What differs between an opportunity's posting before and after an attach (#835, #866). */
+function postingChanges(before: PostingFields, after: PostingFields): PostingChange[] {
+  const changed: [PostingChange, boolean][] = [
+    ['link', (before.postingUrl ?? null) !== (after.postingUrl ?? null)],
+    ['job', !sameRef(before.atsJobRef, after.atsJobRef)],
+    ['description', before.descriptionMd !== after.descriptionMd],
+    ['location', before.location !== after.location],
+    ['remote', before.remote !== after.remote],
+    ['compensation', before.compNote !== after.compNote],
+  ];
+  return changed.filter(([, differs]) => differs).map(([what]) => what);
+}
+
 /**
  * Stores `raw` as the opportunity's posting and records it on the timeline. Throws 404 when the
  * opportunity is not the caller's, 409 `already_described` when it already has a description,
@@ -63,6 +101,17 @@ const HOW_SAID_REFETCH: ReadonlyMap<AttachSource, string> = new Map([
  * was not read in full) stays true, so it belongs on the durable record, not only in the toast.
  */
 export async function attachPosting(
+  ...args: Parameters<typeof attachPostingSaying>
+): Promise<OpportunityView> {
+  return (await attachPostingSaying(...args)).opportunity;
+}
+
+/**
+ * attachPosting, with what it changed on a posting already confirmed (#866): null on a first
+ * attach, empty when nothing changed. Worked out here, against the row read just before the write:
+ * the caller's own copy can be seconds old, and an edit made meanwhile is not the attach's change.
+ */
+export async function attachPostingSaying(
   db: Db,
   ctx: UserCtx,
   opportunityId: string,
@@ -80,9 +129,18 @@ export async function attachPosting(
    * without touching the description (design D11), instead of refusing; on a posting confirmed
    * already too (#812, tl: a Refetch re-checks the board). Find posting and a picked board row
    * only; pasted text is still refused.
+   *
+   * `byFindPosting` (#866): on a posting already confirmed this is a Refetch, not the user's choice
+   * of a posting. So one that changes nothing writes no timeline entry (the same line would pile
+   * up), and the confirmation stays what it was (below). A row the user picked is always recorded.
    */
-  opts: { keepDescription?: boolean } = {},
-): Promise<OpportunityView> {
+  opts: { keepDescription?: boolean; byFindPosting?: boolean } = {},
+): Promise<{
+  opportunity: OpportunityView;
+  changed: PostingChange[] | null;
+  /** The description is the user's, and was kept (#866). */
+  keptDescription: boolean;
+}> {
   const posting = sanitizePosting(raw);
   if (posting.descriptionMd == null || posting.descriptionMd === '') {
     throw new HttpError(
@@ -141,19 +199,33 @@ export async function attachPosting(
       : identity.sctx !== undefined
         ? await resolvePostingAtsJobRef(db, ctx, current, patch.postingUrl, identity.sctx)
         : postingAtsJobRefKeeping(patch.postingUrl, current.atsJobRef);
-  await updateOpportunity(db, ctx, opportunityId, patch, { atsJobRef });
+  const written = await updateOpportunity(db, ctx, opportunityId, patch, { atsJobRef });
+  const changes = postingChanges(current, { ...written, atsJobRef });
+  const byRefetch = refetch && opts.byFindPosting === true;
+  // A Refetch is not the user's confirmation (tl and qa on #930): with their description kept, or
+  // with nothing changed, the state is left as it is. A matched posting they edited since stays
+  // matched, and what they confirmed stays theirs. No later pass reads the kept text as the
+  // employer's for that: its fingerprint does not match, so a re-derive refuses it and a check
+  // flags it, as between the edit and the Refetch. One that took the board's text is a match.
+  const leaveState = byRefetch && (keep || changes.length === 0);
   // A posting the user chose or pasted is settled, not waiting on a board search (design D17).
   // Its ATS identity is the stored URL's, written with the confirm (issue #137): null when that
   // URL is not a recognised board, so a ref from an earlier posting never survives this one. A
   // `gh_jid` link's is the board's, proven above (#398).
   const updated = await setPostingState(db, ctx, opportunityId, {
-    postingState: 'confirmed',
-    // A kept description is the user's: user_confirmed, so a later reconcile or re-derive never
-    // reads it as the employer's copy (tl on #756; as postingConfirm does).
-    postingStateDetail: keep ? 'user_confirmed' : null,
+    ...(leaveState
+      ? { postingState: undefined, postingStateDetail: undefined }
+      : {
+          postingState: 'confirmed',
+          // A kept description is the user's: user_confirmed, so a later reconcile or re-derive
+          // never reads it as the employer's copy (tl on #756; as postingConfirm does).
+          postingStateDetail: keep ? 'user_confirmed' : null,
+        }),
     atsJobRef,
   });
-  // A Refetch that kept the user's description and found the same job changed no text: a check
+  const said = { opportunity: updated, changed: refetch ? changes : null, keptDescription: keep };
+  if (byRefetch && changes.length === 0) return said;
+  // A row picked again that kept the user's description and is the same job changed no text: a check
   // (#812, tl). Another job (a row the user picked) is a change, and said as one (qa on #830).
   const sameJob =
     refetch &&
@@ -166,11 +238,19 @@ export async function attachPosting(
   const linkChanged = (patch.postingUrl ?? null) !== (current.postingUrl ?? null);
   const orgChanged = sameJob && current.atsJobRef?.org !== atsJobRef?.org;
   const checkedOnly = keep && sameJob && !linkChanged && !orgChanged;
+  const facts = changes.filter((c) => ['location', 'remote', 'compensation'].includes(c));
   const howSaid = [
     checkedOnly
       ? "Checked on the company's board; your description was kept."
       : ((refetch ? HOW_SAID_REFETCH : HOW_SAID).get(how) ?? ''),
     refetch && linkChanged ? "The posting link was updated to the board's." : '',
+    // What the rest of a Refetch changed (#866, qa on #860). Pasted text is not the board's.
+    refetch && how !== 'paste' && changes.includes('description')
+      ? "The description was updated to the board's."
+      : '',
+    refetch && how !== 'paste' && facts.length > 0
+      ? `Took ${facts.join(', ')} from the board.`
+      : '',
     keep && !checkedOnly ? 'Your own description was kept.' : '',
   ]
     .filter((l) => l !== '')
@@ -185,7 +265,7 @@ export async function attachPosting(
     participants: [],
     externalUrl: posting.postingUrl,
   });
-  return updated;
+  return said;
 }
 
 /**

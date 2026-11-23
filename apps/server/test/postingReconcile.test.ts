@@ -541,6 +541,48 @@ describe('reconcilePosting', () => {
     expect([out.postingState, out.postingStateDetail]).toEqual(['needs_review', 'no_board']);
   });
 
+  it('a search for a board that could not finish is a check that did not, not "no board" (#866)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await seedCaptured(app, ctx, { companyName: 'Vandelay Industries' });
+    const downFetch = (async () => ({
+      status: 503,
+      headers: new Headers(),
+      body: Buffer.from(''),
+    })) as unknown as typeof safeFetch;
+
+    await reconcilePosting(app.db, ctx, opp.id, { fetch: downFetch, log }, { board: noBoards });
+
+    expect(await getOpportunity(app.db, ctx, opp.id)).toMatchObject({
+      postingState: 'needs_review',
+      postingStateDetail: 'failed',
+      descriptionMd: CAPTURE,
+    });
+    const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+    expect(items.find((i) => i.title === 'Posting check failed')?.bodyMd).toBe(
+      "Couldn't read Vandelay Industries' board just now, so nothing was checked. Try Find posting again.",
+    );
+  });
+
+  it("a name ending in s takes an apostrophe alone in the check's note (#866)", async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    await createCompany(app.db, ctx, {
+      name: 'Vandelay Industries',
+      atsKind: 'ats_greenhouse',
+      atsRef: 'vandelay',
+      atsVerifiedAt: Date.now(),
+    });
+    const opp = await seedCaptured(app, ctx, { companyName: 'Vandelay Industries' });
+
+    await run(app, ctx, opp.id, noBoards);
+
+    const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+    expect(
+      items.find((i) => i.title === "Posting not found on the company's board")?.bodyMd,
+    ).toContain("Checked Vandelay Industries' board and found no posting");
+  });
+
   it('refuses to overwrite a description the user edited after the capture', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);

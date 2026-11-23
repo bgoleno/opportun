@@ -208,7 +208,8 @@ export interface PostingCandidateView {
 export interface FindPostingResult {
   /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity. */
   /**
-   * 'unreachable' (#835): the company's boards could not be read, which is not "no match".
+   * 'unreachable' (#835, #866): the company's boards could not be read, or the search for one
+   * could not finish, which is not "no match" or "no board".
    * 'already_confirmed' (#852): a background check confirmed it after the page loaded.
    */
   outcome:
@@ -221,6 +222,10 @@ export interface FindPostingResult {
     | 'already_confirmed';
   /** An attach that changed nothing: a Refetch that found the same job (#835). */
   unchanged?: true;
+  /** What a Refetch changed (#866): absent on a first attach, and when `unchanged`. */
+  changed?: ('link' | 'job' | 'description' | 'location' | 'remote' | 'compensation')[];
+  /** 'attached' with the user's own description left as it was, not compared (#866). */
+  keptDescription?: true;
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity?: OpportunityView;
   candidate?: PostingCandidateView;
@@ -281,6 +286,34 @@ export function useChecksEnded(postingState: OpportunityView['postingState']): n
   setLast(next);
   return next.ended;
 }
+
+/**
+ * Whether the check a Find posting refusal speaks of is over already (#866, tl and qa on #885):
+ * called once the refusal is in, when the refresh after it has been read (useFindPosting waits for
+ * it). The check can have ended in the state the page showed, which useChecksEnded cannot see.
+ * Says no when that refresh failed, or nothing on the page reads the opportunity: not known.
+ */
+export function useCheckOver(id: string): () => boolean {
+  const qc = useQueryClient();
+  return () => {
+    const read = qc.getQueryState<OpportunityView>(qk.opportunity(id));
+    return (
+      read?.data !== undefined &&
+      read.status === 'success' &&
+      !read.isInvalidated &&
+      read.data.postingState !== 'searching'
+    );
+  };
+}
+
+/**
+ * Said in place of a refusal for a check that is over: the click is answered (#866). "Ended", and
+ * not as a success: its job may have died (#869), which the posting's own notice then says.
+ */
+export const CHECK_ENDED = {
+  title: 'Check ended',
+  description: 'The board check ended while this page was open. The page is up to date now.',
+} as const;
 
 /** Attaches a chosen candidate, a pasted link or pasted description text. */
 export function useAttachPosting(id: string) {
