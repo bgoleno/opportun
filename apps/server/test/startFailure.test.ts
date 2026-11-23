@@ -224,6 +224,32 @@ describe('a server that cannot start, as a process', () => {
     },
     T,
   );
+
+  // A configuration error is printed as it is (design 14.9), so what it says of a connection
+  // setting is checked the same way.
+  it.each<[string, Record<string, string>, RegExp]>([
+    [
+      'a DATABASE_URL of another kind',
+      { DATABASE_URL: `mysql://${USER}:${PASSWORD}@${HOST}/${DB_NAME}` },
+      /DATABASE_URL must be a postgres:/,
+    ],
+    [
+      'TLS settings in DATABASE_URL',
+      { DATABASE_URL: `postgres://${USER}:${PASSWORD}@${HOST}/${DB_NAME}?sslpassword=${PASSWORD}` },
+      /DATABASE_URL must not set sslpassword/,
+    ],
+    ['a master key that is not one', { OPPORTUN_MASTER_KEY: `${KEY}${PASSWORD}` }, /MASTER_KEY/],
+  ])(
+    'a configuration error: %s',
+    async (_what, settings, says) => {
+      const started = await startServer({ DB_DIALECT: 'postgres', ...settings });
+      expect(started.output).toMatch(says);
+      expect(started.lines).toEqual([]);
+      expect(started.code).toBe(1);
+      for (const canary of CANARIES) expect(started.output.toLowerCase()).not.toContain(canary);
+    },
+    T,
+  );
 });
 
 describe('why a start failed', () => {
