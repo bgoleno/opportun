@@ -2,6 +2,8 @@
 // review gate and the handoff, against a stubbed API. Criteria: 1 the review shows everything,
 // unticked; 2 any edit goes back to review; 3 a clock time, not a countdown; 4 keyboard and
 // screen-reader paths; 5 nothing of the feature where it is off.
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { focusManager } from '@tanstack/react-query';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -732,7 +734,7 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
     [
       'no_board',
       { outcome: 'no_board', needsCareersUrl: true },
-      'No job board is known for this company yet. Add its careers page on the Details tab.',
+      'No job board is known for this company. Paste the posting on the Details tab.',
     ],
   ] as const)(
     'Find posting answering %s says what happened and where to go',
@@ -751,6 +753,185 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
       expect(said.closest('[role="status"]')).not.toBeNull();
     },
   );
+
+  // #893. The answers are read from the server's own list, so one added there without a sentence
+  // here fails this (the web's list is a type, and findSaid does not compile without each).
+  describe('every answer Find posting can give has a sentence (#893)', () => {
+    const route = readFileSync(
+      resolve(process.cwd(), '../server/src/routes/opportunityPosting.ts'),
+      'utf8',
+    );
+    const listed =
+      /const FindResponse = z\.object\(\{[\s\S]*?outcome: z\.enum\(\[([^\]]*)\]\)/.exec(route)?.[1];
+    const answers = [...(listed ?? '').matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
+
+    it("the server's list was read", () => {
+      expect(answers).toContain('attached');
+      expect(answers).toContain('already_confirmed');
+      expect(answers.length).toBeGreaterThanOrEqual(7);
+    });
+
+    it.each(answers)('%s', async (outcome) => {
+      mockApi({
+        'GET /resumes': { items: [RESUME], total: 1 },
+        'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+        'POST /opportunities/opp-1/find-posting': { outcome },
+      });
+      renderWithProviders(
+        <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+      );
+      await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+      const said = await screen.findByRole('status');
+      expect(said).toHaveTextContent(/\.$/);
+      expect(said).not.toHaveTextContent(/reload the page/i);
+      expect(said.textContent).not.toBe(outcome);
+    });
+
+    it('one this page does not know (a newer server) still says something', async () => {
+      mockApi({
+        'GET /resumes': { items: [RESUME], total: 1 },
+        'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+        'POST /opportunities/opp-1/find-posting': { outcome: 'brand_new' },
+      });
+      renderWithProviders(
+        <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+      );
+      await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+      expect(await screen.findByRole('status')).toHaveTextContent(/reload the page/i);
+    });
+  });
+
+  describe('an answer that changes the panel is still said (#893)', () => {
+    const before = {
+      ...OPP,
+      atsJobRef: null,
+      postingUrl: careers,
+      postingState: 'needs_review',
+    } as OpportunityView;
+    const after = { ...OPP, postingState: 'confirmed' } as OpportunityView;
+    function Live() {
+      const { data } = useOpportunity('opp-1');
+      return data === undefined ? null : <ApplyPanel opp={data} />;
+    }
+    /** Find posting answers `answer`, and the opportunity reads as `then` from there on. */
+    function answering(answer: Record<string, unknown>, then: OpportunityView) {
+      let now = before;
+      const api = mockApi({
+        'GET /resumes': { items: [RESUME], total: 1 },
+        'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+        'GET /opportunities/opp-1': () => now,
+        'POST /opportunities/opp-1/find-posting': () => {
+          now = then;
+          return { opportunity: then, ...answer };
+        },
+      });
+      return {
+        api,
+        set(next: OpportunityView) {
+          now = next;
+        },
+      };
+    }
+
+    it.each([
+      ['attached', 'Posting attached.'],
+      ['identified', 'Recognised on Greenhouse.'],
+      ['already_confirmed', 'This posting was confirmed already. This page is up to date now.'],
+    ])('%s: the panel offers Apply, and says why', async (outcome, text) => {
+      answering({ outcome }, after);
+      renderWithProviders(<Live />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+      expect(await screen.findByRole('link', { name: 'Apply on Greenhouse' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Find posting' })).toBeNull();
+      expect(screen.getByRole('status')).toHaveTextContent(text);
+    });
+
+    it('it goes once the posting is no longer what the answer was about', async () => {
+      const opp = answering({ outcome: 'already_confirmed' }, after);
+      const { queryClient } = renderWithProviders(<Live />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+      expect(await screen.findByText(/confirmed already/)).toBeInTheDocument();
+      opp.set({ ...after, postingState: 'needs_review' } as OpportunityView);
+      await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+      expect(await screen.findByText(/needs review/)).toBeInTheDocument();
+      expect(screen.queryByText(/confirmed already/)).toBeNull();
+    });
+
+    it('unreachable: Find posting is there to try again, and the next answer replaces it', async () => {
+      let n = 0;
+      let now = before;
+      const api = mockApi({
+        'GET /resumes': { items: [RESUME], total: 1 },
+        'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+        'GET /opportunities/opp-1': () => now,
+        'POST /opportunities/opp-1/find-posting': () => {
+          n += 1;
+          if (n === 1) return { outcome: 'unreachable' };
+          now = after;
+          return { outcome: 'attached', opportunity: after };
+        },
+      });
+      renderWithProviders(<Live />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+      expect(await screen.findByText(/couldn't be read just now/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole('button', { name: 'Find posting' }));
+      expect(await screen.findByText('Posting attached.')).toBeInTheDocument();
+      expect(screen.queryByText(/couldn't be read just now/)).toBeNull();
+      expect(calls(api.calls, 'POST', '/opportunities/opp-1/find-posting')).toHaveLength(2);
+    });
+
+    // Its own result is what counts then (as on the Details tab, #866).
+    it('an answer from before a check that has ended since is not said', async () => {
+      const opp = answering({ outcome: 'unreachable', opportunity: undefined }, before);
+      const { queryClient } = renderWithProviders(<Live />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+      expect(await screen.findByText(/couldn't be read just now/)).toBeInTheDocument();
+      opp.set({ ...before, postingState: 'searching' } as OpportunityView);
+      await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+      expect(await screen.findByText(/still checking this posting/)).toBeInTheDocument();
+      expect(screen.queryByText(/couldn't be read just now/)).toBeNull();
+      opp.set(before);
+      await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+      expect(await screen.findByRole('button', { name: 'Find posting' })).toBeEnabled();
+      expect(screen.queryByText(/couldn't be read just now/)).toBeNull();
+    });
+
+    it.each([
+      [
+        'nothing changed',
+        { outcome: 'attached', unchanged: true },
+        "Nothing changed: the posting matches the company's board.",
+      ],
+      [
+        'nothing changed, with your own description',
+        {
+          outcome: 'attached',
+          unchanged: true,
+          opportunity: { ...before, postingStateDetail: 'user_confirmed' },
+        },
+        'Nothing changed. Your own description was kept.',
+      ],
+      [
+        'something changed',
+        { outcome: 'attached', changed: ['description'] },
+        'Posting updated from the board.',
+      ],
+      [
+        'a board read in part',
+        { outcome: 'none', candidates: [], note: 'Large Workday board: part read.' },
+        "This job was not found on the company's board. Paste the posting on the Details tab. Large Workday board: part read.",
+      ],
+    ])('the sentence fits the answer: %s', async (_n, answer, text) => {
+      mockApi({
+        'GET /resumes': { items: [RESUME], total: 1 },
+        'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+        'POST /opportunities/opp-1/find-posting': answer,
+      });
+      renderWithProviders(<ApplyPanel opp={before} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+      expect(await screen.findByRole('status')).toHaveTextContent(text);
+    });
+  });
 
   it('Find posting failing shows the error', async () => {
     mockApi({
@@ -910,6 +1091,25 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
       "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.",
     );
     expect(screen.queryByRole('button', { name: 'Find posting' })).toBeNull();
+  });
+});
+
+describe('the promise at the top of the apply page', () => {
+  it('names the site the form is on', async () => {
+    mockApi(routes(null));
+    renderStep('resume');
+    expect(await screen.findByRole('note')).toHaveTextContent(
+      'Opportun will not submit this. You will press the submit button on boards.greenhouse.io yourself.',
+    );
+  });
+
+  // With no recognised posting there is no site to name yet (#893).
+  it('is a whole sentence when the posting is not recognised', async () => {
+    mockApi({ ...routes(null), 'GET /opportunities/opp-1': { ...OPP, atsJobRef: null } });
+    renderStep('resume');
+    expect(await screen.findByRole('note')).toHaveTextContent(
+      'Opportun will not submit this. You will press the submit button on the application site yourself.',
+    );
   });
 });
 
