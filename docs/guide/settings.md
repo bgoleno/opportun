@@ -50,8 +50,11 @@ name it and record its expiry date from the provider console (providers do not r
 Keys are encrypted at rest and only ever sent to their own provider. When a provider has
 several keys, the newest is used.
 
-Each key is checked when you add it and whenever you press **Validate**. The status chip has
-three kinds of answer:
+Each key is checked when you add it and whenever you press **Validate**. For an Anthropic key the
+check sends one tiny test message (a single output token) for each distinct model your settings
+use, which is three with the default settings. For an OpenAI key it asks the provider for its list
+of models, once, and for an OpenAI-compatible endpoint it does the same once for each distinct
+endpoint your settings use. The status chip has three kinds of answer:
 
 | Chip                                                                     | Meaning                                                                                                                                                                                                 |
 | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
