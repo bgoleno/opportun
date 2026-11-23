@@ -913,18 +913,19 @@ describe('manual order (issue #240)', () => {
       expect(after.get(left!)).toMatchObject({ sortOrder: 0, updatedAt: 1 });
     });
 
-    it('a card named twice, far apart in a long one, takes its last place', async () => {
+    // In one statement, and in two.
+    it.each([3, 700])('a card named twice in one of %i takes its last place', async (n) => {
       const { app, a } = await boot();
-      const ids = await column(app, a, 700);
+      const ids = await column(app, a, n);
       const changes = ids.map((id, i) => ({ id, sortOrder: i }));
       const res = await reorder(a, [
-        { id: ids[699]!, sortOrder: -5 },
+        { id: ids[n - 1]!, sortOrder: -5 },
         ...changes,
         { id: ids[0]!, sortOrder: 9000 },
       ]);
       expect(res.statusCode, res.body).toBe(204);
       const after = await cards(app);
-      expect(after.get(ids[699]!)?.sortOrder).toBe(699);
+      expect(after.get(ids[n - 1]!)?.sortOrder).toBe(n - 1);
       expect(after.get(ids[0]!)?.sortOrder).toBe(9000);
       expect(after.get(ids[1]!)?.sortOrder).toBe(1);
     });
