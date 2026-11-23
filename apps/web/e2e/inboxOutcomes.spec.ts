@@ -187,3 +187,82 @@ for (const width of [375, 1280, 1920]) {
     ).toBeLessThanOrEqual(0);
   });
 }
+
+// qa on #916: a link whose dialog was closed while the request was out. The request is held at the
+// browser, then answered as the case says; the closing is the real one (the native dialog's Escape).
+for (const width of [375, 1280, 1920]) {
+  test(`a link whose dialog was closed before it answered says so once, at ${width} px (#919)`, async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await registerUser(page);
+    await createOpportunity(page, OPP);
+    const [subject] = (await seed(page, `c${width}`, 1)) as [string];
+    const { id } = await idOf(page, subject);
+    await api(page, 'POST', `/communications/${id}/classify`, { opportunityId: null });
+    await page.setViewportSize({ width, height: 900 });
+    await openTab(page, /^Needs review/);
+    const dialog = page.getByRole('dialog', { name: 'Link to an opportunity' });
+    const region = toasts(page);
+    const toast = (text: string) => region.getByText(text, { exact: true });
+
+    /** Holds the next link at the browser; `end` lets it fail, or go on to the server. */
+    async function holdLink() {
+      let end!: (how: 500 | 'offline' | 'go on') => void;
+      const ended = new Promise<500 | 'offline' | 'go on'>((r) => (end = r));
+      let reached!: () => void;
+      const asked = new Promise<void>((r) => (reached = r));
+      await page.route(
+        `**/communications/${id}/classify`,
+        async (route) => {
+          reached();
+          const how = await ended;
+          if (how === 'go on') await route.continue();
+          else if (how === 'offline') await route.abort('internetdisconnected');
+          else await route.fulfill({ status: 500, json: { error: { code: 'internal' } } });
+        },
+        { times: 1 },
+      );
+      return { asked, end };
+    }
+
+    for (const [how, key] of [
+      [500, 'Escape'],
+      ['offline', 'Cancel'],
+    ] as const) {
+      await test.step(`fails (${how}) after ${key}`, async () => {
+        const link = await holdLink();
+        await linkFromRow(page, subject);
+        await link.asked;
+        if (key === 'Escape') await page.keyboard.press('Escape');
+        else await dialog.getByRole('button', { name: 'Cancel' }).click();
+        await expect(dialog).toBeHidden();
+        link.end(how);
+        await expect(toast('Message not linked')).toHaveCount(1);
+        await expect(row(page, subject)).toBeVisible();
+        expect((await idOf(page, subject)).opportunityId).toBeNull();
+        // Not said again in the dialog when it is next opened.
+        await row(page, subject).getByRole('button', { name: 'Link to opportunity' }).click();
+        await expect(dialog).toBeVisible();
+        await expect(dialog.getByRole('alert')).toHaveCount(0);
+        await page.keyboard.press('Escape');
+        await expect(dialog).toBeHidden();
+        // Its toast goes (that Escape closes it too) before the next one is looked for.
+        await expect(toast('Message not linked')).toHaveCount(0);
+      });
+    }
+
+    await test.step('succeeds after Escape', async () => {
+      const link = await holdLink();
+      await linkFromRow(page, subject);
+      await link.asked;
+      await page.keyboard.press('Escape');
+      await expect(dialog).toBeHidden();
+      link.end('go on');
+      await expect(toast('Message linked')).toHaveCount(1);
+      await expect(row(page, subject)).toHaveCount(0);
+      expect((await idOf(page, subject)).opportunityId).not.toBeNull();
+    });
+  });
+}

@@ -25,7 +25,7 @@ export function LinkDialog(props: {
   const { comm } = props;
   const [q, setQ] = useState(comm.companyName ?? '');
   const results = useOpportunitySearch(props.open ? q : '');
-  const relink = useReclassifyInDialog(comm.id, () => props.onOpenChange(false));
+  const relink = useReclassifyInDialog(comm.id, props.open, () => props.onOpenChange(false));
 
   function link(opportunityId: string | null) {
     relink.save(

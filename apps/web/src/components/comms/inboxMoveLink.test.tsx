@@ -2,7 +2,7 @@
 // (https://github.com/bgoleno/opportun/issues/895). The list reloads before an action's outcome is
 // reported, and a row that left with the reload took its callbacks with it: a refused Move said
 // nothing, and "Message linked", "Message unlinked" and "Moved to Needs review" never showed.
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders, toastRegion } from '@/test/render';
@@ -68,15 +68,16 @@ function serve(
   view: string,
   row: CommunicationView,
   after: CommunicationView | null,
-  routes: Record<string, Answer>,
+  routes: Record<string, Answer | (() => Promise<Answer>)>,
 ) {
   let acted = false;
   const table = Object.fromEntries(
     Object.entries(routes).map(([key, answer]) => [
       key,
-      () => {
+      async () => {
+        const answered = typeof answer === 'function' ? await answer() : answer;
         acted = true;
-        return answer;
+        return answered;
       },
     ]),
   );
@@ -350,5 +351,155 @@ describe('a refused link (#895)', () => {
     await new Promise((r) => setTimeout(r, 100));
     expect(screen.getByRole('dialog', { name: 'Link to an opportunity' })).toBeInTheDocument();
     expect(screen.queryByText('Message not linked')).toBeNull();
+  });
+});
+
+// qa on #916: the outcome of a request whose dialog was closed (Escape or Cancel) while it was out.
+describe('an action whose dialog was closed before it answered (#919)', () => {
+  const OK: Answer = { status: 200, body: LINKED };
+  const FAILED: Answer = {
+    status: 500,
+    body: { error: { code: 'server_error', message: 'The server could not do that.' } },
+  };
+
+  /** The classify request, held until `answer` is called with its answer, or an error to throw. */
+  function held(view: string, row: CommunicationView, after: CommunicationView | null) {
+    let answer!: (a: Answer | Error) => void;
+    const answered = new Promise<Answer | Error>((r) => (answer = r));
+    let asked!: () => void;
+    const asking = new Promise<void>((r) => (asked = r));
+    serve(view, row, after, {
+      'POST /communications/c1/classify': async () => {
+        asked();
+        const a = await answered;
+        if (a instanceof Error) throw a;
+        return a;
+      },
+    });
+    return { answer, asking };
+  }
+
+  /** As a browser does for Escape: the native dialog's close event (jsdom has none of its own). */
+  const escape = (dialog: HTMLElement) => fireEvent(dialog, new Event('close'));
+
+  async function closeBy(
+    how: 'Escape' | 'Cancel',
+    user: ReturnType<typeof userEvent.setup>,
+    dialog: HTMLElement,
+  ) {
+    if (how === 'Escape') escape(dialog);
+    else await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  }
+
+  /** The toast `title` is there, once, and stays the only one. */
+  async function saidOnce(title: string) {
+    expect(await toastRegion().findByText(title)).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 150));
+    expect(toastRegion().getAllByText(title)).toHaveLength(1);
+    expect(
+      within(screen.getByRole('region', { name: /^Notifications/ })).getAllByRole('listitem'),
+    ).toHaveLength(1);
+  }
+
+  it.each([
+    ['Escape', FAILED, 'The server could not do that.'],
+    ['Cancel', FAILED, 'The server could not do that.'],
+    ['Escape', new TypeError('Failed to fetch'), 'Failed to fetch'],
+  ] as const)(
+    'a link closed with %s that fails: said once, and the row is as it was',
+    async (how, failure, why) => {
+      const user = userEvent.setup();
+      const { answer, asking } = held('needs_review', BASE, BASE);
+      renderWithProviders(<Inbox />);
+      const dialog = await openLink(user, 'Link to opportunity');
+      await pickAcme(user, dialog);
+      await asking;
+      await closeBy(how, user, dialog);
+      answer(failure);
+      await saidOnce('Message not linked');
+      expect(toastRegion().getByText(why)).toBeInTheDocument();
+      expect(screen.getByText('Interview times')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Link to opportunity' })).toBeInTheDocument();
+      // Nor said again when the dialog is next opened.
+      const again = await openLink(user, 'Link to opportunity');
+      expect(within(again).queryByRole('alert')).toBeNull();
+    },
+  );
+
+  it.each(['Escape', 'Cancel'] as const)(
+    'a link closed with %s that succeeds: said once',
+    async (how) => {
+      const user = userEvent.setup();
+      const { answer, asking } = held('needs_review', BASE, null);
+      renderWithProviders(<Inbox />);
+      const dialog = await openLink(user, 'Link to opportunity');
+      await pickAcme(user, dialog);
+      await asking;
+      await closeBy(how, user, dialog);
+      answer(OK);
+      await saidOnce('Message linked');
+      await gone();
+    },
+  );
+
+  it('an unlink closed before it fails', async () => {
+    const user = userEvent.setup();
+    const { answer, asking } = held('linked', LINKED, LINKED);
+    renderWithProviders(<Inbox initialTab="linked" />);
+    const dialog = await openLink(user, 'Change link');
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    await asking;
+    await closeBy('Cancel', user, dialog);
+    answer(FAILED);
+    await saidOnce('Message not unlinked');
+  });
+
+  it('a reclassify closed before it fails', async () => {
+    const user = userEvent.setup();
+    const { answer, asking } = held('needs_review', BASE, BASE);
+    renderWithProviders(<Inbox />);
+    await user.click(await screen.findByRole('button', { name: 'Reclassify' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Reclassify message' });
+    await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await asking;
+    await closeBy('Escape', user, dialog);
+    answer(FAILED);
+    await saidOnce('Classification not saved');
+  });
+
+  it('opened again before it fails: said in the dialog, with no toast', async () => {
+    const user = userEvent.setup();
+    const { answer, asking } = held('needs_review', BASE, BASE);
+    renderWithProviders(<Inbox />);
+    const dialog = await openLink(user, 'Link to opportunity');
+    await pickAcme(user, dialog);
+    await asking;
+    await closeBy('Cancel', user, dialog);
+    const again = await openLink(user, 'Link to opportunity');
+    answer(FAILED);
+    expect(await within(again).findByRole('alert')).toHaveTextContent(
+      'The server could not do that.',
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    expect(screen.queryByText('Message not linked')).toBeNull();
+  });
+
+  it.each([
+    ['succeeds', OK, 'Message linked'],
+    ['fails', FAILED, 'Message not linked'],
+  ] as const)('one that %s leaves another dialog of the row open', async (_, outcome, title) => {
+    const user = userEvent.setup();
+    const { answer, asking } = held('needs_review', BASE, BASE);
+    renderWithProviders(<Inbox />);
+    const dialog = await openLink(user, 'Link to opportunity');
+    await pickAcme(user, dialog);
+    await asking;
+    await closeBy('Cancel', user, dialog);
+    await user.click(screen.getByRole('button', { name: 'Reclassify' }));
+    await screen.findByRole('dialog', { name: 'Reclassify message' });
+    answer(outcome);
+    await saidOnce(title);
+    expect(screen.getByRole('dialog', { name: 'Reclassify message' })).toBeInTheDocument();
   });
 });

@@ -27,7 +27,7 @@ export function ReclassifyDialog(props: {
     comm.classification ?? 'other',
   );
   const [outreach, setOutreach] = useState<string>(comm.outreachKind ?? 'targeted');
-  const correction = useReclassifyInDialog(comm.id, () => props.onOpenChange(false));
+  const correction = useReclassifyInDialog(comm.id, props.open, () => props.onOpenChange(false));
   const isOutreach = classification === 'solicitation';
 
   function submit() {
