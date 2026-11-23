@@ -85,7 +85,13 @@ export async function attachPosting(
 ): Promise<OpportunityView> {
   const posting = sanitizePosting(raw);
   if (posting.descriptionMd == null || posting.descriptionMd === '') {
-    throw new HttpError(422, 'invalid_posting', 'That posting has no description text.');
+    throw new HttpError(
+      422,
+      'invalid_posting',
+      'That posting has no description text.',
+      undefined,
+      { userFacing: true },
+    );
   }
   const current = await getOpportunity(db, ctx, opportunityId);
   // The user's own writing outranks any board (design D11). A description the system wrote,
@@ -101,6 +107,8 @@ export async function attachPosting(
       409,
       'already_described',
       'This opportunity already has a description. Edit it instead.',
+      undefined,
+      { userFacing: true },
     );
   }
   // Issue #255: a Refetch calls this on an opportunity already `confirmed`; the timeline says

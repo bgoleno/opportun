@@ -21,6 +21,7 @@ import {
 import { racePoint } from '../lib/racePoints';
 import { confirmedPasswordHash, reauthLimits } from '../lib/reauth';
 import { requireUser } from '../repos/base';
+import { ErrorResponse } from './common';
 
 const Meta = z.object({
   id: z.string(),
@@ -38,11 +39,6 @@ const CreateBody = z.object({
     .max(DEVICE_TOKEN_SCOPES.length * 2),
   /** The current password: minting a credential needs more than the session cookie. */
   password: z.string().min(1).max(1024),
-});
-// The message is kept (#743): a response schema drops what it does not name, and a refusal such as
-// password_changed (#643) carries the sentence the user is meant to read.
-const ErrorResponse = z.object({
-  error: z.object({ code: z.string(), message: z.string().optional() }),
 });
 const IdParams = z.object({ id: z.string().min(1).max(64) });
 /** A label only: renaming grants nothing, so it needs no password (design D6). */
@@ -79,7 +75,13 @@ export async function deviceTokenRoutes(app: FastifyInstance): Promise<void> {
         req.body.scopes.includes('apply:assist') &&
         (!submissionsEnabled(app.config) || sharedAssistedApplyOff(app.config, ctx.userId))
       ) {
-        throw new HttpError(422, 'scope_unavailable', 'Assisted apply is not available here.');
+        throw new HttpError(
+          422,
+          'scope_unavailable',
+          'Assisted apply is not available here.',
+          undefined,
+          { userFacing: true },
+        );
       }
       const verified = await confirmedPasswordHash(req, reply, {
         userId: ctx.userId,
