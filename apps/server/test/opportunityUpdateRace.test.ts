@@ -161,8 +161,9 @@ describe('two saves that each change part of the key', () => {
     expect(await expectKeyMatches(app, id)).toMatchObject({ ...one, ...two });
   });
 
-  // Postgres only: on SQLite the delete would wait at the gate behind the save.
-  it.runIf(!sqliteOnly)('an opportunity deleted while its save waits is not found', async () => {
+  // Postgres only: on SQLite the delete would wait at the gate behind the save. The delete waits for
+  // the user's lock as well (#920, below), so the row goes here by a plain DELETE.
+  it.runIf(!sqliteOnly)('an opportunity gone while its save waits is not found', async () => {
     const { app, a } = await boot();
     const { id } = await create(app, a);
     const other = await create(app, a, 'Another Job');
@@ -172,11 +173,29 @@ describe('two saves that each change part of the key', () => {
     await pause.reached;
     const second = patch(a, id, COMPANY);
     const seen = await settledOrWaiting(app, second, pause);
-    const gone = await a.request({ method: 'DELETE', url: `/api/v1/opportunities/${id}` });
+    await app.db.delete(opportunities).where(eq(opportunities.id, id)).run();
     pause.release();
     expect(seen).toBe('waiting');
-    expect(gone.statusCode, gone.body).toBe(204);
     expect((await first).statusCode).toBe(200);
+    expect((await second).statusCode).toBe(404);
+  });
+
+  it('a delete waits for a save that is being made, and a save behind it is not found', async () => {
+    const { app, a } = await boot();
+    const { id } = await create(app, a);
+    const other = await create(app, a, 'Another Job');
+    onSlowTransaction(() => undefined);
+    const pause = pauseAt(LOCKED);
+    const first = patch(a, other.id, { title: 'Yet Another Job' });
+    await pause.reached;
+    const deleting = a.request({ method: 'DELETE', url: `/api/v1/opportunities/${id}` });
+    const seen = await settledOrWaiting(app, deleting, pause);
+    // Behind the delete whenever it comes: the lock goes to whoever asked first.
+    const second = patch(a, id, COMPANY);
+    pause.release();
+    expect(seen).toBe('waiting');
+    expect((await first).statusCode).toBe(200);
+    expect((await deleting).statusCode).toBe(204);
     expect((await second).statusCode).toBe(404);
   });
 });
