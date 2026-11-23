@@ -6,13 +6,14 @@ import { ADMIN } from './global-setup';
 // The server's own TOTP implementation computes the codes an authenticator app would show.
 import { totpCode } from '../../server/src/lib/totp';
 import {
+  adminContext,
   card,
   choose,
   connectGoogle,
   createOpportunity,
   moveTo,
-  adminContext,
   PASSWORD,
+  pressEscapeTwice,
   registerUser,
   toasts,
 } from './helpers';
@@ -372,6 +373,12 @@ test('admin resets a member password from Settings > Users (FR-S1)', async ({ pa
       .getByLabel('Temporary password for Reset Member', { exact: true })
       .inputValue();
     expect(temporary.length).toBeGreaterThanOrEqual(24);
+    // Shown once, so only Done puts it away (#903). Checked here, where a reset is made anyway: each
+    // one spends the admin's re-authentication limit (#776).
+    await pressEscapeTwice(admin, shown);
+    await expect(
+      shown.getByLabel('Temporary password for Reset Member', { exact: true }),
+    ).toHaveValue(temporary);
     await shown.getByRole('button', { name: 'Done' }).click();
     await expect(shown).toBeHidden();
 
