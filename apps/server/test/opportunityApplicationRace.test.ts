@@ -145,6 +145,35 @@ async function written({ app }: Pair) {
   };
 }
 
+/** A submitted attempt, which is not live, so there can be several. */
+async function attemptOn(p: Pair, opportunityId: string, followupNextStepId?: string) {
+  const id = newId();
+  await p.app.db
+    .insert(applicationSubmissions)
+    .values({
+      id,
+      userId: p.ctx.userId,
+      opportunityId,
+      resumeId: p.resumeId,
+      atsKind: 'ats_greenhouse',
+      atsRef: 'examplecorp',
+      atsExternalId: newId(),
+      destinationUrl: 'https://boards.greenhouse.io/examplecorp/jobs/1000001',
+      status: 'submitted',
+      handedOffAt: 1,
+      submittedAt: 1,
+      submittedBasis: 'user_attested',
+      idempotencyKey: newId(),
+      fields: {},
+      answers: [],
+      followupNextStepId: followupNextStepId ?? null,
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    .run();
+  return id;
+}
+
 describe('an application started on the kept one while a merge moves a live one to it', () => {
   const CONFLICT = (submissionId: string) => ({
     statusCode: 409,
@@ -191,6 +220,18 @@ describe('an application started on the kept one while a merge moves a live one 
     expect(await attemptsOf(p, p.other)).toEqual([there.id]);
     expect(await attemptsOf(p, p.keep)).toHaveLength(1);
   });
+
+  it.each(['the kept one', 'the other one'])(
+    'control: a finished one on %s is no conflict with a live one',
+    async (which) => {
+      const p = await pair();
+      const [live, done] = which === 'the kept one' ? [p.other, p.keep] : [p.keep, p.other];
+      const finished = await attemptOn(p, done);
+      const { submission } = await start(p, live);
+      expect(await merged(p)).toBe('ok');
+      expect((await attemptsOf(p, p.keep)).sort()).toEqual([finished, submission.id].sort());
+    },
+  );
 
   it('after it: the start meets the one that was moved', async () => {
     const p = await pair();
@@ -287,34 +328,6 @@ describe('beside a merge or a delete, what names the one that goes', () => {
 // The merge and the delete take the locks of the attempts there are, and then the user's. One made in
 // between has a lock they don't hold.
 describe('an attempt made after the locks on attempts were taken', () => {
-  /** A submitted attempt, which is not live, so there can be several. */
-  async function attemptOn(p: Pair, opportunityId: string, followupNextStepId?: string) {
-    const id = newId();
-    await p.app.db
-      .insert(applicationSubmissions)
-      .values({
-        id,
-        userId: p.ctx.userId,
-        opportunityId,
-        resumeId: p.resumeId,
-        atsKind: 'ats_greenhouse',
-        atsRef: 'examplecorp',
-        atsExternalId: newId(),
-        destinationUrl: 'https://boards.greenhouse.io/examplecorp/jobs/1000001',
-        status: 'submitted',
-        handedOffAt: 1,
-        submittedAt: 1,
-        submittedBasis: 'user_attested',
-        idempotencyKey: newId(),
-        fields: {},
-        answers: [],
-        followupNextStepId: followupNextStepId ?? null,
-        createdAt: 1,
-        updatedAt: 1,
-      })
-      .run();
-    return id;
-  }
   /** Holds the user's lock while `going` waits for it, and makes a handed-off attempt meanwhile. */
   async function madeMeanwhile(p: Pair, going: () => Promise<unknown>) {
     const held = heldOpen(p.app, (tx) => lockScope(tx, `user:${p.ctx.userId}`));
