@@ -49,19 +49,28 @@ when the milestone's work was merged.
 
 ### Docs
 
-- **Docs: the Inbox guide covers paging, Sync now without a reload and the bulk reject outcomes;
-  the demo deployment page and the design page are corrected.** The Inbox guide explains a tab
-  with more than 200 messages ("Showing x–y of N", **Previous** and **Next**), the new mail and
+- **Docs: the Settings guide covers Linked accounts and what checking an AI key sends; the Inbox
+  guide covers paging, Sync now without a reload and the bulk reject outcomes; the demo
+  deployment page and the design page are corrected.** Under Security, the Settings guide explains
+  **Link** and **Unlink** (each asks for your current password, and Unlink is refused without a
+  password) and what a password reset does to linked providers. It also says that checking an
+  Anthropic key sends one tiny test message for each distinct model your settings use, and that an
+  OpenAI or OpenAI-compatible key sends a model-list request. The Inbox guide explains a tab with
+  more than 200 messages ("Showing x–y of N", **Previous** and **Next**), the new mail and
   counts that appear after **Sync now**, and the "changed elsewhere and left as they are" outcome.
   The demo deployment page says every default task policy is `anthropic` and that a dedicated
   account's requests wait for the nightly reset and can delay it. The design page names the
   connector's `/api/v1/connector/mail/batch` endpoint, the Workday adapter and the Google packages
-  ([#739](https://github.com/bgoleno/opportun/issues/739),
+  ([#605](https://github.com/bgoleno/opportun/issues/605),
+  [#739](https://github.com/bgoleno/opportun/issues/739),
   [#744](https://github.com/bgoleno/opportun/issues/744),
-  [#772](https://github.com/bgoleno/opportun/issues/772); PRs
+  [#772](https://github.com/bgoleno/opportun/issues/772),
+  [#891](https://github.com/bgoleno/opportun/issues/891); PRs
+  [#625](https://github.com/bgoleno/opportun/pull/625),
   [#877](https://github.com/bgoleno/opportun/pull/877),
   [#881](https://github.com/bgoleno/opportun/pull/881),
-  [#884](https://github.com/bgoleno/opportun/pull/884)).
+  [#884](https://github.com/bgoleno/opportun/pull/884),
+  [#899](https://github.com/bgoleno/opportun/pull/899)).
 
 ## 0.5.0 (2026-11-22)
 
