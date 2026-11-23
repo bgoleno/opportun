@@ -4,7 +4,7 @@ import { and, desc, eq, type SQL } from 'drizzle-orm';
 import { newId } from '@opportun/core';
 import { attachments } from '../db/schema';
 import { notFound } from '../lib/errors';
-import { assertOpportunityOwned } from './activities';
+import { assertOpportunityOwned, holdOpportunity } from './activities';
 import type { Db, UserCtx } from './base';
 import { ownedBy } from './base';
 import { countWhere, type Page } from './list';
@@ -51,7 +51,7 @@ export async function createAttachment(
 ): Promise<AttachmentMeta> {
   return await withTransaction(db, async (tx) => {
     // Re-checked inside the transaction: the opportunity may be gone after the upload.
-    await assertOpportunityOwned(tx, ctx, opportunityId);
+    await holdOpportunity(tx, ctx, opportunityId);
     const row = await tx
       .insert(attachments)
       .values({ ...file, id: newId(), userId: ctx.userId, opportunityId, createdAt: Date.now() })
