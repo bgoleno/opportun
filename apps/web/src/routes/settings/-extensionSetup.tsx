@@ -158,6 +158,8 @@ export function ExtensionSetupDialog({
   }
 
   function requestClose(): void {
+    // The token is on its way: closed now, it would be made and not shown (#898).
+    if (busy) return;
     // The server keeps only a hash, so leaving now means minting another one (D8). Keyed on
     // `connected`, not on whether the copy below succeeded: a confirmed copy only means the
     // value reached the clipboard, not that it ever made it into the extension, and a bad
@@ -211,7 +213,11 @@ export function ExtensionSetupDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : requestClose())}>
-        <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto">
+        <DialogContent
+          className="max-h-[85vh] max-w-xl overflow-y-auto"
+          showClose={!busy}
+          guardClose
+        >
           <DialogHeader>
             <DialogTitle>Set up the browser extension</DialogTitle>
             <DialogDescription>
