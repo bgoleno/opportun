@@ -6,12 +6,19 @@ import { eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { newId } from '@opportun/core';
 import { describe, expect, it } from 'vitest';
-import { activities, opportunities } from '../src/db/schema';
+import {
+  activities,
+  applicationSubmissions,
+  nextSteps,
+  opportunities,
+  resumes,
+} from '../src/db/schema';
 import { withTransaction, writeGateOf } from '../src/db/client';
 import { onSlowTransaction } from '../src/db/gate';
 import type { Exec, UserCtx } from '../src/repos/base';
 import { createActivity, updateActivity } from '../src/repos/activities';
 import { createOpportunity, deleteOpportunity } from '../src/repos/opportunities';
+import { insertResume } from '../src/repos/resumes';
 import { indexActivity, indexOpportunity } from '../src/repos/search';
 import { useApi } from './api';
 import { queryAll, queryOne, sqliteOnly } from './db';
@@ -192,6 +199,84 @@ describe('a delete and a save of one opportunity', () => {
   });
 });
 
+// tl on #923: the attempt's row points at an activity, a next step and a resume, each set null when
+// that one goes. A delete of one of them has its row and then writes the attempt's, so the
+// opportunity's delete must not have the attempt's row before it reaches theirs.
+describe('a delete beside the delete of what its attempt points at', () => {
+  it.runIf(!sqliteOnly).each(['next step', 'resume'] as const)(
+    "the attempt's %s: both are done",
+    async (what) => {
+      const { app, a } = await boot();
+      const { id, noteId } = await create(app, a);
+      const now = Date.now();
+      const step = newId();
+      await app.db
+        .insert(nextSteps)
+        .values({
+          id: step,
+          userId: a.userId,
+          opportunityId: id,
+          action: 'Follow up',
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+      const resume = await insertResume(app.db, ctxOf(a), {
+        kind: 'base',
+        title: 'Resume',
+        store: 'local_file',
+        docRef: `resumes/${newId()}.txt`,
+        opportunityId: id,
+        parentResumeId: null,
+      });
+      await app.db
+        .insert(applicationSubmissions)
+        .values({
+          id: newId(),
+          userId: a.userId,
+          opportunityId: id,
+          resumeId: resume.id,
+          atsKind: 'ats_greenhouse',
+          atsRef: 'initech',
+          atsExternalId: '1000001',
+          destinationUrl: 'https://boards.greenhouse.io/initech/jobs/1000001',
+          status: 'submitted',
+          idempotencyKey: newId(),
+          fields: {},
+          answers: [],
+          submittedActivityId: noteId,
+          followupNextStepId: step,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .run();
+      onSlowTransaction(() => undefined);
+      const own =
+        what === 'next step'
+          ? {
+              lock: (tx: Exec) =>
+                tx.update(nextSteps).set({ action: 'Held' }).where(eq(nextSteps.id, step)).run(),
+              remove: (tx: Exec) => tx.delete(nextSteps).where(eq(nextSteps.id, step)).run(),
+            }
+          : {
+              lock: (tx: Exec) =>
+                tx.update(resumes).set({ title: 'Held' }).where(eq(resumes.id, resume.id)).run(),
+              remove: (tx: Exec) => tx.delete(resumes).where(eq(resumes.id, resume.id)).run(),
+            };
+      const other = held(app, own.lock, own.remove);
+      await other.reached;
+      const deleting = remove(a, id);
+      const blocked = await someoneBlocked(app);
+      other.go();
+      const [theirs, deleted] = await Promise.allSettled([other.done, deleting]);
+      expect(blocked).toBe(true);
+      expect(theirs.status).toBe('fulfilled');
+      expect(deleted).toMatchObject({ status: 'fulfilled', value: { statusCode: 204 } });
+      expect(await left(app, a, id)).toEqual(NOTHING);
+    },
+  );
+});
+
 describe('a delete and its activities: none is left in search', () => {
   it.runIf(!sqliteOnly)('one being edited', async () => {
     const { app, a } = await boot();
@@ -248,7 +333,35 @@ describe('a delete and its activities: none is left in search', () => {
     expect(await left(app, a, id)).toEqual(NOTHING);
   });
 
-  it('an edit that comes after is not found', async () => {
+  // As a merge moves one: it is the other opportunity's by the time the delete has its row.
+  it.runIf(!sqliteOnly)('one being moved to another opportunity keeps its search row', async () => {
+    const { app, a } = await boot();
+    const { id, noteId } = await create(app, a);
+    const kept = await create(app, a, 'Data Analyst');
+    onSlowTransaction(() => undefined);
+    const move = held(
+      app,
+      (tx) =>
+        tx
+          .update(activities)
+          .set({ opportunityId: kept.id })
+          .where(eq(activities.id, noteId))
+          .run(),
+      () => Promise.resolve(),
+    );
+    await move.reached;
+    const deleting = remove(a, id);
+    const blocked = await someoneBlocked(app);
+    move.go();
+    const [, deleted] = await Promise.all([move.done, deleting]);
+    expect(blocked).toBe(true);
+    expect(deleted.statusCode, deleted.body).toBe(204);
+    const after = await left(app, a, kept.id);
+    expect(after.activities.map((x) => x.id).sort()).toEqual([kept.noteId, noteId].sort());
+    expect(after.search.map((x) => x.id).sort()).toEqual([kept.id, kept.noteId, noteId].sort());
+  });
+
+  it('control: an edit that comes after is not found', async () => {
     const { app, a } = await boot();
     const { id, noteId } = await create(app, a);
     onSlowTransaction(() => undefined);
@@ -269,6 +382,7 @@ describe('a delete and its activities: none is left in search', () => {
     const { app, a } = await boot();
     const { id } = await create(app, a);
     const kept = await create(app, a, 'Data Analyst');
+    onSlowTransaction(() => undefined);
     const now = Date.now();
     await withTransaction(app.db, async (tx) => {
       for (let n = 0; n < 1200; n++) {

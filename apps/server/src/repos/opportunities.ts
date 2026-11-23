@@ -63,7 +63,7 @@ import {
   removeFromIndex,
   removeOpportunityFromIndex,
 } from './search';
-import { lockScope, rawGet, runCount, withTransaction } from '../db/client';
+import { lockScope, rawAll, rawGet, runCount, withTransaction } from '../db/client';
 
 export type OpportunityRow = typeof opportunities.$inferSelect;
 /**
@@ -837,15 +837,26 @@ export async function afterStageChange(db: Db, ctx: UserCtx, view: OpportunityVi
   }
 }
 
+/** SQLite has no row locks: the write gate already runs transactions one at a time. */
+const FOR_UPDATE = SCHEMA_DIALECT === 'postgres' ? sql` FOR UPDATE` : sql``;
+
 /** Locks the opportunity's row against every other writer of it; false when there is none. */
 async function lockOpportunityRow(tx: Exec, ctx: UserCtx, id: string): Promise<boolean> {
-  // SQLite has no row locks: the write gate already runs transactions one at a time.
-  const lock = SCHEMA_DIALECT === 'postgres' ? sql` FOR UPDATE` : sql``;
   const row = await rawGet(
     tx,
-    sql`SELECT id FROM opportunities WHERE ${ownedSql('user_id', ctx)} AND id = ${id}${lock}`,
+    sql`SELECT id FROM opportunities WHERE ${ownedSql('user_id', ctx)} AND id = ${id}${FOR_UPDATE}`,
   );
   return row !== undefined;
+}
+
+/** The ids of the opportunity's activities, their rows locked. */
+async function activityIdsForUpdate(tx: Exec, ctx: UserCtx, id: string): Promise<string[]> {
+  const rows = await rawAll<{ id: string }>(
+    tx,
+    sql`SELECT id FROM activities
+        WHERE ${ownedSql('user_id', ctx)} AND opportunity_id = ${id}${FOR_UPDATE}`,
+  );
+  return rows.map((r) => r.id);
 }
 
 export async function deleteOpportunity(db: Db, ctx: UserCtx, id: string): Promise<void> {
@@ -853,22 +864,18 @@ export async function deleteOpportunity(db: Db, ctx: UserCtx, id: string): Promi
     // Its attempts' locks before any row write: the delete cascades to them (#173).
     await lockAttemptsOf(tx, ctx, [id]);
     // Then the opportunity's row, its activities', and the search rows last: the order a save of any
-    // of them takes, which writes its row and then indexes it. The search rows first, and each could
+    // of them takes, which writes its row and then indexes it. With the search rows first, each could
     // wait for the other (40P01, #917). Locked FOR UPDATE, so an activity being added (its foreign
     // key holds the row) is committed before they are read, and none can be added after.
     if (!(await lockOpportunityRow(tx, ctx, id))) throw notFound();
     await racePoint('opportunities.delete.locked');
-    const gone = await tx
-      .delete(activities)
-      .where(and(ownedBy(activities.userId, ctx), eq(activities.opportunityId, id)))
-      .returning({ id: activities.id });
+    // Read, and left for the cascade to delete: a DELETE of their own would set null the attempts'
+    // links to them there and then, and so have the attempts' rows before the cascade has reached
+    // their next steps and resumes, which a delete of one of those takes the other way round (tl on
+    // #923). Locked as well, so one a merge is moving away is waited for, and not counted.
+    const gone = await activityIdsForUpdate(tx, ctx, id);
     await tx.delete(opportunities).where(owned(ctx, id)).run();
-    await removeOpportunityFromIndex(
-      tx,
-      ctx,
-      id,
-      gone.map((a) => a.id),
-    );
+    await removeOpportunityFromIndex(tx, ctx, id, gone);
   });
 }
 
