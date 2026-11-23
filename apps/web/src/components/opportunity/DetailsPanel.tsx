@@ -302,7 +302,16 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
     setFindError(null);
     setUnreachable(false);
     try {
-      const result = await find.mutateAsync();
+      const result = await find.mutateAsync(opp.postingState ?? 'none');
+      if (result.outcome === 'already_confirmed') {
+        // A background check finished while the page was open (#852): nothing searched again.
+        toast({
+          title: 'Already confirmed',
+          description: "The board check finished while this page was open; it's up to date now.",
+          variant: 'success',
+        });
+        return;
+      }
       if (result.outcome === 'unreachable') {
         setUnreachable(true);
         return;
@@ -363,13 +372,17 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
       const title =
         result.outcome === 'no_description_found'
           ? 'Nothing to re-derive'
-          : result.outcome === 'merged'
-            ? 'Description re-derived from a board match'
-            : 'Description re-derived from the capture';
+          : result.outcome === 'left_alone'
+            ? 'Left as it is'
+            : result.outcome === 'merged'
+              ? 'Description re-derived from a board match'
+              : 'Description re-derived from the capture';
       const description =
         result.outcome === 'no_description_found'
           ? "The captured page didn't carry a recognizable job description."
-          : undefined;
+          : result.outcome === 'left_alone'
+            ? 'The description changed while the board was being checked, so it was kept.'
+            : undefined;
       toast({ title, description, variant: 'success' });
     } catch (err) {
       toast({

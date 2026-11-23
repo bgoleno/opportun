@@ -13,7 +13,9 @@ import {
 } from '../adapters/discoverySource';
 import { ASHBY_HOST } from '../adapters/sources/ashby';
 import { arr, ATS_MAX_BYTES, obj } from '../adapters/sources/atsCommon';
+import { greenhouse, type HostRule } from '@opportun/core';
 import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
+import { greenhouseModule } from '../sites/greenhouse';
 import { LEVER_HOST } from '../adapters/sources/lever';
 import { fetchWorkdayPage, workdayBoard } from '../adapters/sources/workday';
 import { withTransaction, type Db, type Exec } from '../db/client';
@@ -60,6 +62,11 @@ const MAX_PAGE_CANDIDATES = 5;
 interface Probe {
   kind: AtsKind;
   host: string;
+  /**
+   * What the probe's fetch may reach, when not `[host]` and its subdomains: a registered site's
+   * own exact rules (#769), that host only, on every hop.
+   */
+  allow?: readonly HostRule[];
   url(slug: string): string;
   /** True when the 200 body is that provider's board answer AND it is serving a posting. */
   verify(body: unknown): boolean;
@@ -78,9 +85,10 @@ export const ATS_PROBES: readonly Probe[] = [
   {
     kind: 'ats_greenhouse',
     host: GREENHOUSE_HOST,
+    allow: greenhouse.fetchHosts,
     // The jobs list rather than the board's metadata, which cannot show whether it is serving
     // anything. Without `content=true` the response carries titles and ids only.
-    url: (slug) => `https://${GREENHOUSE_HOST}/v1/boards/${slug}/jobs`,
+    url: (slug) => greenhouseModule.api!.urls.board(slug),
     verify: (body) => arr(obj(body).jobs).length > 0,
   },
   {
@@ -167,7 +175,10 @@ type ProbeResult = 'hit' | 'miss' | 'error';
 async function probe(sctx: SourceContext, p: Probe, slug: string): Promise<ProbeResult> {
   let res;
   try {
-    res = await sctx.fetch(p.url(slug), { allowHosts: [p.host], maxBytes: ATS_MAX_BYTES });
+    res = await sctx.fetch(p.url(slug), {
+      allowHosts: p.allow ?? [p.host],
+      maxBytes: ATS_MAX_BYTES,
+    });
   } catch (err) {
     // The slug names the company's board: only the ATS kind is logged (14.8).
     sctx.log.warn({ 'opportun.ats.kind': p.kind, err }, 'ats probe failed');

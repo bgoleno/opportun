@@ -79,6 +79,39 @@ describe('Find posting', () => {
     expect(screen.queryByRole('button', { name: /find posting/i })).not.toBeInTheDocument();
   });
 
+  // #852 (qa; tl on #865): while a background check is reading the board, the server refuses a
+  // second search, and the panel says why. The button stays enabled: a 'searching' left by a
+  // check that died must not take Find posting away, and the server knows which it is.
+  it('a Find posting refused while a check runs says why (#852)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: { error: { code: 'posting_searching' } },
+      }),
+    });
+    renderWithProviders(<DetailsPanel opp={{ ...BARE, postingState: 'searching' }} />);
+    const button = await screen.findByRole('button', { name: /find posting/i });
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    expect(await screen.findByText(/still checking this posting/i)).toBeInTheDocument();
+  });
+
+  // qa on #865: a click as a background check ends. The click says what state the page saw, and
+  // a posting confirmed since is answered as it is, said so, with nothing attached again.
+  it('a click says the state it saw, and a posting confirmed meanwhile is said so (#852)', async () => {
+    const api = setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'already_confirmed',
+        opportunity: { ...BARE, postingState: 'confirmed' },
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={{ ...BARE, postingState: 'searching' }} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await screen.findByText('Already confirmed')).toBeInTheDocument();
+    const call = api.calls.find((c: ApiCall) => c.path === '/opportunities/opp-1/find-posting');
+    expect(call?.search).toContain('seen=searching');
+  });
+
   // #835 (qa on #830): a board that could not be read says so and offers a retry; it is never
   // "no close match".
   it('a board that cannot be read says so, with Try again (#835)', async () => {

@@ -107,6 +107,46 @@ describe('safeFetch', () => {
     expect((await fetch('https://careers.example.org/', ALLOW)).status).toBe(200);
   });
 
+  // A site's HostRule (#769) matches exactly what it says, on every hop; a string entry keeps its
+  // subdomains until the sites still written out move to the registry (step 6).
+  it("matches a site's exact rule on that host only, and a pattern on the whole host", async () => {
+    const exact = { allowHosts: [{ exact: 'boards-api.greenhouse.io' }] };
+    const h = harness(
+      { 'boards-api.greenhouse.io': [PUBLIC_IP], 'x.boards-api.greenhouse.io': [PUBLIC_IP] },
+      [ok()],
+    );
+    const fetch = createSafeFetch(h);
+    expect(await reason(fetch('https://x.boards-api.greenhouse.io/', exact))).toBe(
+      'host_not_allowed',
+    );
+    expect(await reason(fetch('https://boards-api.greenhouse.io.evil.example/', exact))).toBe(
+      'host_not_allowed',
+    );
+    expect((await fetch('https://BOARDS-API.greenhouse.io./v1/boards/a/jobs', exact)).status).toBe(
+      200,
+    );
+    const pattern = {
+      allowHosts: [
+        {
+          pattern: /^[a-z0-9]+\.wd[0-9]{1,3}\.myworkdayjobs\.com$/,
+          example: 'a.wd1.myworkdayjobs.com',
+        },
+      ],
+    };
+    expect(await reason(fetch('https://a.wd1.myworkdayjobs.com.evil.example/', pattern))).toBe(
+      'host_not_allowed',
+    );
+    expect(await reason(fetch('https://evil-myworkdayjobs.com/', pattern))).toBe(
+      'host_not_allowed',
+    );
+    const hop = harness({ 'boards-api.greenhouse.io': [PUBLIC_IP] }, [
+      { status: 307, headers: { location: 'https://x.boards-api.greenhouse.io/' }, body: body() },
+    ]);
+    expect(await reason(createSafeFetch(hop)('https://boards-api.greenhouse.io/', exact))).toBe(
+      'host_not_allowed',
+    );
+  });
+
   it('never fetches linkedin.com, even when a caller allowlists it', async () => {
     const h = harness({ 'www.linkedin.com': [PUBLIC_IP] }, [ok()]);
     const opts = { allowHosts: ['linkedin.com', 'www.linkedin.com'] };
@@ -922,8 +962,11 @@ describe('allowlists and linkedin.com (grep)', () => {
         allowlistContents.push(m[1] ?? '');
       }
     }
-    // The scan must see the real allowlist, or it proves nothing.
-    expect(allowlists.some((l) => l.includes('safeFetch.ts') && l.includes('greenhouse'))).toBe(
+    // The scan must see the real allowlist, or it proves nothing. Its hand-written part, that is:
+    // the registered sites' fetch hosts are not literals here (#769), and test/siteContract.test.ts
+    // checks every one of those against the prohibited hosts, and the whole built list against
+    // one written out in that test.
+    expect(allowlists.some((l) => l.includes('safeFetch.ts') && l.includes('api.lever.co'))).toBe(
       true,
     );
     for (const content of allowlistContents)

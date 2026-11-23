@@ -25,12 +25,15 @@ const CAREERS = 'https://careers.example.com/jobs?gh_jid=8136554';
 /** A fetch that answers Greenhouse's job endpoint for `holds` (token -> job ids), counting calls. */
 function greenhouse(holds: Record<string, string[]>, opts: { idInAnswer?: string } = {}) {
   const asked: string[] = [];
-  const fetch = (async (url: string, init?: { allowHosts?: string[] }) => {
+  const fetch = (async (url: string, init?: { allowHosts?: readonly unknown[] }) => {
     asked.push(url);
     const m = /^https:\/\/boards-api\.greenhouse\.io\/v1\/boards\/([^/]+)\/jobs\/([0-9]+)$/.exec(
       url,
     );
-    if (m === null || init?.allowHosts?.join() !== 'boards-api.greenhouse.io') {
+    if (
+      m === null ||
+      JSON.stringify(init?.allowHosts) !== JSON.stringify([{ exact: 'boards-api.greenhouse.io' }])
+    ) {
       throw new Error(`unexpected request: ${url}`);
     }
     const [, token, id] = m as unknown as [string, string, string];

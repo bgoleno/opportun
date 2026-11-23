@@ -16,6 +16,10 @@ export function useOpportunity(id: string) {
   return useQuery({
     queryKey: qk.opportunity(id),
     queryFn: () => api<OpportunityView>(`/opportunities/${enc(id)}`),
+    // While a background check reads the board, read the opportunity again every few seconds
+    // (#852, qa on #865), so the page shows the check's result once it lands rather than a stale
+    // 'searching' that invites a second search.
+    refetchInterval: (q) => (q.state.data?.postingState === 'searching' ? 3000 : false),
   });
 }
 
@@ -202,8 +206,18 @@ export interface PostingCandidateView {
 /** What POST /opportunities/:id/find-posting answers; see routes/opportunityPosting.ts. */
 export interface FindPostingResult {
   /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity. */
-  /** 'unreachable' (#835): the company's boards could not be read, which is not "no match". */
-  outcome: 'attached' | 'identified' | 'candidates' | 'none' | 'no_board' | 'unreachable';
+  /**
+   * 'unreachable' (#835): the company's boards could not be read, which is not "no match".
+   * 'already_confirmed' (#852): a background check confirmed it after the page loaded.
+   */
+  outcome:
+    | 'attached'
+    | 'identified'
+    | 'candidates'
+    | 'none'
+    | 'no_board'
+    | 'unreachable'
+    | 'already_confirmed';
   /** An attach that changed nothing: a Refetch that found the same job (#835). */
   unchanged?: true;
   /** Present when the outcome is 'attached' or 'identified'. */
@@ -231,8 +245,13 @@ export function useFindPosting(id: string) {
   const qc = useQueryClient();
   const refresh = useRefresh(id);
   return useMutation({
-    mutationFn: () =>
-      api<FindPostingResult>(`/opportunities/${enc(id)}/find-posting`, { method: 'POST' }),
+    // `seen`: the posting state the page showed (#852): a posting a background check confirmed
+    // since is answered as it is ('already_confirmed'), never searched again.
+    mutationFn: (seen: string = 'none') =>
+      api<FindPostingResult>(
+        `/opportunities/${enc(id)}/find-posting?seen=${encodeURIComponent(seen)}`,
+        { method: 'POST' },
+      ),
     onSuccess: (res) => {
       if (res.opportunity !== undefined) qc.setQueryData(qk.opportunity(id), res.opportunity);
     },
@@ -278,7 +297,8 @@ export function useUnconfirmPosting(id: string) {
 
 /** What POST /opportunities/:id/posting/rederive answers; see routes/opportunityPosting.ts. */
 export interface RederiveResult {
-  outcome: 'merged' | 'capture_only' | 'no_description_found';
+  /** 'left_alone' (#851): the description changed while the board was read; nothing written. */
+  outcome: 'merged' | 'capture_only' | 'no_description_found' | 'left_alone';
   /** Present unless the outcome is 'no_description_found', which changes nothing. */
   opportunity?: OpportunityView;
 }

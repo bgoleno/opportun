@@ -20,10 +20,11 @@
 import { CAPTURE_MAX_TEXT } from '../lib/captureText';
 import { keyedFetch } from '../lib/safeFetch';
 import { buffer } from 'node:stream/consumers';
-import { NormalizedPostingSchema } from '@opportun/core';
+import { NormalizedPostingSchema, POSTING_STATES } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import { HttpError } from '../lib/errors';
 import { isSystemWritten, replaceAllowedByFlag } from '../lib/postingFingerprint';
 import { attachPosting, recordIdentified } from '../lib/postingAttach';
 import { confirmPosting, unconfirmPosting } from '../lib/postingConfirm';
@@ -37,6 +38,8 @@ import {
   type BodyReader,
 } from '../lib/postingSearch';
 import type { UserCtx } from '../repos/base';
+import { unfinishedDedupeKeys } from '../repos/jobs';
+import { POSTING_RECONCILE_KIND } from '../lib/jobKinds';
 import {
   getOpportunity,
   recordAtsJobRef,
@@ -54,10 +57,24 @@ const CandidateView = z.object({
   otherLocations: z.array(z.string()),
 });
 
+/**
+ * The posting state the page saw when Find posting was clicked ('none' for no state yet), so a
+ * click landing after a background check confirmed the posting does not refetch it (#852).
+ */
+const FindQuery = z.object({ seen: z.enum([...POSTING_STATES, 'none']).optional() });
+
 const FindResponse = z.object({
   /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity from
    *  Greenhouse's API; no posting was attached. */
-  outcome: z.enum(['attached', 'identified', 'candidates', 'none', 'no_board', 'unreachable']),
+  outcome: z.enum([
+    'attached',
+    'identified',
+    'candidates',
+    'none',
+    'no_board',
+    'unreachable',
+    'already_confirmed',
+  ]),
   /** An attach that changed nothing: a Refetch that found the same job (#835). */
   unchanged: z.literal(true).optional(),
   /** Present when the outcome is 'attached' or 'identified'. */
@@ -91,7 +108,7 @@ const AttachBody = z
 const RederiveBody = z.object({ force: z.boolean().optional() }).strict();
 
 const RederiveResponse = z.object({
-  outcome: z.enum(['merged', 'capture_only', 'no_description_found']),
+  outcome: z.enum(['merged', 'capture_only', 'no_description_found', 'left_alone']),
   /** Present unless the outcome is 'no_description_found', which changes nothing. */
   opportunity: OpportunityView.optional(),
 });
@@ -143,12 +160,37 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
 
   api.post(
     '/opportunities/:id/find-posting',
-    { schema: { params: IdParams, response: { 200: FindResponse } } },
+    { schema: { params: IdParams, querystring: FindQuery, response: { 200: FindResponse } } },
     async (req) => {
       const ctx = app.requireUser(req);
       const { id } = req.params;
       const sctx = { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log };
       const current = await getOpportunity(db, ctx, id);
+      // The page's click saw the posting not confirmed yet, and a background check has confirmed it
+      // since (#852, qa on #865: a click as the check ends). Not a Refetch the user asked for: the
+      // posting is answered as it now is, and nothing is read or written.
+      const seen = req.query.seen;
+      if (seen !== undefined && seen !== 'confirmed' && current.postingState === 'confirmed') {
+        return { outcome: 'already_confirmed' as const, opportunity: current };
+      }
+      // A background check is reading the board for this posting now (#852, qa): a click then
+      // would be a second search racing it, writing a second attach. Its own result lands soon.
+      // Its unfinished job is the signal, not the state alone (tl on #865): 'searching' left by a
+      // check that died, or whose job is gone, must not take Find posting away.
+      if (
+        current.postingState === 'searching' &&
+        (
+          await unfinishedDedupeKeys(db, ctx, POSTING_RECONCILE_KIND, [
+            `${POSTING_RECONCILE_KIND}:${id}`,
+          ])
+        ).length > 0
+      ) {
+        throw new HttpError(
+          409,
+          'posting_searching',
+          "Opportun is still checking this posting on the company's board. Try again shortly.",
+        );
+      }
       // Checked before any board is read: the user's own description, on a posting already
       // confirmed, has nothing to find. An embedded Greenhouse link still gets its identity, from
       // Greenhouse's API, with the description left as it is (#398, tl on #414). Not confirmed
