@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { browserCloses, pressEscapeOn } from '@/test/dialog';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { RegistrationCard, UsersCard } from './-users';
 
@@ -93,6 +94,20 @@ describe('UsersCard', () => {
     });
     await user.click(within(shown).getByRole('button', { name: 'Copy temporary password' }));
     expect(write).toHaveBeenCalledWith(TEMP);
+    // https://github.com/bgoleno/opportun/issues/903: Done is the only way out. Not Escape, a close
+    // the browser makes on its own, the backdrop or a corner button: each forgot the password, and
+    // the member could not sign in until the admin reset it again.
+    const stays = () => {
+      expect(screen.getByRole('dialog', { name: 'Temporary password' })).toBe(shown);
+      expect(within(shown).getByLabelText('Temporary password for Bob Member')).toHaveValue(TEMP);
+    };
+    expect(pressEscapeOn(shown)).toBe(true);
+    stays();
+    browserCloses(shown);
+    stays();
+    await user.click(shown); // the backdrop
+    stays();
+    expect(within(shown).queryByRole('button', { name: 'Close' })).toBeNull();
     await user.click(within(shown).getByRole('button', { name: 'Done' }));
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Temporary password' })).toBeNull(),

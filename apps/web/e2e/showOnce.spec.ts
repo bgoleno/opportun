@@ -3,18 +3,9 @@
 // Escape by itself, which jsdom does not, so this is where that is checked. Escape is pressed twice
 // each time: a browser lets the page refuse the first only (with no click or typing in between, the
 // second closes the dialog without asking), and the app then has to show it again.
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { totpCode } from '../../server/src/lib/totp';
-import { PASSWORD, registerUser } from './helpers';
-
-async function pressEscapeTwice(page: Page, dialog: Locator): Promise<void> {
-  for (let i = 0; i < 2; i++) {
-    await page.keyboard.press('Escape');
-    // Time for the browser's own close to land, then shown: not merely not closed yet.
-    await page.waitForTimeout(300);
-    await expect(dialog).toBeVisible();
-  }
-}
+import { PASSWORD, pressEscapeTwice, registerUser } from './helpers';
 
 test('recovery codes: Escape loses them neither while activating nor once shown', async ({
   page,
