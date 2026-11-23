@@ -60,6 +60,32 @@ when the milestone's work was merged.
   [#923](https://github.com/bgoleno/opportun/pull/923),
   [#929](https://github.com/bgoleno/opportun/pull/929)).
 
+- **Find posting: when a company's board can't be found or read, it offers Try again and adding the
+  posting by hand, in one notice.** A detection that could not finish is no longer reported as "no
+  board", and the notice has **Try again** and **Add by hand** (not on a confirmed posting), with
+  the state's own **Confirm** beside it. A **Refetch** of a confirmed posting says what it changed
+  ("Posting updated", naming the link, job, description, location, remote or compensation) or
+  "Nothing changed", says when your own description was kept, and adds nothing to the timeline when
+  nothing changed. A Refetch leaves the posting as matched or confirmed by you unless it took the
+  board's text. When a check ends between a refusal and the page's refresh, a "Check ended" message
+  replaces the refusal. A company name ending in s takes an apostrophe alone
+  ([#866](https://github.com/bgoleno/opportun/issues/866); PR
+  [#930](https://github.com/bgoleno/opportun/pull/930)).
+- **The Apply panel says what Find posting found in every case, and the apply page reads correctly
+  when the posting is not recognised yet.** It now says so when the posting was already confirmed,
+  when the board could not be read ("Try Find posting again"), when no board is known ("Paste the
+  posting on the Details tab") and what a Refetch changed or kept, and the sentence stays below
+  whatever the panel offers next. With no recognised posting the apply page reads "You will press
+  the submit button on the application site yourself."
+  ([#893](https://github.com/bgoleno/opportun/issues/893); PR
+  [#946](https://github.com/bgoleno/opportun/pull/946)).
+- **Postgres: merging or deleting opportunities while they are being changed no longer fails with an
+  internal error, and what is added to one while it is merged is not lost.** A next step, activity,
+  file or link added to the merged-away one beside a merge is done first and moved with the rest, or
+  waits and answers not found. Before, it could be answered OK and then be gone
+  ([#920](https://github.com/bgoleno/opportun/issues/920); PR
+  [#938](https://github.com/bgoleno/opportun/pull/938)).
+
 ### Sign-in and settings
 
 - **Pressing Escape, or closing while the request is running, no longer loses two-factor recovery
@@ -109,6 +135,12 @@ when the milestone's work was merged.
   failure shows as a message when the dialog is not on screen, and once
   ([#919](https://github.com/bgoleno/opportun/issues/919); PR
   [#926](https://github.com/bgoleno/opportun/pull/926)).
+- **Select menus draw their arrow inside their own box; in the Inbox the filters and the bulk bar no
+  longer break onto extra lines.** The Source filter and the bulk Reject reason have a width of their
+  own, so the filters and the bulk bar fit on one line on a laptop or wide screen, and the Provider
+  select in Settings > AI no longer draws its arrow below its box
+  ([#909](https://github.com/bgoleno/opportun/issues/909); PR
+  [#940](https://github.com/bgoleno/opportun/pull/940)).
 
 ### Docs
 
@@ -139,6 +171,11 @@ when the milestone's work was merged.
   check job, which is safe only because no request has been served yet
   ([#924](https://github.com/bgoleno/opportun/issues/924); PR
   [#928](https://github.com/bgoleno/opportun/pull/928)).
+- **Docs: the guide's Find posting section covers the retry when a board can't be read and what a
+  Refetch says.** It describes the notice with **Try again** and **Add by hand**, and the "Posting
+  updated" and "Nothing changed" messages
+  ([#932](https://github.com/bgoleno/opportun/issues/932); PR
+  [#945](https://github.com/bgoleno/opportun/pull/945)).
 
 ## 0.5.0 (2026-11-22)
 
