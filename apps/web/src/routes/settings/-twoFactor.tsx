@@ -136,6 +136,7 @@ export function TwoFactorCard() {
       {enrollment === null ? null : (
         <EnrollDialog
           enrollment={enrollment}
+          onActivated={() => void qc.invalidateQueries({ queryKey: twoFactorQuery.queryKey })}
           onDone={() => {
             setEnrollment(null);
             void qc.invalidateQueries({ queryKey: twoFactorQuery.queryKey });
@@ -235,6 +236,8 @@ export function PasswordDialog(props: {
 
 function EnrollDialog(props: {
   enrollment: Enrollment & { password: string };
+  /** Two-factor is on, as of now: the recovery codes are still on screen. */
+  onActivated: () => void;
   onDone: () => void;
 }) {
   const { enrollment } = props;
@@ -261,6 +264,7 @@ function EnrollDialog(props: {
         body: { code: parsed.data, password: enrollment.password },
       });
       setRecoveryCodes(res.recoveryCodes);
+      props.onActivated();
     } catch (err) {
       setError(
         err instanceof ApiError && err.code === 'invalid_password'
@@ -286,11 +290,12 @@ function EnrollDialog(props: {
     <Dialog
       open
       onOpenChange={(open) => {
-        // The codes are shown once: closing is only through "I saved them".
-        if (!open && recoveryCodes === null) props.onDone();
+        // The codes are shown once: closing is only through "I saved them". And not while they are
+        // on their way: closed then, two-factor would be on with no codes ever shown (#898).
+        if (!open && recoveryCodes === null && !busy) props.onDone();
       }}
     >
-      <DialogContent className="max-w-md" showClose={recoveryCodes === null}>
+      <DialogContent className="max-w-md" showClose={recoveryCodes === null && !busy} guardClose>
         {recoveryCodes === null ? (
           <form onSubmit={(e) => void activate(e)} noValidate className="grid gap-4">
             <DialogHeader>
@@ -342,7 +347,7 @@ function EnrollDialog(props: {
               )}
             </FormField>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={props.onDone}>
+              <Button type="button" variant="outline" disabled={busy} onClick={props.onDone}>
                 Cancel
               </Button>
               <Button type="submit" disabled={busy}>

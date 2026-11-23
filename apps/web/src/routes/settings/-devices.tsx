@@ -452,7 +452,7 @@ function ShowOnceDialog({ token, onDone }: { token: string; onDone: () => void }
   }
   return (
     <Dialog open onOpenChange={() => undefined}>
-      <DialogContent className="max-w-md" showClose={false}>
+      <DialogContent className="max-w-md" showClose={false} guardClose>
         <div className="grid gap-4">
           <DialogHeader>
             <DialogTitle>Copy your device token</DialogTitle>

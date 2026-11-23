@@ -82,8 +82,8 @@ export function StageReasonDialog(props: {
   // While the confirm is out, the move is the server's to make: a cancel then would close the
   // dialog and say "not moved", and the move would happen anyway (qa on #474, issue #476). So
   // Cancel is disabled, the corner close button is not shown, and Escape, a backdrop click or a
-  // close the browser makes on its own are refused. A server error ends the pending state, and
-  // Cancel works again.
+  // close the browser makes on its own are refused (guardClose). A server error ends the pending
+  // state, and Cancel works again.
   const pending = props.pending === true;
 
   function close() {
@@ -109,23 +109,7 @@ export function StageReasonDialog(props: {
         if (!open) close();
       }}
     >
-      <DialogContent
-        className="max-w-md"
-        showClose={!pending}
-        // Escape on a modal <dialog> fires `cancel`; refusing it keeps the dialog open.
-        onCancel={(e) => {
-          if (pending) e.preventDefault();
-        }}
-        // A browser may still close it (a second Escape is not always cancelable): show it again,
-        // since the dialog's own open state has not changed. Only while it is meant to be open: a
-        // confirmed move closes it (kind becomes null) possibly before pending has cleared.
-        onClose={(e) => {
-          if (!pending || props.kind === null) return;
-          const el = e.currentTarget;
-          if (typeof el.showModal === 'function') el.showModal();
-          else el.setAttribute('open', '');
-        }}
-      >
+      <DialogContent className="max-w-md" showClose={!pending} guardClose={pending}>
         <DialogHeader>
           <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>
