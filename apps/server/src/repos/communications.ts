@@ -23,6 +23,7 @@ import {
 import type { AtsJobRefRecord, RejectionReason } from '../db/schema.shared';
 import { extractAtsJobRefs } from '../lib/atsJobRef';
 import { HttpError, notFound } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import { cleanText, truncateText } from '../lib/safeText';
 import { assertOpportunityOwned } from './activities';
 import type { Db, Exec, UserCtx } from './base';
@@ -873,7 +874,8 @@ const label = (v: string | null): string => v ?? 'none';
 
 /**
  * The user's correction: records a classification feedback row (FR-D6 pattern) and relinks.
- * A changed link drops the stored proposal, which was about the old opportunity.
+ * A changed link drops the stored proposal, which was about the old opportunity. A rejected
+ * message is refused and nothing is written, except that it can still be unlinked.
  */
 export async function reclassify(
   db: Db,
@@ -897,6 +899,9 @@ export async function reclassify(
           ? null
           : comm.opportunityId;
     const linkChanged = opportunityId !== comm.opportunityId;
+    // After the read, before the write (#895): a test rejects the message here to show the
+    // condition below is the UPDATE's, not this read's.
+    await racePoint('reclassify.read');
 
     const changes: string[] = [];
     if (classification !== comm.classification) {
@@ -907,20 +912,15 @@ export async function reclassify(
     }
     if (linkChanged) changes.push(opportunityId === null ? 'unlinked' : 'relinked');
     const now = Date.now();
-    await tx
-      .insert(dismissalFeedback)
-      .values({
-        id: newId(),
-        userId: ctx.userId,
-        kind: 'classification',
-        communicationId: id,
-        opportunityId,
-        reason: changes.length === 0 ? 'confirmed' : changes.join('; '),
-        note: (comm.subject ?? '').slice(0, 200) || null,
-        at: now,
-      })
-      .run();
-    await tx
+    const unlinkOnly =
+      input.opportunityId === null &&
+      input.classification === undefined &&
+      input.outreachKind === undefined;
+    // A rejected message is gone (#895): its content was erased, so correcting or linking it would
+    // put an entry with no subject or text on an opportunity's timeline. The condition is in the
+    // UPDATE, so a reject that commits first leaves this changing nothing (as rejectCommunication
+    // does the other way round).
+    const updated = await tx
       .update(communications)
       .set({
         classification,
@@ -935,7 +935,30 @@ export async function reclassify(
         needsReview: needsReviewFor(classification, outreachKind, 1, opportunityId !== null),
         updatedAt: now,
       })
-      .where(ownedComm(ctx, id))
+      .where(and(ownedComm(ctx, id), unlinkOnly ? undefined : notRejected()))
+      .returning({ id: communications.id })
+      .all();
+    if (updated.length === 0) {
+      throw new HttpError(
+        409,
+        'message_rejected',
+        'This message has been rejected, so it was left as it is.',
+        undefined,
+        { userFacing: true },
+      );
+    }
+    await tx
+      .insert(dismissalFeedback)
+      .values({
+        id: newId(),
+        userId: ctx.userId,
+        kind: 'classification',
+        communicationId: id,
+        opportunityId,
+        reason: changes.length === 0 ? 'confirmed' : changes.join('; '),
+        note: (comm.subject ?? '').slice(0, 200) || null,
+        at: now,
+      })
       .run();
     return await getCommunicationView(tx, ctx, id);
   });
@@ -978,12 +1001,6 @@ export async function dismissProposal(
   return await getCommunicationView(db, ctx, id);
 }
 
-export class NoProposalError extends HttpError {
-  constructor() {
-    super(409, 'no_proposal');
-  }
-}
-
 /**
  * Applies the stored proposal through the opportunity state machine (Task 13), including its
  * reopen rule: leaving closed or dismissed needs `reopen`, which only the user's explicit
@@ -996,7 +1013,34 @@ export async function acceptProposal(
   opts: { reopen?: boolean | undefined },
 ): Promise<{ communication: CommunicationView; opportunity: OpportunityView }> {
   const comm = await getRowSync(db, ctx, id);
-  if (comm.proposedTransition === null || comm.opportunityId === null) throw new NoProposalError();
+  // Each says why (#895): the user is looking at a suggestion that was there a moment ago.
+  if (comm.rejectedAt !== null) {
+    throw new HttpError(
+      409,
+      'no_proposal',
+      'This message has been rejected, and its suggestion with it.',
+      undefined,
+      { userFacing: true },
+    );
+  }
+  if (comm.opportunityId === null) {
+    throw new HttpError(
+      409,
+      'no_proposal',
+      'This message is no longer linked to an opportunity, so there is nothing to move.',
+      undefined,
+      { userFacing: true },
+    );
+  }
+  if (comm.proposedTransition === null) {
+    throw new HttpError(
+      409,
+      'no_proposal',
+      'This suggestion is no longer there: it was used, ignored or changed since you saw it.',
+      undefined,
+      { userFacing: true },
+    );
+  }
   const subject = (comm.subject ?? '').trim().slice(0, 120);
   const opportunity = await transitionOpportunity(db, ctx, comm.opportunityId, {
     to: comm.proposedTransition,

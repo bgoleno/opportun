@@ -176,6 +176,12 @@ export function errorMessage(err: unknown): string {
       // A reject refused because the message was linked or moved since it was seen (#666, #678).
       case 'message_changed':
         return 'This message was linked or changed elsewhere, so it was not rejected.';
+      // A suggested move that is no longer there (#895). The server's sentence says why; kept here
+      // too so a body without it still reads plainly.
+      case 'no_proposal':
+        return err.message === err.code
+          ? 'This message no longer suggests a move. Nothing was changed.'
+          : err.message;
       // A background check is reading the company's board for this posting now (#852).
       case 'posting_searching':
         return "Opportun is still checking this posting on the company's board. Try again shortly.";
