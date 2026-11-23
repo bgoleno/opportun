@@ -375,6 +375,95 @@ describe('job queue', () => {
     expect(row.lockedBy).toBeNull();
   });
 
+  // #869: the handler settles what a run that will not happen would have.
+  describe('a handler told that its job is dead (onDead, #869)', () => {
+    function telling(opts: { maxAttempts?: number; fails?: boolean } = {}) {
+      const told: { payload: unknown; userId: string | null; status: string }[] = [];
+      registerJob({
+        kind: 'test.fail',
+        payloadSchema: z.object({ n: z.number() }),
+        maxAttempts: opts.maxAttempts ?? 1,
+        transientPayloadKeys: ['secret'],
+        run: async () => {
+          throw new Error('boom');
+        },
+        onDead: async (db, payload, { userId }) => {
+          const row = await db.select().from(jobs).where(eq(jobs.kind, 'test.fail')).get();
+          told.push({ payload, userId, status: row!.status });
+          if (opts.fails === true) throw new Error('could not settle it');
+        },
+      });
+      return told;
+    }
+    const set = (db: Db, id: string, sql: string) =>
+      exec({ db }, `UPDATE jobs SET ${sql} WHERE id = ?`, id);
+
+    it('once its retries run out, and not before; after the row says dead', async () => {
+      const { db } = await freshDb();
+      const told = telling({ maxAttempts: 2 });
+      const id = await enqueue(db, 'test.fail', { n: 1 });
+      let now = Date.now();
+      const later = () => (now += 86_400_000);
+      expect(await runNextJob(db, { now: later })).toBe(true);
+      expect((await jobRow(db, id)).status).toBe('pending');
+      expect(told).toEqual([]);
+      expect(await runNextJob(db, { now: later })).toBe(true);
+      expect(told).toEqual([{ payload: { n: 1 }, userId: null, status: 'dead' }]);
+    });
+
+    it('orphaned at its last attempt, and pending at its limit, when the runner starts', async () => {
+      for (const sql of [`status = 'running', attempts = 1`, `attempts = 1`]) {
+        const { db } = await freshDb();
+        const told = telling();
+        const id = await enqueue(db, 'test.fail', { n: 2 });
+        await set(db, id, sql);
+        await recoverStaleJobs(db);
+        expect(told, sql).toEqual([{ payload: { n: 2 }, userId: null, status: 'dead' }]);
+      }
+    });
+
+    it('not for a payload that no longer validates, a job cancelled on demand, or one put back', async () => {
+      const { db } = await freshDb();
+      const told = telling({ maxAttempts: 2 });
+      const bad = await enqueue(db, 'test.fail', { n: 3 });
+      await set(db, bad, `payload = '{"n":"three"}'`);
+      expect(await runNextJob(db)).toBe(true);
+      expect((await jobRow(db, bad)).status).toBe('dead');
+      const orphanedBad = await enqueue(db, 'test.fail', { n: 3 });
+      await set(db, orphanedBad, `payload = '{"n":"three"}', status = 'running', attempts = 2`);
+      await recoverStaleJobs(db);
+      expect((await jobRow(db, orphanedBad)).status).toBe('dead');
+      const cancelled = await enqueue(db, 'test.fail', { n: 4 });
+      await cancelJob(db, cancelled, 'no longer wanted');
+      const putBack = await enqueue(db, 'test.fail', { n: 5 });
+      await set(db, putBack, `status = 'running', attempts = 1`);
+      await recoverStaleJobs(db);
+      expect((await jobRow(db, putBack)).status).toBe('pending');
+      expect(told).toEqual([]);
+    });
+
+    it('one that throws: logged, and the job still ends dead, and the next one still runs', async () => {
+      const { db } = await freshDb();
+      const told = telling({ fails: true });
+      const errors: string[] = [];
+      const log = { error: (_o: unknown, msg: string) => errors.push(msg) } as never;
+      const first = await enqueue(db, 'test.fail', { n: 6 });
+      const second = await enqueue(db, 'test.fail', { n: 7 });
+      expect(await runDueJobs(db, { services: { log } })).toBe(2);
+      for (const id of [first, second]) {
+        expect(await jobRow(db, id)).toMatchObject({ status: 'dead', lastError: 'Error: boom' });
+      }
+      expect(told).toHaveLength(2);
+      const third = await enqueue(db, 'test.fail', { n: 8 });
+      await set(db, third, `status = 'running', attempts = 1`);
+      await recoverStaleJobs(db, { log });
+      expect((await jobRow(db, third)).status).toBe('dead');
+      expect(errors.filter((m) => m === 'a dead job was not settled by its handler')).toHaveLength(
+        3,
+      );
+    });
+  });
+
   // #588: a job that kills the process (out of memory mid-import, say) was put back to pending on
   // every start with no attempts check, and the claim never compared attempts with the limit, so it
   // ran again on each start: a crash loop.
