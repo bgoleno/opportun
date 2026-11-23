@@ -297,7 +297,8 @@ export function useUnconfirmPosting(id: string) {
 
 /** What POST /opportunities/:id/posting/rederive answers; see routes/opportunityPosting.ts. */
 export interface RederiveResult {
-  outcome: 'merged' | 'capture_only' | 'no_description_found';
+  /** 'left_alone' (#851): the description changed while the board was read; nothing written. */
+  outcome: 'merged' | 'capture_only' | 'no_description_found' | 'left_alone';
   /** Present unless the outcome is 'no_description_found', which changes nothing. */
   opportunity?: OpportunityView;
 }

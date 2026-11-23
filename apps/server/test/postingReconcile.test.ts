@@ -9,6 +9,7 @@ import type { FastifyInstance } from 'fastify';
 import { reconcilePosting } from '../src/jobs/postingReconcile';
 import { POSTING_RECONCILE_KIND } from '../src/lib/jobKinds';
 import { enqueue } from '../src/lib/jobQueue';
+import { rederivePosting } from '../src/lib/postingRederive';
 import { descriptionFingerprint } from '../src/lib/postingFingerprint';
 import type { BoardLookup } from '../src/lib/postingSearch';
 import type { safeFetch } from '../src/lib/safeFetch';
@@ -226,6 +227,91 @@ describe('reconcilePosting', () => {
       url: `/api/v1/opportunities/${opp.id}/find-posting?seen=confirmed`,
     });
     expect(refetch.json().outcome).not.toBe('already_confirmed');
+  });
+
+  // #851 (qa's regression pass 3): the board read is held, and the user saves a description
+  // meanwhile; the check must not then replace it with the board's copy.
+  it('a description the user saves while the board is being read is kept (#851)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const opp = await seedCaptured(app, ctx);
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let reading: () => void = () => undefined;
+    const started = new Promise<void>((r) => {
+      reading = r;
+    });
+    const board: BoardLookup = async (...args) => {
+      reading();
+      await held;
+      return boardWith([atsPosting()])(...args);
+    };
+
+    const check = run(app, ctx, opp.id, board);
+    await started;
+    const saved = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/opportunities/${opp.id}`,
+      payload: { descriptionMd: 'My own notes, saved while the check ran.' },
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
+    release();
+    await check;
+
+    const out = await getOpportunity(app.db, ctx, opp.id);
+    expect(out.descriptionMd).toBe('My own notes, saved while the check ran.');
+    expect(out.postingState).not.toBe('confirmed');
+  });
+
+  // qa on #855: a forced re-derive whose confirm() left a description saved meanwhile alone must
+  // say so, not answer "merged" and log that it merged with the captured page.
+  it('a re-derive racing a save answers left_alone, with no "merged" note (#851)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const opp = await seedCaptured(app, ctx);
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let reading: () => void = () => undefined;
+    const started = new Promise<void>((r) => {
+      reading = r;
+    });
+    const board: BoardLookup = async (...args) => {
+      reading();
+      await held;
+      return boardWith([atsPosting()])(...args);
+    };
+
+    const rederive = rederivePosting(
+      app.db,
+      ctx,
+      opp.id,
+      { fetch: missingFetch, log },
+      { force: true, board },
+    );
+    await started;
+    const saved = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/opportunities/${opp.id}`,
+      payload: { descriptionMd: 'Saved during the re-derive.' },
+    });
+    expect(saved.statusCode, saved.body).toBe(200);
+    release();
+    const out = await rederive;
+
+    expect(out.kind).toBe('left_alone');
+    expect((await getOpportunity(app.db, ctx, opp.id)).descriptionMd).toBe(
+      'Saved during the re-derive.',
+    );
+    const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+    expect(items.some((i) => (i.bodyMd ?? '').includes('merged with the captured page'))).toBe(
+      false,
+    );
   });
 
   it('a board that cannot be read is a check that did not finish, not "found nothing" (#835)', async () => {
