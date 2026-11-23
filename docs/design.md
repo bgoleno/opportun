@@ -54,7 +54,7 @@
                        │  Job runner (durable queue + scheduler)     │
                        │  Integration adapters                       │
                        │   ├─ Google (Docs/Drive/Gmail)              │
-                       │   ├─ ATS postings (Greenhouse/Lever/Ashby)  │
+                       │   ├─ ATS (Greenhouse/Lever/Ashby/Workday)   │
                        │   ├─ MCP client (user-configured servers)   │
                        │   └─ LinkedIn export ingester               │
                        └───────────────┬─────────────────────────────┘
@@ -66,7 +66,7 @@
                           └─────────────────────────┘
 
   Later (M5): opportun-connector, a small CLI on the user's Mac that reads Apple
-  Mail via macOS automation and pushes matched messages to /api/ingest with a
+  Mail via macOS automation and pushes matched messages to /api/v1/connector/mail/batch with a
   device token. The server never needs access to the Mac.
 ```
 
@@ -115,7 +115,7 @@ All licenses MIT/Apache-2.0/ISC/BSD unless noted.
 | Routing/data     | TanStack Router + TanStack Query                                            | typed routes, cache invalidation per entity                                                                                                  |
 | UI kit           | Tailwind CSS + shadcn/ui (vendored)                                         | accessible Radix primitives                                                                                                                  |
 | AI SDK           | Vercel AI SDK (`ai`) + @ai-sdk/anthropic, @ai-sdk/openai, openai-compatible | provider-agnostic core, streaming chat for tailoring                                                                                         |
-| Google APIs      | googleapis (official)                                                       | Docs, Drive, Gmail with minimal scopes                                                                                                       |
+| Google APIs      | @googleapis/docs, @googleapis/drive, google-auth-library                    | Docs and Drive via the official clients; Gmail read-only over REST on the OAuth client; minimal scopes                                       |
 | MCP client       | @modelcontextprotocol/sdk                                                   | consume user-configured MCP servers as discovery sources                                                                                     |
 | Logging          | pino                                                                        | redaction paths for secrets/PII                                                                                                              |
 | Tests            | Vitest, Playwright                                                          | plus supertest-style API tests via fastify.inject                                                                                            |
