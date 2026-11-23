@@ -44,6 +44,7 @@ import {
   roleTargets,
   stageHistory,
   resumeSends,
+  SCHEMA_DIALECT,
 } from '../db/schema';
 import { postingAtsJobRefKeeping } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
@@ -52,7 +53,7 @@ import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
 import { lastActivityAt } from './activities';
 import type { Db, Exec, UserCtx } from './base';
-import { ownedBy } from './base';
+import { ownedBy, ownedSql } from './base';
 import { findOrCreateCompanySync } from './companies';
 import { detectDedupeCandidates, rejectDedupeCandidate } from './opportunityDedupe';
 import { likeContains, orderBy, sortColumns, type ListOpts, type Page } from './list';
@@ -62,7 +63,7 @@ import {
   removeFromIndex,
   removeOpportunityFromIndex,
 } from './search';
-import { lockScope, runCount, withTransaction } from '../db/client';
+import { lockScope, rawGet, runCount, withTransaction } from '../db/client';
 
 export type OpportunityRow = typeof opportunities.$inferSelect;
 /**
@@ -605,7 +606,10 @@ export async function updateOpportunity(
         ),
       )
       .returning({ id: opportunities.id });
-    if (opts.ifDescription !== undefined && written.length === 0) throw new DescriptionChanged();
+    if (written.length === 0) {
+      // Deleted while this waited for its row (#917), or the condition no longer holds.
+      throw opts.ifDescription === undefined ? notFound() : new DescriptionChanged();
+    }
     // A new posting URL under a live attempt (#144): the attempt says so and its review lapses.
     if (urlChanged) await markPostingChanged(tx, ctx, lockedAttempt, id, now);
     if (companyName !== undefined || fields.title !== undefined) {
@@ -833,14 +837,38 @@ export async function afterStageChange(db: Db, ctx: UserCtx, view: OpportunityVi
   }
 }
 
+/** Locks the opportunity's row against every other writer of it; false when there is none. */
+async function lockOpportunityRow(tx: Exec, ctx: UserCtx, id: string): Promise<boolean> {
+  // SQLite has no row locks: the write gate already runs transactions one at a time.
+  const lock = SCHEMA_DIALECT === 'postgres' ? sql` FOR UPDATE` : sql``;
+  const row = await rawGet(
+    tx,
+    sql`SELECT id FROM opportunities WHERE ${ownedSql('user_id', ctx)} AND id = ${id}${lock}`,
+  );
+  return row !== undefined;
+}
+
 export async function deleteOpportunity(db: Db, ctx: UserCtx, id: string): Promise<void> {
   await withTransaction(db, async (tx) => {
     // Its attempts' locks before any row write: the delete cascades to them (#173).
     await lockAttemptsOf(tx, ctx, [id]);
-    // Index rows first: the activity ids are gone once the delete cascades.
-    await removeOpportunityFromIndex(tx, ctx, id);
-    const changes = await runCount(tx.delete(opportunities).where(owned(ctx, id)));
-    if (changes === 0) throw notFound();
+    // Then the opportunity's row, its activities', and the search rows last: the order a save of any
+    // of them takes, which writes its row and then indexes it. The search rows first, and each could
+    // wait for the other (40P01, #917). Locked FOR UPDATE, so an activity being added (its foreign
+    // key holds the row) is committed before they are read, and none can be added after.
+    if (!(await lockOpportunityRow(tx, ctx, id))) throw notFound();
+    await racePoint('opportunities.delete.locked');
+    const gone = await tx
+      .delete(activities)
+      .where(and(ownedBy(activities.userId, ctx), eq(activities.opportunityId, id)))
+      .returning({ id: activities.id });
+    await tx.delete(opportunities).where(owned(ctx, id)).run();
+    await removeOpportunityFromIndex(
+      tx,
+      ctx,
+      id,
+      gone.map((a) => a.id),
+    );
   });
 }
 
