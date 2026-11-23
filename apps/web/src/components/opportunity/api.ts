@@ -304,11 +304,13 @@ export function useCheckOver(id: string): () => boolean {
   };
 }
 
-/** Said in place of a refusal for a check that is over: the click is answered (#866). */
-export const CHECK_FINISHED = {
-  title: 'Check finished',
-  description: "The board check finished while this page was open; it's up to date now.",
-  variant: 'success',
+/**
+ * Said in place of a refusal for a check that is over: the click is answered (#866). "Ended", and
+ * not as a success: its job may have died (#869), which the posting's own notice then says.
+ */
+export const CHECK_ENDED = {
+  title: 'Check ended',
+  description: 'The board check ended while this page was open. The page is up to date now.',
 } as const;
 
 /** Attaches a chosen candidate, a pasted link or pasted description text. */

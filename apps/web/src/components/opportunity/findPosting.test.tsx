@@ -185,12 +185,34 @@ describe('Find posting', () => {
     });
     renderWithProviders(<Live />);
     await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
-    expect(await toastRegion().findByText('Check finished')).toBeInTheDocument();
+    expect(await toastRegion().findByText('Check ended')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByText(/still checking this posting/i)).toBeNull();
     expect(
       api.calls.filter((c: ApiCall) => c.method === 'GET' && c.path === '/opportunities/opp-1'),
     ).toHaveLength(2);
+  });
+
+  // A check can also end because its job died (#869): the toast must not say it finished, above a
+  // notice that says it did not.
+  it('a check that died unseen is said to have ended, not finished (#866)', async () => {
+    setup({
+      'GET /opportunities/opp-1': {
+        ...BARE,
+        postingState: 'needs_review',
+        postingStateDetail: 'failed',
+      } as OpportunityView,
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: { error: { code: 'posting_searching' } },
+      }),
+    });
+    renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await toastRegion().findByText('Check ended')).toBeInTheDocument();
+    expect(toastRegion().queryByText(/finished/i)).toBeNull();
+    expect(screen.getByText(/did not finish/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   // The refresh failed: nothing says the check is over, so the refusal stands.

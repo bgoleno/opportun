@@ -9,7 +9,7 @@ import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
-  CHECK_FINISHED,
+  CHECK_ENDED,
   isPostingSearching,
   useCheckOver,
   useChecksEnded,
@@ -320,7 +320,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                       onError: (err) => {
                         if (!isPostingSearching(err) || !checkOver()) return;
                         find.reset();
-                        toast(CHECK_FINISHED);
+                        toast(CHECK_ENDED);
                       },
                     });
                   }}

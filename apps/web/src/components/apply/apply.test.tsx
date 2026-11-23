@@ -885,7 +885,7 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
     }
     renderWithProviders(<Live />);
     await user.click(await screen.findByRole('button', { name: 'Find posting' }));
-    expect(await toastRegion().findByText('Check finished')).toBeInTheDocument();
+    expect(await toastRegion().findByText('Check ended')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

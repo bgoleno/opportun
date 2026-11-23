@@ -23,7 +23,7 @@ import {
   type OpportunityView,
 } from '@/lib/opportunities';
 import {
-  CHECK_FINISHED,
+  CHECK_ENDED,
   isPostingSearching,
   useAttachments,
   useCheckOver,
@@ -374,7 +374,7 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
       setFound(result);
     } catch (err) {
       if (isPostingSearching(err) && checkOver()) {
-        toast(CHECK_FINISHED);
+        toast(CHECK_ENDED);
         return;
       }
       setFindError({
