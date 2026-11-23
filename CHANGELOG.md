@@ -9,6 +9,60 @@ when the milestone's work was merged.
 
 ## Unreleased
 
+### Pipeline board
+
+- **Pipeline board: a card moved by keyboard is picked up in its own column and reaches every
+  column on a board narrower than its columns.** In 0.5.0 it stayed in its column at 768 and
+  1024 px, and at wider widths with Dismissed and Closed expanded. Left and Right now scroll the next
+  column into view, and the card is announced in the column it is over. Pointer drags are
+  unchanged. At 768 px with both end columns expanded the chain has no width left, so no chain
+  column is on screen, though the card still steps through all of them
+  ([#886](https://github.com/bgoleno/opportun/issues/886),
+  [#902](https://github.com/bgoleno/opportun/issues/902); PR
+  [#900](https://github.com/bgoleno/opportun/pull/900)).
+
+### Opportunities and posting links
+
+- **A description you save at the very moment a background posting check writes is kept.** The
+  check writes only while the description is still the one it read. When it is not, the check
+  writes nothing, including no location, link or duplicate key, and the timeline says it skipped
+  the description: "The description changed while the board was being checked, so the board search
+  left it as it is." Re-deriving a posting leaves such a description alone too
+  ([#856](https://github.com/bgoleno/opportun/issues/856); PR
+  [#883](https://github.com/bgoleno/opportun/pull/883)).
+- **While a background check reads the company's board, the Apply panel and the Resume tab say so
+  instead of suggesting Find posting.** The refusal to search again, "Opportun is still checking
+  this posting on the company's board", goes away when the check ends
+  ([#870](https://github.com/bgoleno/opportun/issues/870); PR
+  [#885](https://github.com/bgoleno/opportun/pull/885)).
+
+### Sign-in and settings
+
+- **Pressing Escape, or closing while the request is running, no longer loses two-factor recovery
+  codes or a new device token.** The recovery codes stay until "I saved them", and a new device
+  token until "I saved it", so the next token's dialog shows too. While two-factor activation is
+  running, nothing closes its dialog. The extension setup's "Close before the extension has checked
+  in?" question now appears on top of the setup, and the setup cannot be closed while its token is
+  being made. Other dialogs still close on Escape
+  ([#898](https://github.com/bgoleno/opportun/issues/898); PR
+  [#901](https://github.com/bgoleno/opportun/pull/901)).
+
+### Docs
+
+- **Docs: the Inbox guide covers paging, Sync now without a reload and the bulk reject outcomes;
+  the demo deployment page and the design page are corrected.** The Inbox guide explains a tab
+  with more than 200 messages ("Showing x–y of N", **Previous** and **Next**), the new mail and
+  counts that appear after **Sync now**, and the "changed elsewhere and left as they are" outcome.
+  The demo deployment page says every default task policy is `anthropic` and that a dedicated
+  account's requests wait for the nightly reset and can delay it. The design page names the
+  connector's `/api/v1/connector/mail/batch` endpoint, the Workday adapter and the Google packages
+  ([#739](https://github.com/bgoleno/opportun/issues/739),
+  [#744](https://github.com/bgoleno/opportun/issues/744),
+  [#772](https://github.com/bgoleno/opportun/issues/772); PRs
+  [#877](https://github.com/bgoleno/opportun/pull/877),
+  [#881](https://github.com/bgoleno/opportun/pull/881),
+  [#884](https://github.com/bgoleno/opportun/pull/884)).
+
 ## 0.5.0 (2026-11-22)
 
 This release includes everything in
