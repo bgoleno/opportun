@@ -381,13 +381,29 @@ that the job was not found on a Greenhouse board known for this company. Saving 
 this kind with **Edit link** runs the same check. Opportun asks nothing of Greenhouse when an
 opportunity is created or its mail is read.
 
-From the Apply panel, the **Find posting** button answers in a line under it: "Posting attached.",
-"Recognised on Greenhouse.", "Several postings could be this job. Choose it on the Details tab.", "A
-posting on the company's board could be this job. Check it on the Details tab." (when exactly one is
-offered), "This job was not found on the company's board. Paste the posting on the Details tab.", "No
-job board is known for this company yet. Add its careers page on the Details tab.", or, when you wrote
-the description yourself and no known board holds the job, "This job was not found on a Greenhouse
-board known for this company. Check the posting link on the Details tab."
+From the Apply panel, the **Find posting** button always answers, in a line under it. Which line
+depends on what the search found:
+
+- "Posting attached." when it attached a posting.
+- On a posting that was already confirmed, which the button reads again: "Nothing changed: the
+  posting matches the company's board.", or "Nothing changed. Your own description was kept." when
+  you wrote the description; "Posting updated from the board." or, with your own description
+  kept, "Posting updated from the board. Your own description was kept."
+- "Recognised on Greenhouse." when it recognised the job without attaching anything.
+- "This posting was confirmed already. This page is up to date now." when a background check
+  confirmed it while the page was open.
+- "Several postings could be this job. Choose it on the Details tab.", or, when exactly one is
+  offered, "A posting on the company's board could be this job. Check it on the Details tab."
+- "This job was not found on the company's board. Paste the posting on the Details tab."
+- "The company's board couldn't be read just now, so nothing was checked. Try Find posting
+  again."
+- "No job board is known for this company. Paste the posting on the Details tab."
+- When you wrote the description yourself and no known board holds the job: "This job was not
+  found on a Greenhouse board known for this company. Check the posting link on the Details tab."
+
+When a board was read only in part, its note follows the sentence. The line goes when it is no
+longer true of the opportunity: on the next press, when a background check has ended since, or
+when the posting's state or link is no longer what the answer left.
 
 One confident match is attached straight away. Several are listed for you to pick from, with
 a search box over the whole board. If no board is reachable, paste the posting link or the
