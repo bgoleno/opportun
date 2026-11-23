@@ -46,6 +46,11 @@ when the milestone's work was merged.
   being made. Other dialogs still close on Escape
   ([#898](https://github.com/bgoleno/opportun/issues/898); PR
   [#901](https://github.com/bgoleno/opportun/pull/901)).
+- **The dialog with a member's temporary password closes only with Done.** It shows the password
+  once, so Escape, a click outside it or a native close no longer take it away before you have
+  copied it: the corner X is gone and Escape is refused
+  ([#903](https://github.com/bgoleno/opportun/issues/903); PR
+  [#907](https://github.com/bgoleno/opportun/pull/907)).
 
 ### Docs
 
