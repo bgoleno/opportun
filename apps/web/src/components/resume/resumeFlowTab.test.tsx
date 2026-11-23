@@ -337,6 +337,20 @@ describe('the Resume tab flow: tl on #440', () => {
     expect(link).toHaveAttribute('href', '/opportunities/opp-1');
   });
 
+  it('#870: while a check runs it says so, and links to no Find posting', async () => {
+    setup({
+      resumes: [BASE, copy({ status: 'final' })],
+      opp: {
+        atsJobRef: null,
+        postingUrl: 'https://careers.acme.example/jobs?gh_jid=8136554',
+        postingState: 'searching',
+      } as Partial<OpportunityView>,
+    });
+    const region = await flow();
+    await waitFor(() => expect(said(region)).toHaveTextContent(/still checking this posting/));
+    expect(within(region).queryByRole('link', { name: /Find posting/ })).toBeNull();
+  });
+
   it('ruling 5: a stage reason has no link', async () => {
     setup({
       resumes: [BASE, copy({ status: 'final' })],
