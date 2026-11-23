@@ -17,6 +17,7 @@ import { resetPasswordIn, temporaryPassword as temporaryResetPassword } from '..
 import {
   canRegister,
   isRegistrationOpen,
+  NoUsersYetError,
   registerUser,
   REGISTRATION_OPEN_KEY,
   RegistrationClosedError,
@@ -50,6 +51,7 @@ import {
 } from '../lib/twoFactor';
 import { clearCsrfCookie, isSecureRequest, issueCsrfCookie } from '../plugins/security';
 import { requireAdmin, requireUser, type UserCtx } from '../repos/base';
+import { ErrorResponse } from './common';
 import {
   activateTotp,
   findUserId,
@@ -70,7 +72,7 @@ import {
 export const SESSION_COOKIE = 'opportun_session';
 export { REGISTRATION_OPEN_KEY };
 
-const LOGIN_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 };
+export const LOGIN_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 };
 /**
  * Per-account backstop against a distributed brute force (issue #333). Once the trusted-proxy
  * fix makes req.ip real, an attacker with many source IPs can still make LOGIN_LIMIT.limit
@@ -88,14 +90,14 @@ const LOGIN_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 };
  * email), bounded and self-healing within windowMs, and it matters more once the instance is
  * public (issue #232) than on a single-user LAN today.
  */
-const EMAIL_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
+export const EMAIL_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
 /** Coarse per-IP ceiling on auth attempts across all emails (design section 7). */
-const AUTH_IP_LIMIT = { limit: 100, windowMs: 15 * 60 * 1000 };
+export const AUTH_IP_LIMIT = { limit: 100, windowMs: 15 * 60 * 1000 };
 
 const Email = z.string().trim().toLowerCase().pipe(z.email().max(254));
 const NewPassword = z.string().min(12).max(1024);
 
-const RegisterBody = z.object({
+export const RegisterBody = z.object({
   email: Email,
   password: NewPassword,
   displayName: z.string().trim().min(1).max(100),
@@ -185,11 +187,6 @@ const PublicUser = z.object({
   isAdmin: z.boolean(),
 });
 const UserResponse = z.object({ user: PublicUser });
-// The message is kept (#743): a response schema drops what it does not name, and a refusal such as
-// password_changed (#643) carries the sentence the user is meant to read.
-const ErrorResponse = z.object({
-  error: z.object({ code: z.string(), message: z.string().optional() }),
-});
 
 type PublicUserT = z.infer<typeof PublicUser>;
 
@@ -254,6 +251,52 @@ export function setSessionCookies(
   issueCsrfCookie(reply, secure, new Date(expiresAt));
 }
 
+/**
+ * A sign-up once its limiter and body schema have passed: the account, its first session and its
+ * auth.register audit row commit in one transaction (#779), and the cookies are set only after.
+ * POST /auth/register answers with this, and so does the e2e sign-up shortcut
+ * (testSupport/mockAuth.ts, #776) with `neverAdmin`, so the two write exactly the same.
+ */
+export async function signUp(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  body: z.infer<typeof RegisterBody>,
+  opts: { neverAdmin?: boolean } = {},
+): Promise<FastifyReply> {
+  const db = req.server.db;
+  const { email, password, displayName } = body;
+  const passwordHash = await hashPassword(password, req.server.config.peppers ?? NO_PEPPERS);
+  let session: Awaited<ReturnType<typeof createSession>> | undefined;
+  let created: UserRow;
+  try {
+    // The account, its first session and the audit row commit together (#779): a failed
+    // audit write leaves no account behind, so the same registration can be tried again.
+    created = await registerUser(
+      db,
+      { email, passwordHash, displayName, neverAdmin: opts.neverAdmin },
+      async (tx, row) => {
+        session = await createSession(tx, row.id, sessionMeta(req));
+        await audit(tx, 'auth.register', {
+          userId: row.id,
+          ip: req.ip,
+          detail: { isAdmin: row.isAdmin },
+        });
+      },
+    );
+  } catch (err) {
+    if (err instanceof RegistrationClosedError) {
+      return fail(reply, 403, 'registration_closed');
+    }
+    if (err instanceof NoUsersYetError) return fail(reply, 409, 'no_users_yet');
+    if (isUniqueViolation(err)) return fail(reply, 409, 'email_taken');
+    throw err;
+  }
+  // Written with the account, in its transaction: set once that has committed.
+  if (session === undefined) throw new Error('registration committed without its session');
+  setSessionCookies(req, reply, session);
+  return reply.code(201).send({ user: toPublic(created) });
+}
+
 export async function authRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
@@ -282,34 +325,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         response: { 201: UserResponse, 403: ErrorResponse, 409: ErrorResponse },
       },
     },
-    async (req, reply) => {
-      const { email, password, displayName } = req.body;
-      const passwordHash = await hashPassword(password, peppers);
-      let session: Awaited<ReturnType<typeof createSession>> | undefined;
-      let created: UserRow;
-      try {
-        // The account, its first session and the audit row commit together (#779): a failed
-        // audit write leaves no account behind, so the same registration can be tried again.
-        created = await registerUser(db, { email, passwordHash, displayName }, async (tx, row) => {
-          session = await createSession(tx, row.id, sessionMeta(req));
-          await audit(tx, 'auth.register', {
-            userId: row.id,
-            ip: req.ip,
-            detail: { isAdmin: row.isAdmin },
-          });
-        });
-      } catch (err) {
-        if (err instanceof RegistrationClosedError) {
-          return fail(reply, 403, 'registration_closed');
-        }
-        if (isUniqueViolation(err)) return fail(reply, 409, 'email_taken');
-        throw err;
-      }
-      // Written with the account, in its transaction: set once that has committed.
-      if (session === undefined) throw new Error('registration committed without its session');
-      setSessionCookies(req, reply, session);
-      return reply.code(201).send({ user: toPublic(created) });
-    },
+    async (req, reply) => signUp(req, reply, req.body),
   );
 
   // Unauthenticated on purpose, and that is not a new exposure: POST /auth/register itself is

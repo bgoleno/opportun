@@ -186,6 +186,26 @@ describe('Find posting', () => {
     expect(within(dialog).queryByText('Staff Product Manager, SIEM')).not.toBeInTheDocument();
   });
 
+  // #812 (qa on #804): one candidate is not "more than one"; the server's note says why it is
+  // offered rather than attached.
+  it('one candidate is offered as one, with the reason the server gives', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'candidates',
+        candidates: [CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003')],
+        board: [CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003')],
+        note: "The job this opportunity names isn't on the company's board now.",
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByText(/more than one posting/i)).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/one posting on the .* board may match/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/isn't on the company's board now/i)).toBeInTheDocument();
+  });
+
   it('says a referenced posting needs checking when it is not the company board', async () => {
     setup({
       'POST /opportunities/opp-1/find-posting': {

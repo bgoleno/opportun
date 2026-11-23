@@ -21,6 +21,7 @@ import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import { createRule, updateRule } from './mailFilters';
 import type { UserCtx } from './base';
+import { ownedBy } from './base';
 import { removeFromIndex } from './search';
 
 export interface RejectInput {
@@ -105,9 +106,10 @@ export async function rejectCommunication(
   const row = await db
     .select()
     .from(communications)
-    .where(and(eq(communications.userId, ctx.userId), eq(communications.id, id)))
+    .where(and(ownedBy(communications.userId, ctx), eq(communications.id, id)))
     .get();
-  if (row === undefined) throw new HttpError(404, 'not_found', 'No such message');
+  if (row === undefined)
+    throw new HttpError(404, 'not_found', 'No such message', undefined, { userFacing: true });
   // After the read, before the erase (#678): a test links the message here to show the link check
   // is the erasing UPDATE's, not this read's.
   await racePoint('reject.read');
@@ -134,7 +136,7 @@ export async function rejectCommunication(
         })
         .where(
           and(
-            eq(communications.userId, ctx.userId),
+            ownedBy(communications.userId, ctx),
             eq(communications.id, id),
             isNull(communications.rejectedAt),
             input.expectedOpportunityId === null
@@ -171,6 +173,8 @@ export async function rejectCommunication(
         409,
         'message_changed',
         'This message was linked or moved somewhere else since you saw it, so it was left as it is.',
+        undefined,
+        { userFacing: true },
       );
     }
   }

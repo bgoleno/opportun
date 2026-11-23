@@ -1,5 +1,6 @@
 // Discovery repositories (Task 4): sources, runs and results, each scoped to its owner, plus the
 // adapter registry's override semantics.
+import { DEFAULT_DISCOVERY_CRON, ATS_REVERIFY_CRON } from '../src/lib/atsDetect';
 import { userCronProblem } from '../src/lib/jobQueue';
 import type { NormalizedPosting } from '@opportun/core';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -13,7 +14,6 @@ import {
   UnknownSourceError,
   type DiscoverySource,
 } from '../src/adapters/discoverySource';
-import { DEFAULT_DISCOVERY_CRON, ATS_REVERIFY_CRON } from '../src/jobs/atsDetect';
 import { COMPANY_SUGGEST_CRON } from '../src/jobs/companySuggest';
 import { BACKUP_CRON } from '../src/jobs/backup';
 import { DISCOVERY_REFINE_CRON } from '../src/jobs/refineDiscoveryPrompt';

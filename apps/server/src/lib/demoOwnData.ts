@@ -102,7 +102,7 @@ export const DEMO_FIXTURE_MESSAGE =
 
 /** 422 naming the field that holds a fixture identity value. */
 export const fixtureValueRefused = (field: string): HttpError =>
-  new HttpError(422, 'demo_fixture_value', DEMO_FIXTURE_MESSAGE, { field });
+  new HttpError(422, 'demo_fixture_value', DEMO_FIXTURE_MESSAGE, { field }, { userFacing: true });
 
 /**
  * 422 for any resume on a demo attempt. Every resume on the demo is the seed's, or a copy tailored
@@ -112,7 +112,13 @@ export const fixtureValueRefused = (field: string): HttpError =>
  * came from at creation, as a flag a tailored copy carries forward; never derive it from parents.
  */
 export const demoResumeRefused = (): HttpError =>
-  new HttpError(422, 'resume_unavailable_on_demo', DEMO_RESUME_MESSAGE, { field: 'resume' });
+  new HttpError(
+    422,
+    'resume_unavailable_on_demo',
+    DEMO_RESUME_MESSAGE,
+    { field: 'resume' },
+    { userFacing: true },
+  );
 
 /**
  * The backstop for review, handoff and /connector/apply/current: throws while any field holds a

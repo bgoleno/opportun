@@ -166,7 +166,7 @@ describe('PostingConfirmedStatus (issue #255)', () => {
     expect(called).toBe(1);
   });
 
-  it('warns specifically when the current description is the user’s own writing', async () => {
+  it('says the user’s own description is kept: a Refetch only checks the board (#812)', async () => {
     const user = userEvent.setup();
     renderWithProviders(
       <PostingConfirmedStatus
@@ -175,7 +175,10 @@ describe('PostingConfirmedStatus (issue #255)', () => {
       />,
     );
     await user.click(await screen.findByRole('button', { name: /refetch/i }));
-    expect(await screen.findByText(/edited this description by hand/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/checks the company's board again; your description is kept/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/edited this description by hand/i)).not.toBeInTheDocument();
   });
 
   it('cancel leaves the description untouched: onRefetch never fires', async () => {

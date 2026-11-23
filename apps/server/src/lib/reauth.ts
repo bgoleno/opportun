@@ -11,8 +11,8 @@ import { audit } from './audit';
 import { NO_PEPPERS, verifyPasswordWithUpgrade } from './passwords';
 import { rateLimit } from './rateLimit';
 
-const USER_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 };
-const IP_LIMIT = { limit: 100, windowMs: 15 * 60 * 1000 };
+export const USER_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 };
+export const IP_LIMIT = { limit: 100, windowMs: 15 * 60 * 1000 };
 
 const limiters = new WeakMap<Db, preHandlerAsyncHookHandler[]>();
 

@@ -28,6 +28,8 @@ export function ConfirmDialog(props: {
   description: string;
   confirmLabel: string;
   confirmVariant?: 'default' | 'destructive';
+  /** Confirm waits while this holds (#758): what it would act on is still being loaded. */
+  confirmDisabled?: boolean;
   onConfirm: () => Promise<void> | void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -64,7 +66,7 @@ export function ConfirmDialog(props: {
           </Button>
           <Button
             variant={props.confirmVariant ?? 'destructive'}
-            disabled={busy}
+            disabled={busy || props.confirmDisabled === true}
             onClick={async () => {
               setBusy(true);
               setError(null);

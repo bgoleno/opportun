@@ -24,9 +24,8 @@ import { NormalizedPostingSchema } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
-import { HttpError } from '../lib/errors';
 import { isSystemWritten, replaceAllowedByFlag } from '../lib/postingFingerprint';
-import { attachPosting } from '../lib/postingAttach';
+import { attachPosting, recordIdentified } from '../lib/postingAttach';
 import { confirmPosting, unconfirmPosting } from '../lib/postingConfirm';
 import { rederivePosting } from '../lib/postingRederive';
 import type { SourceContext } from '../adapters/discoverySource';
@@ -145,15 +144,12 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       // yet, the board is read and a match confirms it, the description kept (#756).
       if (userWritten(current)) {
         const identified = await identifyOwnLink(ctx, current, sctx);
-        if (current.postingState === 'confirmed') {
-          if (identified !== null) {
-            return { outcome: 'identified' as const, opportunity: identified };
-          }
-          throw new HttpError(
-            409,
-            'already_described',
-            'This opportunity already has a description. Edit it instead.',
-          );
+        if (current.postingState === 'confirmed' && identified !== null) {
+          // On the timeline, as every other way a posting is found (#813).
+          await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+            kept: false,
+          });
+          return { outcome: 'identified' as const, opportunity: identified };
         }
         // Not confirmed yet (#756, tl): Greenhouse's own answer for its embedded link is the
         // proof, one request and no listing read (#398, #414). It now confirms the posting too,
@@ -164,11 +160,32 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             postingStateDetail: 'user_confirmed',
             atsJobRef: identified.atsJobRef,
           });
+          await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+            kept: true,
+          });
           return { outcome: 'identified' as const, opportunity: confirmed };
         }
-        // Otherwise the board is read, and a match confirms it, the description kept.
+        // Otherwise the board is read, and a match confirms it, the description kept. Confirmed
+        // already (a Refetch, #812, tl): only its own job refreshes it, below.
       }
       const outcome = await findPosting(db, ctx, id, sctx, { readBody });
+      // A confirmed posting with the user's own description is refreshed only from its own job
+      // (ownJobRef, found on the board): a title match, or another job a message names, never
+      // replaces a confirmed identity by itself. It is offered instead (#812, tl).
+      const ownJobOnly =
+        userWritten(current) &&
+        current.postingState === 'confirmed' &&
+        !(outcome.status === 'exact' && outcome.via === 'posting_link');
+      if (ownJobOnly && (outcome.status === 'exact' || outcome.status === 'single')) {
+        const note = outcome.note === undefined ? {} : { note: outcome.note };
+        return {
+          outcome: 'candidates' as const,
+          candidates: [outcome.candidate],
+          board: [outcome.candidate],
+          needsConfirmation: false,
+          ...note,
+        };
+      }
       if (outcome.status === 'exact' || outcome.status === 'single') {
         // #114: 'single' can carry a large-board truncation note (exact never does, since it
         // only ever comes from an email-linked job id, never a board read). Forwarded onto the
@@ -205,6 +222,10 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       const identified = await identifyOwnLink(ctx, current, sctx);
       const note = outcome.note === undefined ? {} : { note: outcome.note };
       if (identified !== null && outcome.status !== 'candidates') {
+        // On the timeline, as the user-described cases above are (#813, tl on #847).
+        await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+          kept: false,
+        });
         return { outcome: 'identified' as const, opportunity: identified, ...note };
       }
       if (outcome.status === 'candidates') {

@@ -4,6 +4,8 @@
 // main connection's own automatic checkpoint moves to a backstop. When the worker stops, for any
 // reason, the main connection goes back to its default.
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { Worker } from 'node:worker_threads';
 import {
   closeSync,
   existsSync,
@@ -25,7 +27,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadDbConfig } from '../src/config';
 import { rawRun, type SqliteHandle } from '../src/db/client';
 import { startBackgroundCheckpointer, type CheckpointRecord } from '../src/db/checkpointer';
-import { heldBackByReader, readWalIndex, unreadableTooLong } from '../src/db/checkpointWorker';
+import {
+  attemptDue,
+  heldBackByReader,
+  readWalIndex,
+  unreadableTooLong,
+} from '../src/db/checkpointWorker';
 import { readOperatorBytesAt } from '../src/lib/storage';
 import { sqliteOnly } from './db';
 import { openTestDb } from './helpers';
@@ -115,6 +122,33 @@ describe('which checkpoint a reader held back (#383, tl on #393)', () => {
   it('not one on a WAL that started again after the read, when it copied all of the new one', () => {
     expect(heldBackByReader(123, 10, 10)).toBe(false);
     expect(heldBackByReader(123, 10, 8)).toBe(true);
+  });
+});
+
+// The worker's one decision on each look (https://github.com/bgoleno/opportun/issues/831): whether to
+// checkpoint now. Only an attempt that was held back (a reader's snapshot, or another connection
+// holding the checkpoint lock) waits the retry delay; this is what "keeps up under steady writes"
+// once proved by timing, which a loaded host can stretch.
+describe('when the worker checkpoints (#831)', () => {
+  const RETRY = 1_000;
+
+  it('at once when the WAL calls for it and the last attempt copied everything', () => {
+    expect(attemptDue('size', false, 10_005, 10_000, RETRY)).toBe(true);
+    expect(attemptDue('age', false, 10_005, 10_000, RETRY)).toBe(true);
+  });
+
+  it('not before the retry delay after an attempt that was held back', () => {
+    expect(attemptDue('size', true, 10_999, 10_000, RETRY)).toBe(false);
+    expect(attemptDue('age', true, 10_500, 10_000, RETRY)).toBe(false);
+  });
+
+  it('again once the retry delay has passed', () => {
+    expect(attemptDue('size', true, 11_000, 10_000, RETRY)).toBe(true);
+  });
+
+  it('not at all when nothing calls for it, whatever came before', () => {
+    expect(attemptDue(undefined, false, 99_999, 0, RETRY)).toBe(false);
+    expect(attemptDue(undefined, true, 99_999, 0, RETRY)).toBe(false);
   });
 });
 
@@ -300,28 +334,88 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
     }
   });
 
-  it('keeps up under steady writes: the retry delay is only for a checkpoint a reader held back', async () => {
+  it('keeps up under steady writes', async () => {
+    // A liveness check (#831): every burst over the threshold gets its checkpoint. That only a
+    // held-back attempt waits the retry delay is proved without timing by attemptDue's tests above.
+    // The real retry delay (1 s) and a generous bound per burst: a checkpoint lock another
+    // connection holds for a moment under load delays a burst by about a second, not past this.
     const opened = await openTestDb({
       backgroundCheckpoint: true,
-      // A retry delay of ten minutes: a burst whose checkpoint waited for it would never come
-      // within the 10 s each one is given below, while a checkpoint that did not wait comes within
-      // a poll or two even on a loaded host. A bound under the real 1 s delay measured the host
-      // instead (#732: on a starved host the first burst's 900 ms ran out).
-      checkpointerTuning: { maxPages: 50, pollMs: 20, retryMs: 600_000 },
+      checkpointerTuning: { maxPages: 50, pollMs: 20 },
     });
     try {
       const h = opened.handle as SqliteHandle;
       // The worker thread first: its start is not what is measured (#732).
       await h.checkpointer!.ready;
-      // Six bursts of 60 pages, each over the threshold. Each one's checkpoint comes, so none
-      // waited the retry delay: a burst that did times out here. That wait is the assertion.
+      // Six bursts of 60 pages, each over the threshold.
       for (let burst = 0; burst < 6; burst++) {
         const before = h.checkpointer!.checkpoints;
         await write(h, 60);
-        await until(() => h.checkpointer!.checkpoints > before, 10_000);
+        await until(() => h.checkpointer!.checkpoints > before, 15_000);
       }
       expect(h.checkpointer!.checkpoints).toBeGreaterThanOrEqual(6);
     } finally {
+      await opened.close();
+    }
+  });
+
+  it('a checkpoint lock another connection holds delays the worker only until it is released (#831)', async () => {
+    // The age bound, short, so the worker's attempt comes while the lock is held, with no write in
+    // that window: a RESTART that waits for a reader also keeps writers out.
+    const opened = await openTestDb({
+      backgroundCheckpoint: true,
+      checkpointerTuning: { maxPages: 50, maxWaitMs: 500, pollMs: 20 },
+    });
+    const file = join(opened.dataDir, 'opportun.db');
+    // The lock is held as SQLite holds it for any checkpoint: a second connection, on a thread of
+    // its own, runs wal_checkpoint(RESTART), which keeps the checkpoint lock while it waits for a
+    // reader with an older snapshot (here until that reader ends, or its busy timeout). While it
+    // does, the worker's own PASSIVE checkpoint gets busy with log -1, which the worker counts as
+    // held back.
+    const reader = new Database(file, { readonly: true });
+    let holder: Worker | undefined;
+    try {
+      const h = opened.handle as SqliteHandle;
+      await h.checkpointer!.ready;
+      await write(h, 1);
+      reader.exec('BEGIN');
+      reader.prepare('SELECT count(*) FROM bench_383').get();
+      // Frames after the reader's snapshot, below the size threshold: only the age bound calls
+      // for their checkpoint, half a second on, while the lock is held.
+      await write(h, 10);
+      const holding = new Promise<void>((resolve, reject) => {
+        holder = new Worker(
+          `const { workerData, parentPort } = require('node:worker_threads');
+           const Database = require(workerData.driver);
+           const db = new Database(workerData.file);
+           db.pragma('busy_timeout = 20000');
+           parentPort.postMessage('holding');
+           db.pragma('wal_checkpoint(RESTART)');
+           db.close();`,
+          {
+            eval: true,
+            workerData: { driver: createRequire(import.meta.url).resolve('better-sqlite3'), file },
+          },
+        );
+        holder.once('message', () => resolve());
+        holder.once('error', reject);
+      });
+      await holding;
+      const during = h.checkpointer!.checkpoints;
+      // Past the age bound with the lock held: the worker's attempt did nothing, so none is counted.
+      await new Promise((r) => setTimeout(r, 1_500));
+      expect(h.checkpointer!.checkpoints).toBe(during);
+      // Release: the reader ends, and the holder's RESTART copies what is left and finishes.
+      reader.exec('COMMIT');
+      await new Promise<void>((resolve) => holder!.once('exit', () => resolve()));
+      // A burst after the release: the worker checkpoints it once its retry delay has passed.
+      const after = h.checkpointer!.checkpoints;
+      await write(h, 60);
+      await until(() => h.checkpointer!.checkpoints > after, 15_000);
+    } finally {
+      if (reader.inTransaction) reader.exec('COMMIT');
+      reader.close();
+      await holder?.terminate();
       await opened.close();
     }
   });

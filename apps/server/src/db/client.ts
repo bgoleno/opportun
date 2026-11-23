@@ -49,7 +49,6 @@ import {
   isOperatorFile,
   removeOperatorFile,
 } from '../lib/storage';
-import { observeStatement, observeStatementAsync } from '../obs/database';
 import {
   armGateWatchdog,
   dbLog,
@@ -315,6 +314,31 @@ export function scrubPgError(err: unknown): unknown {
   }
   return err;
 }
+
+/**
+ * What observes each statement (the database metric, design.md 14.2, #343). obs/database hands it
+ * over when it loads (https://github.com/bgoleno/opportun/issues/803), so db/client imports nothing
+ * from obs/ and obs/ can depend on db/ without an import cycle. obs/config imports obs/database, so
+ * every boot that starts observability has it, and test/obsDbRegistration.test.ts checks the booted
+ * app does. Until then a statement just runs: the default is a plain passthrough that records
+ * nothing, as a database opened before observability (a migration, a CLI, a test that never
+ * collects) has nowhere to record into.
+ */
+export interface StatementObserver {
+  sync<T>(system: 'sqlite' | 'postgresql', text: string, run: () => T): T;
+  async<T>(system: 'sqlite' | 'postgresql', text: string, run: () => Promise<T>): Promise<T>;
+}
+
+let statementObserver: StatementObserver = {
+  sync: (_system, _text, run) => run(),
+  async: (_system, _text, run) => run(),
+};
+
+/** Called by obs/database at its load: the handover above. */
+export function provideStatementObserver(observer: StatementObserver): void {
+  statementObserver = observer;
+}
+
 /**
  * Both drivers' prepared queries funnel through queryWithCache, which wraps the driver error
  * (SQLite: sqlite-proxy's RemotePreparedQuery; Postgres: pg-core's PgPreparedQuery, shared
@@ -335,7 +359,7 @@ function unwrapQueryErrors(prototype: object, observe: boolean): void {
     // this layer, so it is not counted here as well. args[0] is the statement's text.
     const text = args[0];
     return observe && typeof text === 'string'
-      ? observeStatementAsync('postgresql', text, run)
+      ? statementObserver.async('postgresql', text, run)
       : run();
   };
   proto.__opportunUnwrapped = true;
@@ -347,7 +371,9 @@ type Method = Parameters<AsyncRemoteCallback>[2];
 
 function execute(sqlite: Sqlite, text: string, params: unknown[], method: Method) {
   // Synchronous, so the write-gate invariant below is unchanged (design.md 14.2, #343).
-  return observeStatement('sqlite', text, () => executeStatement(sqlite, text, params, method));
+  return statementObserver.sync('sqlite', text, () =>
+    executeStatement(sqlite, text, params, method),
+  );
 }
 
 function executeStatement(sqlite: Sqlite, text: string, params: unknown[], method: Method) {
@@ -1400,7 +1426,7 @@ async function onConnection<T>(
   // Same invariant as proxyCallback: the last mustWait() check and the statement share one
   // synchronous step (no await between the loop condition and run()).
   while (conn.gate.mustWait()) await conn.gate.idleFor();
-  return observeStatement('sqlite', text, () => run(conn.sqlite.prepare(text), params));
+  return statementObserver.sync('sqlite', text, () => run(conn.sqlite.prepare(text), params));
 }
 
 /** Postgres: the statement on the exec's connection (a transaction's own, or the pool). */

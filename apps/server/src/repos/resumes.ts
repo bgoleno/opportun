@@ -6,6 +6,7 @@ import { attachments, resumes, settings } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import type { Db, Exec, UserCtx } from './base';
+import { ownedBy } from './base';
 import { assertOpportunityOwned } from './activities';
 import { countWhere, type ListOpts, type Page } from './list';
 import { lockScope, withTransaction } from '../db/client';
@@ -49,7 +50,7 @@ export async function readNamingTemplate(db: Db, ctx: UserCtx): Promise<string> 
     await db
       .select({ value: settings.value })
       .from(settings)
-      .where(and(eq(settings.key, namingTemplateKey(ctx.userId)), eq(settings.userId, ctx.userId)))
+      .where(and(eq(settings.key, namingTemplateKey(ctx.userId)), ownedBy(settings.userId, ctx)))
       .get()
   )?.value;
   return typeof value === 'string' && value.trim().length > 0 ? value : DEFAULT_NAMING_TEMPLATE;
@@ -83,7 +84,7 @@ export async function listResumes(
   opts: ListOpts & ResumeFilters,
 ): Promise<Page<ResumeRow>> {
   const where = and(
-    eq(resumes.userId, ctx.userId),
+    ownedBy(resumes.userId, ctx),
     opts.opportunityId === undefined ? undefined : eq(resumes.opportunityId, opts.opportunityId),
     opts.kind === undefined ? undefined : eq(resumes.kind, opts.kind),
   ) as SQL;
@@ -103,9 +104,7 @@ export async function latestBaseResume(db: Db, ctx: UserCtx): Promise<ResumeRow 
   return await db
     .select()
     .from(resumes)
-    .where(
-      and(eq(resumes.userId, ctx.userId), eq(resumes.kind, 'base'), isNull(resumes.archivedAt)),
-    )
+    .where(and(ownedBy(resumes.userId, ctx), eq(resumes.kind, 'base'), isNull(resumes.archivedAt)))
     .orderBy(desc(resumes.updatedAt), desc(resumes.id))
     .get();
 }
@@ -114,7 +113,7 @@ export async function getResume(db: Db, ctx: UserCtx, id: string): Promise<Resum
   const row = await db
     .select()
     .from(resumes)
-    .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
+    .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
     .get();
   if (row === undefined) throw notFound();
   return row;
@@ -141,14 +140,14 @@ async function dropVersionRow(tx: Exec, ctx: UserCtx, ref: string): Promise<void
     .delete(attachments)
     .where(
       and(
-        eq(attachments.userId, ctx.userId),
+        ownedBy(attachments.userId, ctx),
         eq(attachments.id, ref),
         isNull(attachments.opportunityId),
         notExists(
           tx
             .select({ one: sql`1` })
             .from(resumes)
-            .where(and(eq(resumes.userId, ctx.userId), eq(resumes.docRef, ref))),
+            .where(and(ownedBy(resumes.userId, ctx), eq(resumes.docRef, ref))),
         ),
       ),
     )
@@ -189,14 +188,14 @@ export async function updateResumeDocRef(
     const moved = await tx
       .update(resumes)
       .set({ docRef, updatedAt: Date.now() })
-      .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id), eq(resumes.docRef, fromRef)))
+      .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id), eq(resumes.docRef, fromRef)))
       .returning({ id: resumes.id })
       .get();
     if (moved === undefined) {
       const row = await tx
         .select({ docRef: resumes.docRef })
         .from(resumes)
-        .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
+        .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
         .get();
       if (row === undefined) {
         await dropVersionRow(tx, ctx, docRef);
@@ -266,7 +265,7 @@ export async function updateResume(
     const row = await tx
       .select()
       .from(resumes)
-      .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
+      .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
       .get();
     if (row === undefined) throw notFound();
     const status = patch.status ?? row.status;
@@ -297,7 +296,7 @@ export async function updateResume(
         ...(relink ? { opportunityId: patch.opportunityId ?? null } : {}),
         updatedAt: Date.now(),
       })
-      .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
+      .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
       .returning()
       .get();
   });
@@ -313,7 +312,7 @@ export async function setResumeStatus(
   await db
     .update(resumes)
     .set({ status, updatedAt: Date.now() })
-    .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
+    .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
     .run();
 }
 
@@ -339,7 +338,7 @@ export async function deleteResume(db: Db, ctx: UserCtx, id: string): Promise<De
     const row = await tx
       .select()
       .from(resumes)
-      .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
+      .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
       .get();
     if (row === undefined) throw notFound();
     // Sent (#158) counts as submitted: its sends are the record of what was sent, and
@@ -351,7 +350,7 @@ export async function deleteResume(db: Db, ctx: UserCtx, id: string): Promise<De
       // already dropped.
       const gone = await tx
         .delete(resumes)
-        .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
+        .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
         .returning({ store: resumes.store, docRef: resumes.docRef })
         .get();
       if (gone?.store === 'local_file') await dropVersionRow(tx, ctx, gone.docRef);
@@ -361,7 +360,7 @@ export async function deleteResume(db: Db, ctx: UserCtx, id: string): Promise<De
     const archived = await tx
       .update(resumes)
       .set({ archivedAt: Date.now(), updatedAt: Date.now() })
-      .where(and(eq(resumes.userId, ctx.userId), eq(resumes.id, id)))
+      .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
       .returning()
       .get();
     return { outcome: 'archived', row: archived };

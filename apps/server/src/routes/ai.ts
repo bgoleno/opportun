@@ -219,6 +219,8 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
           409,
           'proposal_use_accept',
           'Accept or discard the proposed refinement instead of activating it.',
+          undefined,
+          { userFacing: true },
         );
       }
       const activated = await activatePrompt(db, ctx, req.params.id);

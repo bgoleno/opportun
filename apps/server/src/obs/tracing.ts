@@ -22,10 +22,9 @@ import {
   type SpanProcessor,
 } from '@opentelemetry/sdk-trace';
 import type { Db } from '../db/client';
-import { isCollecting, isSuppressed, spanExportSink } from './index';
 import { guarded, rebuildSpan } from './spanRebuild';
 import { SpanStore } from './spanStore';
-import { setKeptCheck } from './workflow';
+import { isCollecting, isSuppressed, setKeptCheck, spanExportSink } from './state';
 
 /** Hands each finished span, rebuilt for export, to FR-T2's exporter while one is attached. */
 const exportProcessor: SpanProcessor = {

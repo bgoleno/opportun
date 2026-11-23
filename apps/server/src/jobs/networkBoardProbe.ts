@@ -14,6 +14,7 @@
 // after it, and the user's pending probes are cancelled. The rest wait for the next night. It also
 // stops this job's requests to that vendor for every user until the next night's sweep; the other
 // two vendors go on.
+import { ATS_PROBES, recordNone } from '../lib/atsDetect';
 import { type AtsKind } from '../lib/atsBoard';
 import { CronExpressionParser } from 'cron-parser';
 import { and, asc, count, desc, eq, gte, inArray, isNull, lt, lte, or } from 'drizzle-orm';
@@ -25,11 +26,10 @@ import { companies, jobs, networkContacts, settings, users } from '../db/schema'
 import { FetchBlockedError, type FetchBlockedReason } from '../lib/safeFetch';
 import type { UserCtx } from '../repos/base';
 import { userSettingKey } from '../repos/userSettings';
-import { ATS_PROBES, recordNone } from './atsDetect';
 import { probeCompanyBoard, recordProbe } from './companyBoardProbe';
 import { requireService, type JobHandler } from './registry';
 import { cancelJob } from './runner';
-import { enqueueVendorCheck } from './vendorCheckQueue';
+import { enqueueVendorCheck } from '../lib/vendorCheckQueue';
 
 export const NETWORK_PROBE_KIND = 'company.network_probe';
 export const NETWORK_PROBE_SWEEP_KIND = 'company.network_probe_sweep';

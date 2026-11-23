@@ -7,6 +7,7 @@
 import { and, asc, count, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm';
 import { discoveryResults, discoveryRuns, discoverySources, taskRuns } from '../db/schema';
 import type { Db, UserCtx } from './base';
+import { ownedBy } from './base';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** The rank windows Settings > AI usage shows. */
@@ -102,7 +103,7 @@ export async function discoveryCostFigures(
     .from(taskRuns)
     .where(
       and(
-        eq(taskRuns.userId, ctx.userId),
+        ownedBy(taskRuns.userId, ctx),
         eq(taskRuns.taskKey, RANK_TASK),
         gte(taskRuns.createdAt, now - longest * DAY_MS),
       ),
@@ -129,7 +130,7 @@ export async function discoveryCostFigures(
     await db
       .select({ id: discoverySources.id, kind: discoverySources.kind })
       .from(discoverySources)
-      .where(eq(discoverySources.userId, ctx.userId))
+      .where(ownedBy(discoverySources.userId, ctx))
       .orderBy(asc(discoverySources.createdAt), asc(discoverySources.id))
       .all()
   ).filter((s) => s.kind.startsWith('ats_'));
@@ -145,7 +146,7 @@ export async function discoveryCostFigures(
     .from(discoveryRuns)
     .where(
       and(
-        eq(discoveryRuns.userId, ctx.userId),
+        ownedBy(discoveryRuns.userId, ctx),
         inArray(
           discoveryRuns.sourceId,
           sources.map((s) => s.id),
@@ -162,7 +163,7 @@ export async function discoveryCostFigures(
     .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
     .where(
       and(
-        eq(discoveryResults.userId, ctx.userId),
+        ownedBy(discoveryResults.userId, ctx),
         eq(discoveryResults.disposition, 'pending'),
         eq(discoveryResults.rankSkipReason, 'below_cut'),
       ),

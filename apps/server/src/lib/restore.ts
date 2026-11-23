@@ -23,13 +23,17 @@
 // Deliberately out of scope: attachments/ and master.key. Both live outside the database, are
 // untouched by a database restore, and were untouched by the incident this was built from;
 // deciding what (if anything) ties their recovery to a database restore is a separate question.
+import {
+  isSnapshotName,
+  verifySnapshot,
+  type VerifyResult,
+  LIVE_CHECK_FILE,
+} from './backupSnapshots';
 import { spawn } from 'node:child_process';
 import Database from 'better-sqlite3';
 import pg from 'pg';
 import type { PostgresConfig } from '../config';
 import { libpqEnvFor, pgPoolConfig, type LibpqEnv } from '../db/client';
-import { isSnapshotName, verifySnapshot, type VerifyResult } from '../jobs/backup';
-import { LIVE_CHECK_FILE } from '../jobs/dbIntegrityCheck';
 import { DATABASE_FILE_NAMES, type Storage } from './storage';
 
 /** Refused before anything was touched: nothing was written. */

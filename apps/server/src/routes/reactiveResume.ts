@@ -134,6 +134,8 @@ export async function reactiveResumeRoutes(app: FastifyInstance): Promise<void> 
           409,
           'reactive_resume_not_connected',
           'Connect Reactive Resume before choosing it.',
+          undefined,
+          { userFacing: true },
         );
       }
       await writeUserSetting(db, ctx, DOCUMENT_STORE_SETTING, req.body.store);

@@ -39,9 +39,9 @@
 // context to make up for data that was never kept. The deterministic extraction has no such
 // gap: it is already the accepted quality bar for a live capture with no AI key, so re-derive
 // holds itself to the same bar rather than inventing a second, approximate path.
+import { capturedPage, confirm } from './postingReconcile';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
-import { capturedPage, confirm } from '../jobs/postingReconcile';
 import { createActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
 import { getOpportunity, updateOpportunity, type OpportunityView } from '../repos/opportunities';
@@ -101,7 +101,7 @@ export async function rederivePosting(
       reason === 'user_confirmed'
         ? 'You confirmed this posting yourself. Re-deriving would replace that decision.'
         : 'This opportunity already has a description. Edit it instead.';
-    throw new HttpError(409, reason, message);
+    throw new HttpError(409, reason, message, undefined, { userFacing: true });
   }
 
   const capture = await capturedPage(db, ctx, opportunityId);
@@ -110,6 +110,8 @@ export async function rederivePosting(
       409,
       'no_capture',
       'This opportunity has no stored capture to re-derive from.',
+      undefined,
+      { userFacing: true },
     );
   }
 

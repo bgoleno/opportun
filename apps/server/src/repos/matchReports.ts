@@ -4,6 +4,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { resumeMatchReports, tailoringSessions, type MatchReport } from '../db/schema';
 import type { Db, UserCtx } from './base';
+import { ownedBy } from './base';
 
 export interface MatchReportRow {
   report: MatchReport;
@@ -22,7 +23,7 @@ export async function getMatchReport(
     .from(resumeMatchReports)
     .where(
       and(
-        eq(resumeMatchReports.userId, ctx.userId),
+        ownedBy(resumeMatchReports.userId, ctx),
         eq(resumeMatchReports.resumeId, resumeId),
         eq(resumeMatchReports.opportunityId, opportunityId),
       ),
@@ -76,7 +77,7 @@ export async function isMatchStale(
   const row = await db
     .select({ latestAcceptedAt: sql<number | null>`max(${tailoringSessions.acceptedAt})` })
     .from(tailoringSessions)
-    .where(and(eq(tailoringSessions.userId, ctx.userId), eq(tailoringSessions.resumeId, resumeId)))
+    .where(and(ownedBy(tailoringSessions.userId, ctx), eq(tailoringSessions.resumeId, resumeId)))
     .get();
   const latestAcceptedAt = row?.latestAcceptedAt ?? null;
   return latestAcceptedAt !== null && latestAcceptedAt >= scoredAt;
