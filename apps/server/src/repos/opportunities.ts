@@ -478,6 +478,25 @@ export async function createOpportunity(
   });
 }
 
+/** The row's description, text and fingerprint, is this one (null is equal to null). */
+function descriptionIs(
+  was: Pick<OpportunityRow, 'descriptionMd' | 'descriptionFingerprint'>,
+): SQL | undefined {
+  return and(
+    was.descriptionMd === null
+      ? isNull(opportunities.descriptionMd)
+      : eq(opportunities.descriptionMd, was.descriptionMd),
+    was.descriptionFingerprint === null
+      ? isNull(opportunities.descriptionFingerprint)
+      : eq(opportunities.descriptionFingerprint, was.descriptionFingerprint),
+  );
+}
+
+/** updateOpportunity's `ifDescription` no longer holds: nothing was written. */
+export class DescriptionChanged extends Error {
+  override name = 'DescriptionChanged';
+}
+
 /** Edits descriptive fields. Changing company, title or location re-claims the dedupe key. */
 export async function updateOpportunity(
   db: Db,
@@ -488,8 +507,16 @@ export async function updateOpportunity(
    * The identity the new posting URL was given by a check made before this write (#398: a
    * `gh_jid` link proven on Greenhouse's API, lib/greenhouseEmbed). Without it a new URL keeps
    * or drops the identity by postingAtsJobRefKeeping, which asks nobody.
+   *
+   * `ifDescription`: write only while the description is still the one read before (#856), or
+   * throw DescriptionChanged with nothing written. The text itself is compared, not only the
+   * fingerprint: a user's save leaves the fingerprint as it was, which is how it is known to be
+   * theirs (lib/postingFingerprint).
    */
-  opts: { atsJobRef?: AtsJobRef | null } = {},
+  opts: {
+    atsJobRef?: AtsJobRef | null;
+    ifDescription?: Pick<OpportunityRow, 'descriptionMd' | 'descriptionFingerprint'>;
+  } = {},
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
     const current = await getViewSync(tx, ctx, id);
@@ -529,7 +556,10 @@ export async function updateOpportunity(
       companyId !== current.companyId &&
       opts.atsJobRef === undefined &&
       kept?.verifiedVia === 'gh_jid';
-    await tx
+    await racePoint('opportunities.update.locked');
+    // The condition is in the UPDATE, not a check of `current`: on Postgres a save can commit
+    // between that read and here, and only the statement itself sees the row as it then is.
+    const written = await tx
       .update(opportunities)
       .set({
         ...fields,
@@ -538,8 +568,14 @@ export async function updateOpportunity(
         dedupeKey: key,
         updatedAt: now,
       })
-      .where(owned(ctx, id))
-      .run();
+      .where(
+        and(
+          owned(ctx, id),
+          opts.ifDescription === undefined ? undefined : descriptionIs(opts.ifDescription),
+        ),
+      )
+      .returning({ id: opportunities.id });
+    if (opts.ifDescription !== undefined && written.length === 0) throw new DescriptionChanged();
     // A new posting URL under a live attempt (#144): the attempt says so and its review lapses.
     if (urlChanged) await markPostingChanged(tx, ctx, lockedAttempt, id, now);
     if (companyName !== undefined || fields.title !== undefined) {
