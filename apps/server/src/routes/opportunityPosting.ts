@@ -25,7 +25,7 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { isSystemWritten, replaceAllowedByFlag } from '../lib/postingFingerprint';
-import { attachPosting } from '../lib/postingAttach';
+import { attachPosting, recordIdentified } from '../lib/postingAttach';
 import { confirmPosting, unconfirmPosting } from '../lib/postingConfirm';
 import { rederivePosting } from '../lib/postingRederive';
 import type { SourceContext } from '../adapters/discoverySource';
@@ -145,6 +145,10 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       if (userWritten(current)) {
         const identified = await identifyOwnLink(ctx, current, sctx);
         if (current.postingState === 'confirmed' && identified !== null) {
+          // On the timeline, as every other way a posting is found (#813).
+          await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+            kept: false,
+          });
           return { outcome: 'identified' as const, opportunity: identified };
         }
         // Not confirmed yet (#756, tl): Greenhouse's own answer for its embedded link is the
@@ -155,6 +159,9 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             postingState: 'confirmed',
             postingStateDetail: 'user_confirmed',
             atsJobRef: identified.atsJobRef,
+          });
+          await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+            kept: true,
           });
           return { outcome: 'identified' as const, opportunity: confirmed };
         }
@@ -215,6 +222,10 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       const identified = await identifyOwnLink(ctx, current, sctx);
       const note = outcome.note === undefined ? {} : { note: outcome.note };
       if (identified !== null && outcome.status !== 'candidates') {
+        // On the timeline, as the user-described cases above are (#813, tl on #847).
+        await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+          kept: false,
+        });
         return { outcome: 'identified' as const, opportunity: identified, ...note };
       }
       if (outcome.status === 'candidates') {
