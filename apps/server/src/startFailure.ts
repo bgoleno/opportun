@@ -78,10 +78,9 @@ const UNREACHABLE = new Set([
   'EAI_FAIL',
   'EPIPE',
   'ETIMEDOUT',
-  // A Unix socket that is not there, or not this user's to use.
-  'ENOENT',
-  'EACCES',
 ]);
+/** A Unix socket that is not there, or not this user's to use: only when connecting to it. */
+const UNREACHABLE_SOCKET = new Set(['ENOENT', 'EACCES']);
 /** What node-postgres and its pool say, with no code, when no connection came of it. */
 const UNREACHABLE_TEXT = new Set([
   'timeout expired',
@@ -104,6 +103,8 @@ function postgresReason(err: unknown): StartFailureReason | undefined {
   if (code === 'ERR_INVALID_URL' || err instanceof URIError) return 'postgres_url';
   if (TLS_CODE.test(code) || TLS_TEXT.has(text)) return 'postgres_tls';
   if (UNREACHABLE.has(code) || UNREACHABLE_TEXT.has(text)) return 'postgres_unreachable';
+  const connecting = (err as { syscall?: unknown } | null)?.syscall === 'connect';
+  if (connecting && UNREACHABLE_SOCKET.has(code)) return 'postgres_unreachable';
   // SQLSTATE, from Postgres itself.
   if (code.length !== 5) return undefined;
   if (code.startsWith('28')) return 'postgres_sign_in';

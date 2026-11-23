@@ -289,6 +289,13 @@ describe('why a start failed', () => {
     expect(startFailureReason(err, SQLITE)).toBeUndefined();
   });
 
+  it.each(['ENOENT', 'EACCES'])('%s is about Postgres only on connecting to its socket', (code) => {
+    const at = (syscall: string, path: string) =>
+      startFailureReason(Object.assign(withCode(code), { syscall, path }), POSTGRES);
+    expect(at('connect', '/run/pg/.s.PGSQL.5432')).toBe('postgres_unreachable');
+    expect(at('open', '/app/web/index.html')).toBeUndefined();
+  });
+
   it.each<[string, StartFailureReason]>([
     ['SQLITE_NOTADB', 'sqlite_damaged'],
     ['SQLITE_CORRUPT', 'sqlite_damaged'],
