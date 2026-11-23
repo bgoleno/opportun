@@ -245,7 +245,8 @@ it. Two-factor sign-in, when it is on, still asks for a code.
 
 - **Link** asks for your current password, then takes you to the provider to sign in there. A
   linked provider shows **Linked** with the date. If the provider account is already linked to
-  another account on this instance, linking is refused and says so.
+  another account on this instance, or you already have a different account from that provider
+  linked (unlink it first), linking is refused and says so.
 - **Unlink** asks for your current password, then removes the provider; you can no longer sign in
   with it.
 - **No password yet?** An account created through a provider starts without one. Set one first
