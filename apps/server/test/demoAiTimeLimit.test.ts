@@ -68,34 +68,71 @@ describe('an AI call on a demo server has a time limit (#656)', () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
-  it('the limit is one deadline for the whole call, its retries included (tl on #670)', async () => {
-    // Each request answers 503 after 150 ms, under the limit, and the SDK retries a 503: with a
-    // limit per request the call would run three of them (450 ms and more); one deadline ends it.
-    limitMs = 250;
-    const { app, a } = await boot({ demo: true });
-    await addKey(a);
-    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
-      await new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(resolve, 150);
-        init?.signal?.addEventListener('abort', () => {
-          clearTimeout(timer);
-          reject(init.signal?.reason ?? new Error('aborted'));
+  // One deadline for the whole call, its retries included (tl on #670). No clock is read (#915): the
+  // call ends with a ledger write the deadline does not cover, and a busy disk made that slow. Timers
+  // fire in the order they are due, however late: the deadline (250 ms from the call's start) always
+  // comes before a second request's answer (two waits of 150 ms), so load cannot fail this. With a
+  // deadline per try each answer comes, unless the process stalls for 100 ms as a request starts.
+  describe('is one deadline for the whole call', () => {
+    const LIMIT_MS = 250;
+    const ANSWER_MS = 150;
+
+    /** The provider: each request gets `answer()` after ANSWER_MS, unless its signal aborts first. */
+    function slowProvider(answer: () => Response) {
+      const seen = { requests: 0, answered: 0 };
+      vi.stubGlobal('fetch', async (_input: unknown, init?: RequestInit) => {
+        seen.requests += 1;
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, ANSWER_MS);
+          init?.signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(init.signal?.reason ?? new Error('aborted'));
+          });
         });
+        seen.answered += 1;
+        return answer();
       });
-      return new Response(
-        JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'busy' } }),
-        { status: 503, headers: { 'content-type': 'application/json' } },
+      return seen;
+    }
+
+    async function call() {
+      limitMs = LIMIT_MS;
+      const { app, a } = await boot({ demo: true });
+      await addKey(a);
+      const deps = await buildAiDeps(app.db, { userId: a.userId, isAdmin: false });
+      return { run: () => runStructured(deps, 'discovery.rank', OPTS) };
+    }
+
+    it('with the SDK’s own retries in it', async () => {
+      const { run } = await call();
+      // Retried at once: without the header the SDK waits 2 s first, past the limit, so nothing
+      // would be retried within it.
+      const seen = slowProvider(
+        () =>
+          new Response(
+            JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'busy' } }),
+            { status: 503, headers: { 'content-type': 'application/json', 'retry-after-ms': '1' } },
+          ),
       );
+      await expect(run()).rejects.toBeInstanceOf(AiUnavailableError);
+      expect(seen.answered).toBeLessThanOrEqual(1);
+      expect(seen.requests).toBeLessThanOrEqual(2);
     });
-    vi.stubGlobal('fetch', fetchMock);
-    const deps = await buildAiDeps(app.db, { userId: a.userId, isAdmin: false });
-    const started = Date.now();
-    await expect(runStructured(deps, 'discovery.rank', OPTS)).rejects.toBeInstanceOf(
-      AiUnavailableError,
-    );
-    // Within the one deadline (and the SDK's backoff between tries), not three requests' worth.
-    expect(Date.now() - started).toBeLessThan(400);
-    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(2);
+
+    it('with the retry of an answer that does not fit the schema in it', async () => {
+      const { run } = await call();
+      const seen = slowProvider(
+        () =>
+          new Response(JSON.stringify(liveMessage(JSON.stringify({ score: 'high' }))), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      );
+      // Ended by the deadline, not by two answers that do not fit.
+      await expect(run()).rejects.toMatchObject({ reason: 'provider_error' });
+      expect(seen.answered).toBeLessThanOrEqual(1);
+      expect(seen.requests).toBeLessThanOrEqual(2);
+    });
   });
 
   it('on a demo server, a call that answers within the limit is unchanged', async () => {
