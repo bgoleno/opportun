@@ -25,7 +25,8 @@ label to watch, allow and deny lists, and the checks every message passes before
 classified.
 
 Opportun syncs every 15 minutes on its own. **Sync now** (on the Inbox or the Gmail card)
-runs one immediately.
+runs one immediately, and when it finishes the new mail, the tab counts and the sync time
+appear on their own, without a reload.
 
 ![The Gmail card showing read-only access granted, 4 messages stored and the lookback window, with the Extensions and Connectors card below it reporting Apple Mail connected](images/integrations-gmail-devices.png)
 
@@ -93,6 +94,14 @@ _Linked mail with its channel badges (Apple Mail, Gmail). The interview request 
 
 _Broadcast outreach lands in Spam and never creates an opportunity._
 
+### Long tabs
+
+A tab shows up to 200 messages at a time. When it holds more, a line above the list says which
+are shown, for example "Showing 201–400 of 523", with **Previous** and **Next** to move between
+pages. A tab that fits on one page shows neither. Changing a filter starts again from the first
+page, and if the page you are on empties (its messages were rejected or linked away), the tab
+steps back to the last page that has messages. The number on the tab itself is the whole count.
+
 ## Acting on a message
 
 - **Open** shows the snippet Opportun kept, up to 500 characters, and, for Gmail and most
@@ -131,8 +140,12 @@ count, a reason and **Reject N**. **Reject N** asks first ("Reject N messages?")
 the subject, snippet and body of those messages are removed for good and this cannot be undone;
 confirming rejects them all with that reason. A bulk reject does the same deletion as a single
 one but never blocks senders and takes no note; to block a sender, reject one of their messages
-on its own. Only rows on screen can be selected: changing a filter clears the selection, and a
-row that leaves the list (linked, reclassified or gone on a refresh) leaves the selection too.
+on its own. Only rows on screen can be selected, so a message on another page is never rejected:
+a row that leaves the list (hidden by a filter you change, linked, reclassified or gone on a
+refresh) leaves the selection, and one still listed stays selected. Each message is rejected only if it is still linked
+as you saw it: one that was linked or moved in another tab or session since you selected it is
+left as it is, and the result says so ("2 were changed elsewhere and left as they are"), next to
+the count rejected and any skipped because they are not yours or already gone.
 
 Your corrections are kept. Once a week (Mondays), if you made at least five since the last
 time, the `discovery.refine_prompt` task proposes a revised classification prompt. The
