@@ -16,6 +16,7 @@ import {
   nextSteps,
   opportunities,
   opportunityDedupeCandidates,
+  resumes,
   stageHistory,
 } from '../src/db/schema';
 import { createActivity, createNextStep, updateActivity } from '../src/repos/activities';
@@ -32,7 +33,7 @@ import {
   updateOpportunity,
 } from '../src/repos/opportunities';
 import { rejectCommunication } from '../src/repos/reject';
-import { insertResume } from '../src/repos/resumes';
+import { insertResume, updateResume } from '../src/repos/resumes';
 import { useApi } from './api';
 import { queryAll, testDialect } from './db';
 import type { TestClient } from './isolation';
@@ -40,6 +41,7 @@ import { heldOpen, pauseAt, someoneBlocked } from './race';
 
 const boot = useApi();
 const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false });
+const LOCKED = 'opportunities.merge.locked';
 const MERGING = 'opportunities.merge.moved';
 const DELETING = 'opportunities.delete.locked';
 const NOTE = {
@@ -76,7 +78,7 @@ async function pair(): Promise<Pair & { a: TestClient; b: TestClient }> {
       descriptionMd: 'What the job is.',
       sourceKind: 'manual',
     });
-  const keep = (await create('Baker')).id;
+  const keep = (await create('Pastry Baker')).id;
   const other = (await create('Warehouse Manager')).id;
   const note = await createActivity(app.db, ctx, other, NOTE);
   // Transactions are parked on purpose.
@@ -147,6 +149,37 @@ async function after(
   expect(blocked).toBe(true);
   return out;
 }
+
+const resumeOf = (p: Pair, opportunityId: string | null) =>
+  insertResume(p.app.db, p.ctx, {
+    kind: opportunityId === null ? 'base' : 'tailored',
+    title: 'Resume',
+    store: 'local_file',
+    docRef: `resumes/${newId()}.txt`,
+    opportunityId,
+    parentResumeId: null,
+  });
+/** A live attempt on the opportunity, as starting an application writes it. */
+const startApplication = (p: Pair, exec: Exec, opportunityId: string, resumeId: string) =>
+  exec
+    .insert(applicationSubmissions)
+    .values({
+      id: newId(),
+      userId: p.ctx.userId,
+      opportunityId,
+      resumeId,
+      atsKind: 'ats_greenhouse',
+      atsRef: 'initech',
+      atsExternalId: newId(),
+      destinationUrl: 'https://boards.greenhouse.io/initech/jobs/1000001',
+      status: 'draft',
+      idempotencyKey: newId(),
+      fields: {},
+      answers: [],
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    .run();
 
 const merge = (p: Pair) => mergeOpportunities(p.app.db, p.ctx, p.keep, p.other);
 const remove = (p: Pair, id: string) => deleteOpportunity(p.app.db, p.ctx, id);
@@ -295,7 +328,7 @@ describe('beside a merge', () => {
     ],
     [
       'a title save of the merged-away one, which names the kept one',
-      (p) => updateOpportunity(p.app.db, p.ctx, p.other, { title: 'Baker Nights' }),
+      (p) => updateOpportunity(p.app.db, p.ctx, p.other, { title: 'Pastry Baker Nights' }),
       GONE,
     ],
     [
@@ -315,11 +348,6 @@ describe('beside a merge', () => {
       'ok',
     ],
     [
-      '"not a duplicate" for the two',
-      (p) => dismissPossibleDuplicate(p.app.db, p.ctx, p.keep, p.other),
-      GONE,
-    ],
-    [
       'an edit of a moved activity',
       (p) => updateActivity(p.app.db, p.ctx, p.noteId, { title: 'edited' }),
       'ok',
@@ -337,6 +365,53 @@ describe('beside a merge', () => {
     ).toEqual(['ok', expected]);
     expect(await activityOwner(p, p.noteId)).toBe(p.keep);
     await expectGone(p, p.other);
+  });
+
+  const flag = (p: Pair) =>
+    p.app.db
+      .update(opportunities)
+      .set({ possibleDuplicateOf: p.other })
+      .where(eq(opportunities.id, p.keep))
+      .run();
+  const notADuplicate = (exec: Exec, p: Pair) =>
+    dismissPossibleDuplicate(exec as never, p.ctx, p.keep, p.other);
+  it('"not a duplicate" for the two, which are flagged: not found', async () => {
+    const p = await pair();
+    await flag(p);
+    expect(
+      await beside(
+        p.app,
+        MERGING,
+        () => merge(p),
+        () => notADuplicate(p.app.db, p),
+      ),
+    ).toEqual(['ok', GONE]);
+    await expectGone(p, p.other);
+  });
+  it('"not a duplicate" for the two, which are flagged, first: the merge waits and is done', async () => {
+    const p = await pair();
+    await flag(p);
+    expect(
+      await after(
+        p.app,
+        (tx) => notADuplicate(tx, p),
+        () => merge(p),
+      ),
+    ).toBe('ok');
+    await expectGone(p, p.other);
+  });
+
+  // What the titles above and below stand on: such a save does name the other one.
+  it.each([
+    ['of the merged-away one', 'Pastry Baker Nights', (p: Pair) => p.other, (p: Pair) => p.keep],
+    ['of the kept one', similar, (p: Pair) => p.keep, (p: Pair) => p.other],
+  ])('control: the title save %s names the other', async (_w, title, of, names) => {
+    const p = await pair();
+    await updateOpportunity(p.app.db, p.ctx, of(p), { title });
+    const rows = await p.app.db.select().from(opportunityDedupeCandidates).all();
+    expect(rows.map((r) => [r.opportunityIdA, r.opportunityIdB].sort())).toEqual([
+      [of(p), names(p)].sort(),
+    ]);
   });
 
   it('the delete of the kept one: both are done, and all of it goes', async () => {
@@ -444,7 +519,7 @@ describe('beside a merge', () => {
     ],
     [
       'a title save of the merged-away one, which names the kept one',
-      (tx, p) => updateOpportunity(tx as never, p.ctx, p.other, { title: 'Baker Nights' }),
+      (tx, p) => updateOpportunity(tx as never, p.ctx, p.other, { title: 'Pastry Baker Nights' }),
     ],
     [
       'a reorder of both, the merged-away one first',
@@ -488,6 +563,83 @@ describe('beside a merge', () => {
   });
 });
 
+// The kept one is not going away, so what only names it need not wait for the merge, and must not: it
+// can hold what the merge moves next (tl on #938).
+describe('beside a merge, what only names the kept one', () => {
+  /** Parks the merge at `point`; `second` ends while it is parked. */
+  const passes = async (
+    p: Pair,
+    point: string,
+    second: () => Promise<unknown>,
+  ): Promise<[string, string]> => {
+    const pause = pauseAt(point);
+    const one = ended(merge(p));
+    await pause.reached;
+    const two = ended(second());
+    const passed = await Promise.race([
+      two.then(() => true),
+      someoneBlocked(p.app).then((blocked) => !blocked),
+    ]);
+    pause.release();
+    const out: [string, string] = [await one, await two];
+    // SQLite runs one writing transaction at a time.
+    expect(passed).toBe(testDialect === 'postgres');
+    return out;
+  };
+
+  it.each([LOCKED, MERGING])('an add to it does not wait, and is kept (%s)', async (point) => {
+    const p = await pair();
+    expect(
+      await passes(p, point, () => createNextStep(p.app.db, p.ctx, p.keep, { action: 'Call' })),
+    ).toEqual(['ok', 'ok']);
+    const steps = await p.app.db
+      .select()
+      .from(nextSteps)
+      .where(eq(nextSteps.opportunityId, p.keep))
+      .all();
+    expect(steps).toHaveLength(1);
+    await expectGone(p, p.other);
+  });
+
+  it('a resume moved to it from the merged-away one: both are done', async () => {
+    const p = await pair();
+    const { id } = await resumeOf(p, p.other);
+    expect(
+      await passes(p, LOCKED, () => updateResume(p.app.db, p.ctx, id, { opportunityId: p.keep })),
+    ).toEqual(['ok', 'ok']);
+    const row = await p.app.db.select().from(resumes).where(eq(resumes.id, id)).get();
+    expect(row?.opportunityId).toBe(p.keep);
+    await expectGone(p, p.other);
+  });
+
+  it('an application started on it: both are done', async () => {
+    const p = await pair();
+    const resume = await resumeOf(p, null);
+    expect(await passes(p, LOCKED, () => startApplication(p, p.app.db, p.keep, resume.id))).toEqual(
+      ['ok', 'ok'],
+    );
+    await expectGone(p, p.other);
+  });
+
+  // The merge then meets the new one on the index, as it does without the locks; never a deadlock. On
+  // SQLite the merge is done first, and has moved the other's.
+  it.runIf(testDialect === 'postgres')(
+    'an application started on it when the merged-away one has one: the start is done',
+    async () => {
+      const p = await pair();
+      const resume = await resumeOf(p, null);
+      await startApplication(p, p.app.db, p.other, resume.id);
+      const [merged, started] = await passes(p, LOCKED, () =>
+        startApplication(p, p.app.db, p.keep, resume.id),
+      );
+      expect(started).toBe('ok');
+      expect(merged).not.toContain('deadlock');
+      expect(merged).not.toBe('ok');
+      expect(await activityOwner(p, p.noteId)).toBe(p.other);
+    },
+  );
+});
+
 describe('a merge decides from what there is once it has its locks', () => {
   it('a stage and a title changed while it waited are the ones merged', async () => {
     const p = await pair();
@@ -518,39 +670,12 @@ describe('a merge decides from what there is once it has its locks', () => {
 
   it('a live attempt made while it waited is refused, and nothing is merged', async () => {
     const p = await pair();
-    const resume = await insertResume(p.app.db, p.ctx, {
-      kind: 'base',
-      title: 'Resume',
-      store: 'local_file',
-      docRef: `resumes/${newId()}.txt`,
-      opportunityId: null,
-      parentResumeId: null,
-    });
-    const attempt = (exec: Exec, opportunityId: string) =>
-      exec
-        .insert(applicationSubmissions)
-        .values({
-          id: newId(),
-          userId: p.ctx.userId,
-          opportunityId,
-          resumeId: resume.id,
-          atsKind: 'ats_greenhouse',
-          atsRef: 'initech',
-          atsExternalId: newId(),
-          destinationUrl: 'https://boards.greenhouse.io/initech/jobs/1000001',
-          status: 'draft',
-          idempotencyKey: newId(),
-          fields: {},
-          answers: [],
-          createdAt: 1,
-          updatedAt: 1,
-        })
-        .run();
-    await attempt(p.app.db, p.keep);
+    const resume = await resumeOf(p, null);
+    await startApplication(p, p.app.db, p.keep, resume.id);
     expect(
       await after(
         p.app,
-        (tx) => attempt(tx, p.other),
+        (tx) => startApplication(p, tx, p.other, resume.id),
         () => merge(p),
       ),
     ).toBe('409 live_submission_conflict');

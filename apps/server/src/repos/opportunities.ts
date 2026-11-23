@@ -843,12 +843,22 @@ export async function afterStageChange(db: Db, ctx: UserCtx, view: OpportunityVi
 
 /** SQLite has no row locks: the write gate already runs transactions one at a time. */
 const FOR_UPDATE = SCHEMA_DIALECT === 'postgres' ? sql` FOR UPDATE` : sql``;
+const FOR_NO_KEY_UPDATE = SCHEMA_DIALECT === 'postgres' ? sql` FOR NO KEY UPDATE` : sql``;
 
-/** Locks the opportunity's row against every other writer of it; false when there is none. */
-async function lockOpportunityRow(tx: Exec, ctx: UserCtx, id: string): Promise<boolean> {
+/**
+ * Locks the opportunity's row against every other writer of it; false when there is none. One that is
+ * `going` is locked against whatever names it too; one that stays lets a foreign key to it through.
+ */
+async function lockOpportunityRow(
+  tx: Exec,
+  ctx: UserCtx,
+  id: string,
+  going: boolean,
+): Promise<boolean> {
+  const lock = going ? FOR_UPDATE : FOR_NO_KEY_UPDATE;
   const row = await rawGet(
     tx,
-    sql`SELECT id FROM opportunities WHERE ${ownedSql('user_id', ctx)} AND id = ${id}${FOR_UPDATE}`,
+    sql`SELECT id FROM opportunities WHERE ${ownedSql('user_id', ctx)} AND id = ${id}${lock}`,
   );
   return row !== undefined;
 }
@@ -874,7 +884,7 @@ export async function deleteOpportunity(db: Db, ctx: UserCtx, id: string): Promi
     // of them takes, which writes its row and then indexes it. With the search rows first, each could
     // wait for the other (40P01, #917). Locked FOR UPDATE, so an activity being added (its foreign
     // key holds the row) is committed before they are read, and none can be added after.
-    if (!(await lockOpportunityRow(tx, ctx, id))) throw notFound();
+    if (!(await lockOpportunityRow(tx, ctx, id, true))) throw notFound();
     await racePoint('opportunities.delete.locked');
     // Read, and left for the cascade to delete: a DELETE of their own would set null the attempts'
     // links to them there and then, and so have the attempts' rows before the cascade has reached
@@ -915,12 +925,15 @@ export async function mergeOpportunities(
     // change marks a live attempt, and mail ingest confirms a submitted one (#173).
     await lockAttemptsOf(tx, ctx, [keepId, otherId]);
     // The user's lock (#920), then both rows, in the delete's order and before anything is read: an
-    // add, a link or a save of either is done before the merge and goes with it, or waits and finds
-    // the other gone. The search rows come last.
+    // add or a link to the other one, or a save of either, is done before the merge and goes with it,
+    // or waits and finds the other gone. The kept one stays, so what only names it goes on: a resume
+    // being moved to it, or an application being started on it, holds a row the merge moves next, and
+    // would wait here for the merge while the merge waited for it (40P01). The search rows come last.
     await lockScope(tx, userScope(ctx));
     for (const id of [keepId, otherId].sort()) {
-      if (!(await lockOpportunityRow(tx, ctx, id))) throw notFound();
+      if (!(await lockOpportunityRow(tx, ctx, id, id === otherId))) throw notFound();
     }
+    await racePoint('opportunities.merge.locked');
     const keep = await getViewSync(tx, ctx, keepId);
     const other = await getViewSync(tx, ctx, otherId);
     const now = Date.now();
