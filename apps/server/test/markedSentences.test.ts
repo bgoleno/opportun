@@ -2,8 +2,12 @@
 // marked for users, each read from the response as the web shows it (lib/api.ts errorMessage
 // reads `message` from the envelope). The scan in userFacingErrors.test.ts covers every marked
 // throw; these show the sentence actually reaches the client, through the route's own schema.
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
+import { opportunities } from '../src/db/schema';
+import { createOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
+import { requisition } from './submissionFixtures';
 
 const boot = useApi();
 
@@ -44,5 +48,42 @@ describe('a marked sentence reaches the client (#750)', () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toEqual({ code: 'not_confirmed', message: 'Type PURGE to confirm' });
+  });
+
+  // #853 (qa's pass 3): two more of #750's marked sentences, pinned as the web reads them.
+  it('a Gmail label that cannot go in a query says so', async () => {
+    const { a } = await boot();
+    const res = await a.request({
+      method: 'PUT',
+      url: '/api/v1/mail-filters/label',
+      payload: { label: 'Jobs "2026"' },
+    });
+    expect(res.statusCode, res.body).toBe(400);
+    expect(res.json().error).toEqual({
+      code: 'invalid_label',
+      message: 'That label cannot be used in a Gmail query',
+    });
+  });
+
+  it('an application started with no resume asks for one', async () => {
+    const { app, a } = await boot({ submissions: true });
+    const ctx = { userId: a.userId, isAdmin: false };
+    const opp = await createOpportunity(app.db, ctx, {
+      companyName: 'Example Corp',
+      title: 'Senior Platform Engineer',
+      sourceKind: 'manual',
+    });
+    await app.db
+      .update(opportunities)
+      .set({ stage: 'interested', atsJobRef: requisition(), postingState: 'confirmed' })
+      .where(eq(opportunities.id, opp.id))
+      .run();
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${opp.id}/submissions`,
+      payload: { idempotencyKey: crypto.randomUUID() },
+    });
+    expect(res.statusCode, res.body).toBe(422);
+    expect(res.json().error).toEqual({ code: 'resume_required', message: 'Choose a resume.' });
   });
 });
