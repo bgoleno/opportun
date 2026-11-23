@@ -17,8 +17,9 @@ updates:
 
   # The workflows' actions, each pinned to a full commit SHA (#728, sec's supply-chain review): a
   # pin is never updated by itself, so a fix in an action reached CI only when someone bumped it by
-  # hand. Dependabot proposes the new commit, keeping the `# vN` comment beside it, as a pull
-  # request that goes through the same review as any other.
+  # hand. Dependabot proposes the new commit as a pull request that goes through the same review
+  # as any other. It updates the `# vX.Y.Z` comment beside the pin too, when that comment ends with
+  # the release the old commit is tagged as (#875).
   - package-ecosystem: github-actions
     directory: /
     schedule:
