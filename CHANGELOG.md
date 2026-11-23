@@ -63,6 +63,16 @@ merged after it.
   and the timeline says what each check did
   ([#835](https://github.com/bgoleno/opportun/issues/835); PR
   [#860](https://github.com/bgoleno/opportun/pull/860)).
+- **Find posting waits while Opportun is already checking the company's board for that
+  posting**, and says why, so a posting is never attached twice. A click that lands just after
+  that check confirmed the posting says "Already confirmed" and changes nothing, and the page
+  shows the check's result on its own once it lands
+  ([#852](https://github.com/bgoleno/opportun/issues/852); PR
+  [#865](https://github.com/bgoleno/opportun/pull/865)).
+- **A background posting check no longer overwrites a description you save while it runs.** It
+  leaves your text as it is, marks the posting for review and says why
+  ([#851](https://github.com/bgoleno/opportun/issues/851); PR
+  [#855](https://github.com/bgoleno/opportun/pull/855)).
 - **Find posting writes a timeline entry when it recognises a job from its own careers-page link**
   ([#813](https://github.com/bgoleno/opportun/issues/813); PR
   [#847](https://github.com/bgoleno/opportun/pull/847)).
@@ -299,11 +309,15 @@ merged after it.
 
 - **`SECURITY.md` says that a message pushed through `mail:push` can mark an application confirmed
   by email**, that Opportun verifies no SPF, DKIM or DMARC result, and how to undo it, and its
-  threat model covers what shipped since 0.4.0
+  threat model covers what shipped since 0.4.0. It also says how audit records commit with what
+  they record, which error text reaches a client, that the test-support switches are refused in
+  production, and what CI pins and scans
   ([#522](https://github.com/bgoleno/opportun/issues/522),
-  [#703](https://github.com/bgoleno/opportun/issues/703); PRs
+  [#703](https://github.com/bgoleno/opportun/issues/703),
+  [#845](https://github.com/bgoleno/opportun/issues/845); PRs
   [#548](https://github.com/bgoleno/opportun/pull/548),
-  [#708](https://github.com/bgoleno/opportun/pull/708)).
+  [#708](https://github.com/bgoleno/opportun/pull/708),
+  [#848](https://github.com/bgoleno/opportun/pull/848)).
 - **Guides: the Inbox's Reject, filters and bulk reject, the Referrals ranking and Re-rank, the
   review limit, and Tailor again after a copy is marked Submitted.** The Inbox guide covers
   Reject, Not spam, the filter bar and bulk reject, and the token step names the required
