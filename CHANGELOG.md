@@ -36,6 +36,30 @@ when the milestone's work was merged.
   ([#870](https://github.com/bgoleno/opportun/issues/870); PR
   [#885](https://github.com/bgoleno/opportun/pull/885)).
 
+- **Posting check: one that could not finish says so and offers Find posting, instead of showing as
+  being checked for good, and deleting or merging an opportunity during its check no longer leaves
+  a dead job.** A posting left `searching` by a check whose job died, was pruned or was lost to a
+  crash is ended when the server starts and when the job dies, with the timeline note "The check of
+  the company's board did not finish. Use Find posting to check again." A check whose opportunity is
+  gone ends quietly and is not retried
+  ([#869](https://github.com/bgoleno/opportun/issues/869),
+  [#897](https://github.com/bgoleno/opportun/issues/897); PR
+  [#922](https://github.com/bgoleno/opportun/pull/922)).
+- **Postgres: saving an opportunity never puts back a company or duplicate key that another save
+  changed meanwhile.** A description, link or state save leaves them alone, and two edits at the
+  same moment no longer leave a wrong duplicate key. After a company is renamed on its own page, a
+  description save no longer recomputes its opportunities' keys
+  ([#889](https://github.com/bgoleno/opportun/issues/889); PR
+  [#910](https://github.com/bgoleno/opportun/pull/910)).
+- **Postgres: deleting an opportunity while it is being saved no longer fails with an internal
+  error, and the delete always happens.** Adding an activity, a referral ask, a next step or a file
+  to an opportunity that is being deleted, or moving it to another stage, says it is not found,
+  with nothing written
+  ([#917](https://github.com/bgoleno/opportun/issues/917),
+  [#925](https://github.com/bgoleno/opportun/issues/925); PRs
+  [#923](https://github.com/bgoleno/opportun/pull/923),
+  [#929](https://github.com/bgoleno/opportun/pull/929)).
+
 ### Sign-in and settings
 
 - **Pressing Escape, or closing while the request is running, no longer loses two-factor recovery
@@ -51,6 +75,13 @@ when the milestone's work was merged.
   copied it: the corner X is gone and Escape is refused
   ([#903](https://github.com/bgoleno/opportun/issues/903); PR
   [#907](https://github.com/bgoleno/opportun/pull/907)).
+- **A device token whose create answer was lost is listed, and the page says what to do.** If
+  creating a token fails halfway, in the token dialog or the extension setup, the list is read
+  again. A token the server made without its answer arriving shows in it, marked "Not shown here"
+  when it can be told apart, with a note to revoke it and create another. Its value can no longer
+  be shown. A refusal, a wrong password for example, is said as before
+  ([#904](https://github.com/bgoleno/opportun/issues/904); PR
+  [#918](https://github.com/bgoleno/opportun/pull/918)).
 
 ### Inbox
 
@@ -66,6 +97,18 @@ when the milestone's work was merged.
   200 characters at most, and no messages are listed until it is shorter. It is never sent
   ([#894](https://github.com/bgoleno/opportun/issues/894); PR
   [#906](https://github.com/bgoleno/opportun/pull/906)).
+- **Inbox: a suggested move that is refused says why, linking or reclassifying a message rejected
+  elsewhere is refused, and the confirmations for linking, unlinking, Not spam and Reclassify
+  show.** A refused move gives one of three reasons: the message was rejected, it is no longer
+  linked, or the suggestion was used, ignored or changed. A message rejected elsewhere is refused
+  with "This message has been rejected, so it was left as it is." and nothing is written
+  ([#895](https://github.com/bgoleno/opportun/issues/895); PR
+  [#916](https://github.com/bgoleno/opportun/pull/916)).
+- **Inbox: linking, unlinking or reclassifying a message says how it ended when its dialog was
+  closed first, and no longer closes another dialog opened meanwhile on a row that stays.** A
+  failure shows as a message when the dialog is not on screen, and once
+  ([#919](https://github.com/bgoleno/opportun/issues/919); PR
+  [#926](https://github.com/bgoleno/opportun/pull/926)).
 
 ### Docs
 
@@ -91,6 +134,11 @@ when the milestone's work was merged.
   [#881](https://github.com/bgoleno/opportun/pull/881),
   [#884](https://github.com/bgoleno/opportun/pull/884),
   [#899](https://github.com/bgoleno/opportun/pull/899)).
+- **Docs: the architecture notes list the boot sweep of posting checks among the things that
+  assume one process.** It ends every posting still `searching` that has no pending or running
+  check job, which is safe only because no request has been served yet
+  ([#924](https://github.com/bgoleno/opportun/issues/924); PR
+  [#928](https://github.com/bgoleno/opportun/pull/928)).
 
 ## 0.5.0 (2026-11-22)
 
