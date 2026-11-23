@@ -73,7 +73,8 @@ export async function createDeviceToken<T extends { id: string; token: string }>
   body: unknown,
 ): Promise<T> {
   const res = await api<T | undefined>('/device-tokens', { method: 'POST', body });
-  if (typeof res?.token !== 'string') throw new Error('no token in the answer');
+  if (typeof res?.token !== 'string' || res.token === '' || typeof res.id !== 'string')
+    throw new Error('no token in the answer');
   return res;
 }
 

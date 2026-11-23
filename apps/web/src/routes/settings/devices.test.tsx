@@ -272,6 +272,8 @@ describe('DevicesCard', () => {
       ],
       ['the answer has no token in it', () => ({ status: 201, body: {} })],
       ['the answer is empty', () => ({ status: 201 })],
+      // It opened the dialog that shows a token with nothing in it (qa on #918).
+      ['the token in the answer is empty', () => ({ status: 201, body: { ...MADE, token: '' } })],
     ];
 
     /** Opens Create, fills it in and presses Create; the server makes the token, then `answer`s. */
@@ -527,6 +529,19 @@ describe('DevicesCard', () => {
       expect(screen.getByRole('alert')).toHaveTextContent(FOUND);
     });
 
+    it('revoking another one leaves it said, when nothing of it is in the list yet', async () => {
+      const user = userEvent.setup();
+      server(['lost'], [{ ...LAPTOP, id: 't7' }]);
+      renderWithProviders(<DevicesCard />);
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      await within(dialog).findByRole('alert');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await revokeRow(user, await screen.findByRole('listitem', { name: 'MacBook connector' }));
+      await screen.findByText('Revoked');
+      expect(screen.getByRole('alert')).toHaveTextContent(SAYS);
+    });
+
     it('two lost ones of different names are both said, and a retry settles only its own', async () => {
       const user = userEvent.setup();
       server(['made and lost', 'lost', 'answered']);
@@ -635,10 +650,11 @@ describe('DevicesCard', () => {
           ],
         },
       };
-      async function lose(plan: Parameters<typeof server>[0]) {
+      async function lose(plan: Parameters<typeof server>[0], start: Meta[] = []) {
         const user = userEvent.setup();
-        server(plan, [], SETUP);
+        server(plan, start, SETUP);
         renderWithProviders(<DevicesCard />);
+        for (const t of start) await screen.findByRole('listitem', { name: t.name });
         await user.click(await screen.findByRole('button', { name: 'Set up' }));
         const setup = await screen.findByRole('dialog', { name: 'Set up the browser extension' });
         await user.type(await within(setup).findByLabelText('Password'), PW);
@@ -646,6 +662,15 @@ describe('DevicesCard', () => {
         expect(await within(setup).findByRole('alert')).toHaveTextContent(named(SAYS));
         return { user, setup };
       }
+
+      it('one of that name from before is not marked', async () => {
+        const older = { ...MADE, id: 't8', name: NAME, lastUsedAt: NOW - 5 * MIN };
+        const { user, setup } = await lose(['made and lost'], [older]);
+        await user.click(within(setup).getByRole('button', { name: 'Close' }));
+        await waitFor(async () => expect(await rowsNamed(NAME)).toHaveLength(2));
+        const [lost] = await rowsNamed(NAME);
+        await waitFor(() => expect(marked()).toEqual([lost]));
+      });
 
       it('said in it and on the page, listed and marked', async () => {
         const { user, setup } = await lose(['made and lost']);
