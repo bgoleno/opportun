@@ -363,3 +363,143 @@ test.describe('a keyboard drag steps to the adjacent column in both directions (
     });
   }
 });
+
+// #886: the board is narrower than its columns (its chain scrolls sideways), and a column scrolled
+// out of view could not be reached: the card stayed where it was. Every column is reachable at each
+// width, and the card is shown over the one it is announced over.
+const WIDTHS = [768, 1024, 1280, 1440, 1600, 1920];
+
+/**
+ * Whether the dragged card's centre is over `name`'s column, within the part of it on screen. A
+ * chain column with no room on screen at all (768 px with both end columns expanded leaves the
+ * chain none) cannot show the card: null.
+ */
+async function cardShownOver(page: Page, name: string): Promise<boolean | null> {
+  return page.evaluate((columnName) => {
+    const columnEl = document.querySelector(`section[aria-label="${columnName} column"]`)!;
+    const c = columnEl.getBoundingClientRect();
+    const area = columnEl.closest('[data-board-scroller]')?.getBoundingClientRect();
+    const left = Math.max(c.left, area?.left ?? c.left);
+    const right = Math.min(c.right, area?.right ?? c.right);
+    if (right <= left) return null;
+    const card = document.querySelector('.cursor-grabbing.shadow-lg')!.getBoundingClientRect();
+    const x = card.left + card.width / 2;
+    return x >= left - 1 && x <= right + 1;
+  }, name);
+}
+
+test.describe('a keyboard drag reaches every column at any board width (#886)', () => {
+  for (const expanded of [false, true]) {
+    test(`walks every column both ways at each width, Dismissed and Closed ${expanded ? 'expanded' : 'collapsed'}`, async ({
+      page,
+    }) => {
+      test.setTimeout(180_000);
+      await page.setViewportSize({ width: 1920, height: 1000 });
+      await registerUser(page);
+      const opp = { company: 'Initrode', title: 'Walking Card' };
+      await createOpportunity(page, opp);
+      if (expanded) {
+        await page.getByRole('button', { name: /^Expand Dismissed/ }).click();
+        await page.getByRole('button', { name: /^Expand Closed/ }).click();
+      }
+      const name = `${opp.company}: ${opp.title}`;
+      for (const width of WIDTHS) {
+        await test.step(`${width} px`, async () => {
+          await page.setViewportSize({ width, height: 1000 });
+          // dnd-kit's keyboard sensor cancels a drag on a window resize: let this one pass first.
+          await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width);
+          await page.evaluate(
+            () =>
+              new Promise((done) =>
+                requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 100))),
+              ),
+          );
+          await card(page, opp.company, opp.title).focus();
+          await page.keyboard.press('Space');
+          await expect(liveRegion(page)).toHaveText(`${name} is over the ${COLUMNS[0]} column.`);
+          const walk = [
+            ...COLUMNS.slice(1).map((col) => ['ArrowRight', col] as const),
+            ...[...COLUMNS]
+              .reverse()
+              .slice(1)
+              .map((col) => ['ArrowLeft', col] as const),
+          ];
+          for (const [key, col] of walk) {
+            await stepTo(page, key, `${name} is over the ${col} column.`);
+            await expect
+              .poll(() => cardShownOver(page, col), { message: `${width} px, ${col}` })
+              .not.toBe(false);
+          }
+          await page.keyboard.press('Escape');
+          await expect(liveRegion(page)).toHaveText(`Moving ${name} was cancelled.`);
+        });
+      }
+    });
+  }
+
+  test('dropped on a column that was out of view at 768 px: it moves there', async ({ page }) => {
+    await page.setViewportSize({ width: 768, height: 1000 });
+    await registerUser(page);
+    const opp = { company: 'Initrode', title: 'Walking Card' };
+    await createOpportunity(page, opp);
+    const name = `${opp.company}: ${opp.title}`;
+
+    await keyboardDrop(page, card(page, opp.company, opp.title), 'Applied', 'ArrowRight');
+
+    await expect(liveRegion(page)).toHaveText(`${name} was dropped on the Applied column.`);
+    await expect(column(page, 'Applied').getByRole('article', { name })).toBeVisible();
+  });
+
+  test('from the pinned Dismissed column, Left reaches every chain column at 1024 px', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1024, height: 1000 });
+    await registerUser(page);
+    const opp = { company: 'Initrode', title: 'Dismissed One' };
+    await dismissed(page, opp);
+    const name = `${opp.company}: ${opp.title}`;
+    await card(page, opp.company, opp.title).focus();
+    await page.keyboard.press('Space');
+    await expect(liveRegion(page)).toHaveText(`${name} is over the Dismissed column.`);
+    for (const col of [...COLUMNS].reverse().slice(2)) {
+      await stepTo(page, 'ArrowLeft', `${name} is over the ${col} column.`);
+      await expect.poll(() => cardShownOver(page, col), { message: col }).toBe(true);
+    }
+    for (const col of COLUMNS.slice(1)) {
+      await stepTo(page, 'ArrowRight', `${name} is over the ${col} column.`);
+      await expect.poll(() => cardShownOver(page, col), { message: col }).toBe(true);
+    }
+    await page.keyboard.press('Escape');
+  });
+
+  test('up and down still reorder within a column after stepping away and back, at 1024 px', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1024, height: 1000 });
+    await registerUser(page);
+    for (const title of ['Card One', 'Card Two']) {
+      await createOpportunity(page, { company: 'Initrode', title });
+    }
+    const cards = column(page, 'New').getByRole('article');
+    await expect(cards).toHaveCount(2);
+    const first = (await cards.first().getAttribute('aria-label')) ?? '';
+    const second = (await cards.nth(1).getAttribute('aria-label')) ?? '';
+    expect(first).not.toBe('');
+    await cards.first().focus();
+    await page.keyboard.press('Space');
+    await expect(liveRegion(page)).toContainText('is over the New column');
+    for (const col of ['Interested', 'Preparing', 'Applied']) {
+      await stepTo(page, 'ArrowRight', `${first} is over the ${col} column.`);
+    }
+    for (const col of ['Preparing', 'Interested', 'New']) {
+      await stepTo(page, 'ArrowLeft', `${first} is over the ${col} column.`);
+    }
+    // Over the column (its header), then down onto the cards.
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('ArrowDown');
+      await page.waitForTimeout(200);
+    }
+    await page.keyboard.press('Space');
+    await expect(cards.first()).toHaveAttribute('aria-label', second);
+  });
+});
