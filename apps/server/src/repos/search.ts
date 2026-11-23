@@ -200,19 +200,25 @@ export async function indexContact(
   await upsert(exec, ctx, 'contact', contact.id, joinText(contact.name, contact.notes));
 }
 
-/** Removes an opportunity's row and those of the activities that cascade with it. */
+/** Ids named in one statement: well under the parameters either engine allows. */
+const INDEX_REMOVE_CHUNK = 500;
+
+/** Removes a deleted opportunity's row and those of its activities, which went with it. */
 export async function removeOpportunityFromIndex(
   exec: Exec,
   ctx: UserCtx,
   opportunityId: string,
+  activityIds: readonly string[],
 ): Promise<void> {
-  await rawRun(
-    exec,
-    sql`DELETE FROM search_index
-        WHERE ${ownedSql('user_id', ctx)} AND entity_kind = 'activity'
-          AND entity_id IN (SELECT id FROM activities
-                            WHERE ${ownedSql('user_id', ctx)} AND opportunity_id = ${opportunityId})`,
-  );
+  for (let i = 0; i < activityIds.length; i += INDEX_REMOVE_CHUNK) {
+    const ids = activityIds.slice(i, i + INDEX_REMOVE_CHUNK).map((id) => sql`${id}`);
+    await rawRun(
+      exec,
+      sql`DELETE FROM search_index
+          WHERE ${ownedSql('user_id', ctx)} AND entity_kind = 'activity'
+            AND entity_id IN (${sql.join(ids, sql`, `)})`,
+    );
+  }
   await removeFromIndex(exec, ctx, 'opportunity', opportunityId);
 }
 

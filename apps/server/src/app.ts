@@ -78,6 +78,7 @@ import { enqueueRepairCompanyMatchKeysOnce } from './jobs/companyMatchKeyRepair'
 import { enqueueCompanyDomainBackfillOnce } from './jobs/companyDomainResolve';
 import { OPPORTUNITY_DEDUPE_AI_CRON, OPPORTUNITY_DEDUPE_AI_KIND } from './jobs/opportunityDedupeAi';
 import { RETRY_WORKDAY_CAPTURE_CRON, RETRY_WORKDAY_CAPTURE_KIND } from './jobs/retryWorkdayCapture';
+import { settleAbandonedChecks } from './lib/postingChecks';
 import { queueLagMs, runDueJobs, startRunner, type Runner } from './jobs/runner';
 import { SNAPSHOT_RECONCILE_CRON, SNAPSHOT_RECONCILE_JOB_KIND } from './jobs/submissionSnapshot';
 import { activityRoutes } from './routes/activities';
@@ -494,6 +495,9 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // stage before this shipped (issue #239), so an opportunity reported before now does not
   // need to be moved again to pick one up. Guarded by its own marker, same reasoning as above.
   await enqueueCompanyDomainBackfillOnce(db);
+  // Every posting check nothing is left to finish ends here (#869): before the runner's recovery,
+  // and before any capture can arrive.
+  await settleAbandonedChecks(db, app.log);
   const services: JobServices = {
     storage: app.storage,
     documentStore: app.documentStore,
