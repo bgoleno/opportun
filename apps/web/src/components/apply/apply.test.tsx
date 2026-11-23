@@ -907,9 +907,23 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
         {
           outcome: 'attached',
           unchanged: true,
-          opportunity: { ...before, postingStateDetail: 'user_confirmed' },
+          keptDescription: true,
         },
         'Nothing changed. Your own description was kept.',
+      ],
+      [
+        'nothing changed, confirmed by you',
+        {
+          outcome: 'attached',
+          unchanged: true,
+          opportunity: { ...before, postingStateDetail: 'user_confirmed' },
+        },
+        "Nothing changed: the posting matches the company's board.",
+      ],
+      [
+        'something changed, with your own description',
+        { outcome: 'attached', changed: ['link'], keptDescription: true },
+        'Posting updated from the board. Your own description was kept.',
       ],
       [
         'something changed',

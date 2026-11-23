@@ -70,12 +70,16 @@ function findSaid(result: FindPostingResult): string {
   switch (result.outcome) {
     case 'attached':
       // A posting confirmed already was read again (#866): what that did, as the Details tab says.
+      // A description of the user's is kept without comparing it, so it is not said to match.
       if (result.unchanged === true) {
-        return result.opportunity?.postingStateDetail === 'user_confirmed'
+        return result.keptDescription === true
           ? 'Nothing changed. Your own description was kept.'
           : "Nothing changed: the posting matches the company's board.";
       }
-      return result.changed !== undefined ? 'Posting updated from the board.' : 'Posting attached.';
+      if (result.changed === undefined) return 'Posting attached.';
+      return result.keptDescription === true
+        ? 'Posting updated from the board. Your own description was kept.'
+        : 'Posting updated from the board.';
     case 'identified':
       return 'Recognised on Greenhouse.';
     case 'already_confirmed':
