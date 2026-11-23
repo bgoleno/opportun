@@ -3,12 +3,13 @@
 // unticked; 2 any edit goes back to review; 3 a clock time, not a countdown; 4 keyboard and
 // screen-reader paths; 5 nothing of the feature where it is off.
 import { focusManager } from '@tanstack/react-query';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DetailsPanel } from '@/components/opportunity/DetailsPanel';
 import { OpportunityDetail } from '@/components/opportunity/OpportunityDetail';
-import { formatDate, formatDateTime, type OpportunityView } from '@/lib/opportunities';
+import { useOpportunity } from '@/components/opportunity/api';
+import { formatDate, formatDateTime, qk, type OpportunityView } from '@/lib/opportunities';
 import { parseApplySearch } from '@/routes/opportunities.$id_.apply';
 import { keys as settingsKeys } from '@/routes/settings/-api';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
@@ -297,6 +298,52 @@ describe('#395: a refused Apply button says why, and never swallows a click', ()
       'Apply on an ATS',
       "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.",
     ],
+    // #870: a check under way is what stands in the way, whether or not the ATS is known yet. Find
+    // posting would be refused, so neither reason that names it is shown.
+    [
+      'a posting still being checked, with no ATS recognised',
+      { atsJobRef: null, postingState: 'searching' },
+      [RESUME],
+      'Apply on an ATS',
+      "Opportun is still checking this posting on the company's board; try again shortly.",
+    ],
+    [
+      'a posting still being checked, its link an embedded Greenhouse one',
+      {
+        atsJobRef: null,
+        postingState: 'searching',
+        postingUrl: 'https://careers.acme.example/jobs?gh_jid=8136554',
+      },
+      [RESUME],
+      'Apply on an ATS',
+      "Opportun is still checking this posting on the company's board; try again shortly.",
+    ],
+    // The stage still comes first: the check ending would not make applying possible.
+    [
+      'closed, while a check runs',
+      { stage: 'closed', atsJobRef: null, postingState: 'searching' },
+      [RESUME],
+      'Apply on an ATS',
+      'This opportunity is Closed. Reopen it to apply.',
+    ],
+    [
+      'the stage, while a check runs',
+      { stage: 'in_process', atsJobRef: null, postingState: 'searching' },
+      [RESUME],
+      'Apply on an ATS',
+      'This opportunity is In process. Applying is available at Interested, Preparing or Applied. Change its stage to apply.',
+    ],
+    // The check over, with no ATS recognised: the general reason, in every other posting state.
+    ...([null, 'needs_review', 'confirmed'] as const).map(
+      (postingState) =>
+        [
+          `no ATS recognised, the posting state ${String(postingState)}`,
+          { atsJobRef: null, postingState },
+          [RESUME],
+          'Apply on an ATS',
+          "We have not recognised this company's application system yet. Open the posting from the Details tab, or use Find posting.",
+        ] as const,
+    ),
     [
       'a posting that needs review',
       { postingState: 'needs_review' },
@@ -740,6 +787,78 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
     );
     expect(said.closest('[role="status"]')).not.toBeNull();
     expect(screen.queryByText(/already_described/)).toBeNull();
+  });
+
+  it('while a check runs, Find posting is not offered (#870)', async () => {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+    });
+    renderWithProviders(
+      <ApplyPanel
+        opp={
+          {
+            ...OPP,
+            atsJobRef: null,
+            postingUrl: careers,
+            postingState: 'searching',
+          } as OpportunityView
+        }
+      />,
+    );
+    const panel = await screen.findByRole('region', { name: 'Assisted apply' });
+    expect(panel).toHaveTextContent(/still checking this posting/);
+    expect(panel).not.toHaveTextContent(/find/i);
+    expect(within(panel).queryByRole('button', { name: 'Find posting' })).toBeNull();
+  });
+
+  it.each([null, 'needs_review', 'confirmed'] as const)(
+    'with the posting state %s, Find posting is offered (#870)',
+    async (postingState) => {
+      mockApi({
+        'GET /resumes': { items: [RESUME], total: 1 },
+        'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      });
+      renderWithProviders(
+        <ApplyPanel
+          opp={{ ...OPP, atsJobRef: null, postingUrl: careers, postingState } as OpportunityView}
+        />,
+      );
+      expect(await screen.findByRole('button', { name: 'Find posting' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Apply on an ATS' })).toHaveAccessibleDescription(
+        "This looks like a Greenhouse job on the company's own careers page. Find the posting on Greenhouse to apply with assisted apply.",
+      );
+    },
+  );
+
+  // #870 (em, qa on #865): refused for a check the page had not heard of. Once that check ends,
+  // the panel offers Find posting again, and the refusal is no longer true.
+  it('a refusal for a running check goes when the check ends (#870)', async () => {
+    const opp = { ...OPP, atsJobRef: null, postingUrl: careers, postingState: 'needs_review' };
+    let now = opp;
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'GET /opportunities/opp-1': () => now,
+      'POST /opportunities/opp-1/find-posting': () => {
+        now = { ...opp, postingState: 'searching' };
+        return { status: 409, body: { error: { code: 'posting_searching' } } };
+      },
+    });
+    const user = userEvent.setup();
+    function Live() {
+      const { data } = useOpportunity('opp-1');
+      return data === undefined ? null : <ApplyPanel opp={data} />;
+    }
+    const { queryClient } = renderWithProviders(<Live />);
+    await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await screen.findByText(/still checking this posting/)).toBeInTheDocument();
+
+    now = opp;
+    await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+    expect(await screen.findByRole('button', { name: 'Find posting' })).toBeEnabled();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/still checking this posting/)).toBeNull();
   });
 
   it('a link without a numeric gh_jid keeps the general reason, and no Find posting here', async () => {

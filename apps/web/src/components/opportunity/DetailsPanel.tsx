@@ -23,7 +23,9 @@ import {
   type OpportunityView,
 } from '@/lib/opportunities';
 import {
+  isPostingSearching,
   useAttachments,
+  useChecksEnded,
   useConfirmPosting,
   useDeleteAttachment,
   useFindPosting,
@@ -291,7 +293,9 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   const unconfirmPosting = useUnconfirmPosting(opp.id);
   const rederive = useRederivePosting(opp.id);
   const [found, setFound] = useState<FindPostingResult | null>(null);
-  const [findError, setFindError] = useState<string | null>(null);
+  const checksEnded = useChecksEnded(opp.postingState);
+  /** `untilCheck`: the refusal for a running check, true only until that check ends (#870). */
+  const [findError, setFindError] = useState<{ message: string; untilCheck?: number } | null>(null);
   /** The board could not be read (#835): said as such, with a retry, not as "no match". */
   const [unreachable, setUnreachable] = useState(false);
   const [editing, setEditing] = useState<'description' | 'link' | null>(null);
@@ -345,7 +349,10 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
       }
       setFound(result);
     } catch (err) {
-      setFindError(errorMessage(err));
+      setFindError({
+        message: errorMessage(err),
+        ...(isPostingSearching(err) ? { untilCheck: checksEnded } : {}),
+      });
     }
   }
 
@@ -431,7 +438,9 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
           ) : null}
         </CardHeader>
         <CardContent className="grid gap-3">
-          {findError !== null ? <FormError message={findError} /> : null}
+          {findError !== null && (findError.untilCheck ?? checksEnded) === checksEnded ? (
+            <FormError message={findError.message} />
+          ) : null}
           {unreachable ? (
             <div role="status" className="flex flex-wrap items-center gap-2 text-sm">
               <span className="flex-1">

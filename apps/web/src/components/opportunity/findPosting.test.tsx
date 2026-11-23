@@ -1,11 +1,12 @@
 // Find posting (Task 6, FR-O1): the Description card offers to look the posting up, one
 // confident match lands without a dialog, several open the picker, and a company with no board
 // falls back to pasting. Candidate text from a board is rendered as text, never as markup.
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import type { OpportunityView } from '@/lib/opportunities';
+import { qk, type OpportunityView } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { useOpportunity } from './api';
 import { DetailsPanel } from './DetailsPanel';
 
 const NOW = Date.now();
@@ -94,6 +95,95 @@ describe('Find posting', () => {
     expect(button).toBeEnabled();
     await userEvent.click(button);
     expect(await screen.findByText(/still checking this posting/i)).toBeInTheDocument();
+  });
+
+  /** DetailsPanel on the opportunity as the server has it, as the page shows it. */
+  function Live() {
+    const { data } = useOpportunity('opp-1');
+    return data === undefined ? null : <DetailsPanel opp={data} />;
+  }
+
+  // #870 (em, qa on #865): the refusal is about a check under way, so it goes when that ends.
+  it.each(['confirmed', 'needs_review', null] as const)(
+    'a refusal for a running check goes when the check ends, the state then %s (#870)',
+    async (ended) => {
+      let now = { ...BARE, postingState: 'searching' } as OpportunityView;
+      setup({
+        'GET /opportunities/opp-1': () => now,
+        'POST /opportunities/opp-1/find-posting': () => ({
+          status: 409,
+          body: { error: { code: 'posting_searching' } },
+        }),
+      });
+      const { queryClient } = renderWithProviders(<Live />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(/still checking this posting/i);
+
+      // Read again while the check still runs: still true, so it stays.
+      await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+      expect(screen.getByRole('alert')).toHaveTextContent(/still checking this posting/i);
+
+      now = { ...BARE, postingState: ended } as OpportunityView;
+      await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    },
+  );
+
+  // The page had not heard of the check: the refusal's own refresh brings 'searching', and the
+  // check can end where it began. Kept through the first, gone after the second.
+  it('a refusal on a stale page stays while the check runs, and goes when it ends (#870)', async () => {
+    const before = { ...BARE, postingState: 'needs_review' } as OpportunityView;
+    let now = before;
+    setup({
+      'GET /opportunities/opp-1': () => now,
+      'POST /opportunities/opp-1/find-posting': () => {
+        now = { ...before, postingState: 'searching' } as OpportunityView;
+        return { status: 409, body: { error: { code: 'posting_searching' } } };
+      },
+    });
+    const { queryClient } = renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/still checking this posting/i);
+
+    now = before;
+    await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+
+  // The refusal's own refresh can already bring the check's result, before the refusal is shown.
+  it('a refusal that arrives after the check ended is not shown (#870)', async () => {
+    let now = { ...BARE, postingState: 'searching' } as OpportunityView;
+    setup({
+      'GET /opportunities/opp-1': () => now,
+      'POST /opportunities/opp-1/find-posting': () => {
+        now = { ...BARE, postingState: 'confirmed' } as OpportunityView;
+        return { status: 409, body: { error: { code: 'posting_searching' } } };
+      },
+    });
+    renderWithProviders(<Live />);
+    const button = await screen.findByRole('button', { name: /find posting/i });
+    await userEvent.click(button);
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(await screen.findByText(/matched on the company's board/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  // Any other failure is not about a check, so a change of state does not take it away.
+  it('another error stays when the posting state changes (#870)', async () => {
+    let now = { ...BARE, postingState: 'needs_review' } as OpportunityView;
+    setup({
+      'GET /opportunities/opp-1': () => now,
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 502,
+        body: { error: { code: 'upstream_unavailable', message: 'The board did not answer.' } },
+      }),
+    });
+    const { queryClient } = renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The board did not answer.');
+    now = { ...BARE, postingState: null } as OpportunityView;
+    await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+    expect(screen.getByRole('alert')).toHaveTextContent('The board did not answer.');
   });
 
   // qa on #865: a click as a background check ends. The click says what state the page saw, and

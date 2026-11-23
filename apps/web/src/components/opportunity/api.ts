@@ -1,7 +1,8 @@
 // Queries and mutations for one opportunity's detail page.
 import type { Activity, ActivityKind, NextStep, NormalizedPosting } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { useState } from 'react';
+import { api, ApiError } from '@/lib/api';
 import {
   qk,
   type AttachmentMeta,
@@ -257,6 +258,28 @@ export function useFindPosting(id: string) {
     },
     onSettled: refresh,
   });
+}
+
+/** Find posting refused because a background check is reading the board (#852). */
+export function isPostingSearching(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'posting_searching';
+}
+
+/**
+ * A number that moves on when the posting leaves 'searching', or otherwise changes to a state
+ * with no check under way (#870). Read when Find posting is pressed and again when its refusal
+ * (isPostingSearching) is shown: a different number means the check it speaks of is over, so the
+ * refusal no longer holds. Counted, not compared by state, because a check can end in the state
+ * it found ('needs_review' again), and because the refusal's own refresh can bring the check's
+ * end before the refusal itself arrives (useFindPosting waits for it).
+ */
+export function useChecksEnded(postingState: OpportunityView['postingState']): number {
+  const state = postingState ?? null;
+  const [last, setLast] = useState({ state, ended: 0 });
+  if (last.state === state) return last.ended;
+  const next = { state, ended: state === 'searching' ? last.ended : last.ended + 1 };
+  setLast(next);
+  return next.ended;
 }
 
 /** Attaches a chosen candidate, a pasted link or pasted description text. */
