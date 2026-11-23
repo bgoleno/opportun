@@ -6,6 +6,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 // The synthetic LinkedIn profile capture the server's own capture tests use.
 import { PROFILE } from '../../server/test/fixtures/capture/pages';
 import { PASSWORD, registerUser } from './helpers';
+import { fit } from './dialogFit';
 
 type Scope = 'mail:push' | 'capture:push';
 /** Each scope and the checkbox that grants it in the Create dialog. */
@@ -338,4 +339,58 @@ test('device token: a long unbroken name stays in its row, all of it, and Revoke
     expect(revoke!.left, at).toBeGreaterThanOrEqual(0);
     expect(revoke!.right, at).toBeLessThanOrEqual(measured.rows[0]!.rowRight);
   }
+});
+
+// The Revoke confirmation carries the name in its title: a long one widened the dialog's content past
+// its edge, buttons included. One token serves every press: all but the last are answered here.
+test('device token: a long unbroken name leaves the Revoke confirmation inside its dialog, pressed with the mouse or the keyboard (#921)', async ({
+  page,
+}) => {
+  await registerUser(page);
+  const name = 'W'.repeat(100);
+  await createDeviceToken(page, name, ['mail:push']);
+  const row = page.getByRole('listitem', { name, exact: true });
+  const dialog = page.getByRole('dialog', { name: `Revoke ${name}?` });
+  const revoke = dialog.getByRole('button', { name: 'Revoke' });
+  let revokes = 0;
+  await page.route('**/api/v1/device-tokens/*', async (route) => {
+    if (route.request().method() !== 'DELETE') return await route.fallback();
+    revokes += 1;
+    await route.fulfill({ status: 204 });
+  });
+
+  let pressed = 0;
+  for (const width of [375, 768, 1280, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const how of ['mouse', 'keyboard'] as const) {
+      if (how === 'mouse') await row.getByRole('button', { name: 'Revoke' }).click();
+      else {
+        await row.getByRole('button', { name: 'Revoke' }).focus();
+        await page.keyboard.press('Enter');
+      }
+      await expect(dialog).toBeVisible();
+      const at = `${how} at ${width} px: ${JSON.stringify(await fit(dialog))}`;
+      const { sideways, outside } = await fit(dialog);
+      expect(sideways, at).toBe(0);
+      expect(outside, at).toEqual([]);
+      if (how === 'mouse') {
+        // Where it is drawn, not where a scroll would bring it.
+        const box = (await revoke.boundingBox())!;
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      } else {
+        for (let i = 0; i < 5 && !(await revoke.evaluate((b) => b === document.activeElement)); i++)
+          await page.keyboard.press('Tab');
+        await expect(revoke).toBeFocused();
+        await page.keyboard.press('Enter');
+      }
+      await expect(dialog).toBeHidden();
+      pressed += 1;
+      expect(revokes, `${how} at ${width} px`).toBe(pressed);
+    }
+  }
+  // And for real.
+  await page.unroute('**/api/v1/device-tokens/*');
+  await row.getByRole('button', { name: 'Revoke' }).click();
+  await revoke.click();
+  await expect(row.getByText('Revoked', { exact: true })).toBeVisible();
 });

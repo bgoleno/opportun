@@ -153,13 +153,16 @@ function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
   );
 }
 
+// Local change: the title and the description break anywhere. Either can hold someone's words (a
+// name, a subject, an address), and one long word widened the dialog's content past its edge,
+// buttons included (https://github.com/bgoleno/opportun/issues/921).
 function DialogTitle({ className, ...props }: React.ComponentProps<'h2'>) {
   const { titleId } = useDialog();
   return (
     <h2
       id={titleId}
       data-slot="dialog-title"
-      className={cn('text-lg leading-none font-semibold', className)}
+      className={cn('text-lg leading-none font-semibold [overflow-wrap:anywhere]', className)}
       {...props}
     />
   );
@@ -171,7 +174,7 @@ function DialogDescription({ className, ...props }: React.ComponentProps<'p'>) {
     <p
       id={descriptionId}
       data-slot="dialog-description"
-      className={cn('text-sm text-muted-foreground', className)}
+      className={cn('text-sm text-muted-foreground [overflow-wrap:anywhere]', className)}
       {...props}
     />
   );
