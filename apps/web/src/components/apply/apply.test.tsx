@@ -12,7 +12,7 @@ import { useOpportunity } from '@/components/opportunity/api';
 import { formatDate, formatDateTime, qk, type OpportunityView } from '@/lib/opportunities';
 import { parseApplySearch } from '@/routes/opportunities.$id_.apply';
 import { keys as settingsKeys } from '@/routes/settings/-api';
-import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import { ApplyPage } from './ApplyPage';
 import { clockTime, type SubmissionView } from './api';
 import { flowSentence, resumeFlowState } from '@/components/resume/resumeFlow';
@@ -723,6 +723,12 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
       { outcome: 'none', candidates: [] },
       "This job was not found on the company's board. Paste the posting on the Details tab.",
     ],
+    // #866: never a silent button; Find posting stays there to try again.
+    [
+      'unreachable',
+      { outcome: 'unreachable' },
+      "The company's board couldn't be read just now, so nothing was checked. Try Find posting again.",
+    ],
     [
       'no_board',
       { outcome: 'no_board', needsCareersUrl: true },
@@ -859,6 +865,28 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
     expect(await screen.findByRole('button', { name: 'Find posting' })).toBeEnabled();
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByText(/still checking this posting/)).toBeNull();
+  });
+
+  it('a check that ended unseen, in the same state, leaves no refusal, and it is said (#866)', async () => {
+    const opp = { ...OPP, atsJobRef: null, postingUrl: careers, postingState: 'needs_review' };
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'GET /opportunities/opp-1': opp,
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: { error: { code: 'posting_searching' } },
+      }),
+    });
+    const user = userEvent.setup();
+    function Live() {
+      const { data } = useOpportunity('opp-1');
+      return data === undefined ? null : <ApplyPanel opp={data} />;
+    }
+    renderWithProviders(<Live />);
+    await user.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await toastRegion().findByText('Check ended')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('a link without a numeric gh_jid keeps the general reason, and no Find posting here', async () => {

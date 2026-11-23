@@ -46,21 +46,37 @@ const COPY: Record<string, { text: string; action?: string; confirmable?: boolea
   },
 };
 
+/** Find posting could not read the board (#835), or could not finish looking for one (#866). */
+const UNREACHABLE = {
+  text: "Couldn't read the company's board just now, so nothing was checked.",
+  action: 'Try again',
+};
+
 export function PostingStateBanner(props: {
   opp: OpportunityView;
+  /**
+   * The last Find posting could not read the board (#866): said here, in place of the state's own
+   * line, so there is one notice with one way to try again. The state's Confirm stays. While a
+   * background check runs, that is what is said.
+   */
+  unreachable?: boolean;
+  /** Adds the posting by hand, offered with `unreachable`. */
+  onAddByHand?: () => void;
   onAction?: () => void;
   onConfirm?: () => void;
   busy?: boolean;
   confirmBusy?: boolean;
 }) {
   const { opp } = props;
-  if (opp.postingState == null || opp.postingState === 'confirmed') return null;
-  const key = opp.postingState === 'searching' ? 'searching' : (opp.postingStateDetail ?? '');
+  const searching = opp.postingState === 'searching';
+  const unreachable = props.unreachable === true && !searching;
+  const settled = opp.postingState == null || opp.postingState === 'confirmed';
+  const key = searching ? 'searching' : (opp.postingStateDetail ?? '');
   // eslint-disable-next-line security/detect-object-injection -- key comes from a typed enum
-  const copy = COPY[key];
+  const own = settled ? undefined : COPY[key];
+  const copy = unreachable ? { ...UNREACHABLE, confirmable: own?.confirmable === true } : own;
   if (copy === undefined) return null;
 
-  const searching = opp.postingState === 'searching';
   return (
     <div
       role="status"
@@ -83,6 +99,11 @@ export function PostingStateBanner(props: {
           {props.busy === true ? 'Searching...' : copy.action}
         </Button>
       )}
+      {unreachable && props.onAddByHand !== undefined ? (
+        <Button type="button" size="sm" variant="outline" onClick={props.onAddByHand}>
+          Add by hand
+        </Button>
+      ) : null}
       {copy.confirmable === true ? (
         <Button
           type="button"

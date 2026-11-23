@@ -15,6 +15,7 @@
 //   - a description the user edited by hand is left alone and flagged instead (D11);
 //   - fields are filled where empty and never blanked (D7);
 //   - anything short of one confident match writes nothing and raises a flag (D8).
+import { possessive } from '@opportun/core';
 import { z } from 'zod';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
@@ -118,17 +119,18 @@ async function reconcile(
         ctx,
         opportunityId,
         'none_found',
-        `Checked ${opp.companyName}'s board and found no posting matching "${opp.title}".`,
+        `Checked ${possessive(opp.companyName)} board and found no posting matching "${opp.title}".`,
       );
     case 'unreachable':
-      // Its boards could not be read (#835): the check did not finish, which is not "found
-      // nothing". Find posting tries again from the banner.
+      // Its boards could not be read (#835), or the search for one could not finish (#866): the
+      // check did not finish, which is not "found nothing". Find posting tries again from the
+      // banner.
       return await flag(
         db,
         ctx,
         opportunityId,
         'failed',
-        `Couldn't read ${opp.companyName}'s board just now, so nothing was checked. Try Find posting again.`,
+        `Couldn't read ${possessive(opp.companyName)} board just now, so nothing was checked. Try Find posting again.`,
       );
     default:
       return await flag(

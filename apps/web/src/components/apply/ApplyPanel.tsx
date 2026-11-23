@@ -9,7 +9,9 @@ import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import {
+  CHECK_ENDED,
   isPostingSearching,
+  useCheckOver,
   useChecksEnded,
   useFindPosting,
   type FindPostingResult,
@@ -32,6 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { toast } from '@/components/ui/toast';
 import { ApiError, errorMessage } from '@/lib/api';
 import { formatDate, formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import {
@@ -65,6 +68,11 @@ const FIND_SAID = new Map<FindPostingResult['outcome'], string>([
   ['identified', 'Recognised on Greenhouse.'],
   ['candidates', 'Several postings could be this job. Choose it on the Details tab.'],
   ['none', "This job was not found on the company's board. Paste the posting on the Details tab."],
+  // Never a silent button (#866): Find posting stays there to try again.
+  [
+    'unreachable',
+    "The company's board couldn't be read just now, so nothing was checked. Try Find posting again.",
+  ],
   [
     'no_board',
     'No job board is known for this company yet. Add its careers page on the Details tab.',
@@ -180,6 +188,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const reasonId = useId();
   const find = useFindPosting(opp.id);
   const checksEnded = useChecksEnded(opp.postingState);
+  const checkOver = useCheckOver(opp.id);
   /** checksEnded when Find posting was pressed: its refusal for a check holds until that moves on. */
   const [foundAt, setFoundAt] = useState(0);
   const [howOpen, setHowOpen] = useState(false);
@@ -307,7 +316,13 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                   disabled={find.isPending}
                   onClick={() => {
                     setFoundAt(checksEnded);
-                    find.mutate(opp.postingState ?? 'none');
+                    find.mutate(opp.postingState ?? 'none', {
+                      onError: (err) => {
+                        if (!isPostingSearching(err) || !checkOver()) return;
+                        find.reset();
+                        toast(CHECK_ENDED);
+                      },
+                    });
                   }}
                 >
                   {find.isPending ? 'Searching...' : 'Find posting'}

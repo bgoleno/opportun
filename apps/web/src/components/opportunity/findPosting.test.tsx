@@ -5,7 +5,7 @@ import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { qk, type OpportunityView } from '@/lib/opportunities';
-import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import { useOpportunity } from './api';
 import { DetailsPanel } from './DetailsPanel';
 
@@ -168,6 +168,70 @@ describe('Find posting', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  // tl and qa on #885: the check ended, in the state the page already showed, before the refusal's
+  // own refresh read it, so the page saw no change. The refresh itself says the check is over.
+  it('a check that ended unseen, in the same state, leaves no refusal, and it is said (#866)', async () => {
+    const opp = {
+      ...BARE,
+      postingState: 'needs_review',
+      postingStateDetail: 'none_found',
+    } as OpportunityView;
+    const api = setup({
+      'GET /opportunities/opp-1': opp,
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: { error: { code: 'posting_searching' } },
+      }),
+    });
+    renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await toastRegion().findByText('Check ended')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/still checking this posting/i)).toBeNull();
+    expect(
+      api.calls.filter((c: ApiCall) => c.method === 'GET' && c.path === '/opportunities/opp-1'),
+    ).toHaveLength(2);
+  });
+
+  // A check can also end because its job died (#869): the toast must not say it finished, above a
+  // notice that says it did not.
+  it('a check that died unseen is said to have ended, not finished (#866)', async () => {
+    setup({
+      'GET /opportunities/opp-1': {
+        ...BARE,
+        postingState: 'needs_review',
+        postingStateDetail: 'failed',
+      } as OpportunityView,
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: { error: { code: 'posting_searching' } },
+      }),
+    });
+    renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await toastRegion().findByText('Check ended')).toBeInTheDocument();
+    expect(toastRegion().queryByText(/finished/i)).toBeNull();
+    expect(screen.getByText(/did not finish/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  // The refresh failed: nothing says the check is over, so the refusal stands.
+  it('a refusal whose refresh fails is shown (#866)', async () => {
+    const opp = { ...BARE, postingState: 'needs_review' } as OpportunityView;
+    let refused = false;
+    setup({
+      'GET /opportunities/opp-1': () =>
+        refused ? { status: 500, body: { error: { code: 'internal' } } } : opp,
+      'POST /opportunities/opp-1/find-posting': () => {
+        refused = true;
+        return { status: 409, body: { error: { code: 'posting_searching' } } };
+      },
+    });
+    renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/still checking this posting/i);
+  });
+
   // Any other failure is not about a check, so a change of state does not take it away.
   it('another error stays when the posting state changes (#870)', async () => {
     let now = { ...BARE, postingState: 'needs_review' } as OpportunityView;
@@ -219,6 +283,149 @@ describe('Find posting', () => {
     await waitFor(() => expect(finds()).toBe(2));
   });
 
+  // #866 (qa on #860): the banner and the notice each said it, each with a Try again.
+  it.each([
+    ['failed', true],
+    ['none_found', true],
+    ['ambiguous', true],
+    ['no_board', true],
+    ['edited', false],
+  ] as const)(
+    'a board that cannot be read, at %s: one notice, one Try again (#866)',
+    async (postingStateDetail, confirmable) => {
+      const opp = { ...BARE, postingState: 'needs_review', postingStateDetail } as OpportunityView;
+      const api = setup({ 'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' } });
+      renderWithProviders(<DetailsPanel opp={opp} />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+
+      expect(await screen.findByText(/couldn't read the company's board/i)).toBeInTheDocument();
+      const notices = screen.getAllByRole('status');
+      expect(notices).toHaveLength(1);
+      expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(1);
+      // The state's own way to settle it stays.
+      expect(screen.queryAllByRole('button', { name: 'Confirm' })).toHaveLength(
+        confirmable ? 1 : 0,
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      await waitFor(() =>
+        expect(
+          api.calls.filter((c: ApiCall) => c.path === '/opportunities/opp-1/find-posting'),
+        ).toHaveLength(2),
+      );
+    },
+  );
+
+  // A failed detection used to open the dialog, so the way to add the posting by hand stays.
+  it('a board that cannot be read keeps the way to add the posting by hand (#866)', async () => {
+    const api = setup({
+      'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' },
+      'POST /opportunities/opp-1/posting': { ...BARE, descriptionMd: 'Pasted.' },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add by hand' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add the posting' });
+    expect(dialog).toHaveTextContent(
+      "The company's board couldn't be read just now. Add the posting by hand.",
+    );
+    expect(dialog).not.toHaveTextContent(/no job board found|no close match/i);
+    await userEvent.click(within(dialog).getByRole('radio', { name: 'Pasted text' }));
+    await userEvent.type(within(dialog).getByLabelText('Posting description'), 'Pasted.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Attach posting' }));
+    await waitFor(() =>
+      expect(
+        api.calls.find((c: ApiCall) => c.path === '/opportunities/opp-1/posting')?.body,
+      ).toEqual({ text: 'Pasted.' }),
+    );
+  });
+
+  it('a Refetch that cannot read the board says so once, and offers no pasting over it (#866)', async () => {
+    setup({ 'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' } });
+    renderWithProviders(
+      <DetailsPanel opp={{ ...BARE, descriptionMd: 'Text.', postingState: 'confirmed' }} />,
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'Refetch' }));
+    const ask = await screen.findByRole('dialog', { name: 'Refetch this posting?' });
+    await userEvent.click(within(ask).getByRole('button', { name: 'Refetch' }));
+    expect(await screen.findByText(/couldn't read the company's board/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Try again' })).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Add by hand' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Confirm' })).toBeNull();
+  });
+
+  it('the notice goes when a check settles the posting meanwhile (#866)', async () => {
+    let now = { ...BARE } as OpportunityView;
+    setup({
+      'GET /opportunities/opp-1': () => now,
+      'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' },
+    });
+    const { queryClient } = renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await screen.findByText(/couldn't read the company's board/i)).toBeInTheDocument();
+
+    // While a check runs it says only that, then what it found.
+    now = { ...BARE, postingState: 'searching' } as OpportunityView;
+    await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+    expect(await screen.findByText(/checking the company's job board/i)).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't read the company's board/i)).toBeNull();
+
+    now = {
+      ...BARE,
+      postingState: 'needs_review',
+      postingStateDetail: 'none_found',
+    } as OpportunityView;
+    await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+    expect(
+      await screen.findByText("This posting is not on the company's board right now."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/couldn't read the company's board/i)).toBeNull();
+  });
+
+  it.each([
+    [['description'], 'Updated from the board: description.'],
+    [['link', 'job'], 'Updated from the board: posting link, job on the board.'],
+    [
+      ['location', 'remote', 'compensation'],
+      'Updated from the board: location, remote, compensation.',
+    ],
+  ])(
+    'a Refetch that changed %j says what changed, not "Posting attached" (#866)',
+    async (changed, said) => {
+      setup({
+        'POST /opportunities/opp-1/find-posting': {
+          outcome: 'attached',
+          changed,
+          opportunity: BARE,
+          candidate: CANDIDATE('A title never in a toast here', 'United States', '7663059003'),
+        },
+      });
+      renderWithProviders(<DetailsPanel opp={BARE} />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      expect(await toastRegion().findByText('Posting updated')).toBeInTheDocument();
+      expect(toastRegion().getByText(said)).toBeInTheDocument();
+      expect(toastRegion().queryByText(/A title never in a toast here/)).toBeNull();
+    },
+  );
+
+  it('a Refetch from a board read in part says that too (#866)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        changed: ['description'],
+        opportunity: BARE,
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+        note: 'Large Workday board: part read.',
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(
+      await toastRegion().findByText(
+        'Updated from the board: description. Large Workday board: part read.',
+      ),
+    ).toBeInTheDocument();
+  });
+
   it('a Refetch that changes nothing says so, not "Posting attached" (#835)', async () => {
     setup({
       'POST /opportunities/opp-1/find-posting': {
@@ -230,8 +437,88 @@ describe('Find posting', () => {
     });
     renderWithProviders(<DetailsPanel opp={BARE} />);
     await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
-    expect(await screen.findByText('Nothing changed')).toBeInTheDocument();
+    expect(await toastRegion().findByText('Nothing changed')).toBeInTheDocument();
+    expect(toastRegion().getByText("The posting matches the company's board.")).toBeInTheDocument();
     expect(screen.queryByText('Posting attached')).not.toBeInTheDocument();
+  });
+
+  // tl on #930: a description kept is not compared, so the toast must not say it matches.
+  it('a Refetch that changes nothing and kept your description says it was kept (#866)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        unchanged: true,
+        keptDescription: true,
+        opportunity: { ...BARE, postingState: 'confirmed' },
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await toastRegion().findByText('Nothing changed')).toBeInTheDocument();
+    expect(toastRegion().getByText('Your own description was kept.')).toBeInTheDocument();
+    expect(screen.queryByText(/matches the company's board/)).toBeNull();
+  });
+
+  // The user's confirmation does not say whose text it is.
+  it('a Refetch that changes nothing on a posting you confirmed matches when the text is the board’s (#866)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        unchanged: true,
+        opportunity: { ...BARE, postingState: 'confirmed', postingStateDetail: 'user_confirmed' },
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(
+      await toastRegion().findByText("The posting matches the company's board."),
+    ).toBeInTheDocument();
+  });
+
+  it('a Refetch that changed the link and kept your description says both, and offers no Undo (#866)', async () => {
+    const matched = { ...BARE, postingState: 'confirmed', postingStateDetail: null };
+    setup({
+      'GET /opportunities/opp-1': matched,
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        changed: ['link'],
+        keptDescription: true,
+        opportunity: matched,
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+      },
+    });
+    renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Refetch' }));
+    const ask = await screen.findByRole('dialog', { name: 'Refetch this posting?' });
+    await userEvent.click(within(ask).getByRole('button', { name: 'Refetch' }));
+    expect(
+      await toastRegion().findByText(
+        'Updated from the board: posting link. Your own description was kept.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Matched on the company's board.")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
+  });
+
+  it('a Refetch that changes nothing says what the board read left out (#866)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        unchanged: true,
+        opportunity: BARE,
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+        note: 'Large Workday board: part read.',
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(
+      await toastRegion().findByText(
+        "The posting matches the company's board. Large Workday board: part read.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it('attaches a single match without opening the picker', async () => {
@@ -359,6 +646,24 @@ describe('Find posting', () => {
     expect(within(dialog).queryByText(/more than one posting/i)).not.toBeInTheDocument();
     expect(within(dialog).getByText(/one posting on the .* board may match/i)).toBeInTheDocument();
     expect(within(dialog).getByText(/isn't on the company's board now/i)).toBeInTheDocument();
+  });
+
+  it('a company name ending in s takes an apostrophe alone (#866)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'candidates',
+        candidates: [CANDIDATE('Staff Product Manager, SIEM', 'United States', '1')],
+        board: [],
+        needsConfirmation: true,
+      },
+    });
+    renderWithProviders(
+      <DetailsPanel opp={{ ...BARE, companyName: 'Vandelay Industries' } as OpportunityView} />,
+    );
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(
+      await screen.findByText(/on a board that is not Vandelay Industries' own board\./),
+    ).toBeInTheDocument();
   });
 
   it('says a referenced posting needs checking when it is not the company board', async () => {

@@ -490,6 +490,59 @@ describe('findPosting', () => {
     expect(out).toEqual({ status: 'no_board', needsCareersUrl: true });
   });
 
+  // #866: detection that could not finish is not "no board", which would say the company has none.
+  const downFetch = (async () => ({
+    status: 503,
+    headers: new Headers(),
+    body: Buffer.from(''),
+  })) as unknown as typeof safeFetch;
+
+  it('answers unreachable when the search for a board could not finish (#866)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    await createCompany(app.db, ctx, { name: 'Meridian Systems' });
+    const opp = await createOpportunity(app.db, ctx, {
+      companyName: 'Meridian Systems',
+      title: 'Staff Product Manager',
+      sourceKind: 'import',
+    });
+    const { lookup, asked } = board([posting('Staff Product Manager', '1')]);
+
+    const out = await findPosting(app.db, ctx, opp.id, sctx(downFetch), {
+      readBody: async () => '',
+      board: lookup,
+    });
+
+    expect(out).toEqual({ status: 'unreachable' });
+    expect(asked).toEqual([]);
+  });
+
+  it('answers unreachable when a message names another board that has no such job (#866)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    await createCompany(app.db, ctx, { name: 'Meridian Systems' });
+    const opp = await createOpportunity(app.db, ctx, {
+      companyName: 'Meridian Systems',
+      title: 'Staff Product Manager',
+      sourceKind: 'import',
+    });
+    const mail = await linkedMail(
+      app,
+      a,
+      opp.id,
+      'See https://job-boards.greenhouse.io/elsewhere/jobs/777',
+    );
+    const { lookup, asked } = board([posting('Staff Product Manager', '1')]);
+
+    const out = await findPosting(app.db, ctx, opp.id, sctx(downFetch), {
+      readBody: mail.readBody,
+      board: lookup,
+    });
+
+    expect(asked).toEqual([{ kind: 'ats_greenhouse', org: 'elsewhere' }]);
+    expect(out).toEqual({ status: 'unreachable' });
+  });
+
   it('survives an unreachable board, and says it could not be read (#835)', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);

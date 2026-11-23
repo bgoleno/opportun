@@ -719,8 +719,9 @@ export async function setPostingState(
   ctx: UserCtx,
   id: string,
   patch: {
-    postingState: PostingState | null;
-    postingStateDetail: PostingStateDetail | null;
+    /** Undefined leaves the state as it is (#866: a Refetch is not a confirmation). */
+    postingState: PostingState | null | undefined;
+    postingStateDetail: PostingStateDetail | null | undefined;
     atsJobRef?: AtsJobRef | null;
     descriptionFingerprint?: string | null;
   },
@@ -735,8 +736,10 @@ export async function setPostingState(
     await tx
       .update(opportunities)
       .set({
-        postingState: patch.postingState,
-        postingStateDetail: patch.postingStateDetail,
+        ...(patch.postingState === undefined ? {} : { postingState: patch.postingState }),
+        ...(patch.postingStateDetail === undefined
+          ? {}
+          : { postingStateDetail: patch.postingStateDetail }),
         ...(patch.atsJobRef === undefined ? {} : { atsJobRef: patch.atsJobRef }),
         ...(patch.descriptionFingerprint === undefined
           ? {}

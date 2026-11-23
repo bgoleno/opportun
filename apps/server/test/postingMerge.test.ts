@@ -49,6 +49,12 @@ describe('mergePostingText', () => {
     expect(merge({ passages: ['Remote, Full-time'] })).toContain("Soylent's own posting");
   });
 
+  it('a company name ending in s takes an apostrophe alone (#866)', () => {
+    expect(merge({ passages: ['Remote, Full-time'], company: 'Vandelay Industries' })).toContain(
+      "Not covered by Vandelay Industries' own posting.",
+    );
+  });
+
   it('drops a passage the ATS text already covers', () => {
     expect(
       merge({ passages: ['We are hiring a Staff PM for the Core Search foundation team.'] }),
