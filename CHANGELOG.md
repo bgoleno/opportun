@@ -199,11 +199,12 @@ merged after it.
   [#873](https://github.com/bgoleno/opportun/pull/873)).
 - **Two-factor setup and an admin's password reset take effect only while the password you just
   entered is still current** (PR [#643](https://github.com/bgoleno/opportun/pull/643)).
-- **A credential or settings change whose audit record cannot be written now changes nothing.**
-  That covers sign-in, registration, password resets (from the command line and by an admin),
-  device tokens, stored secrets, Google, sign-in providers and unlinking one, telemetry export,
-  the Collect switch and the Reactive Resume key. A sign-in cookie is set only once its session is
-  recorded, and an audit or settings event is reported only once its change has committed
+- **A credential or settings change whose audit record cannot be written now changes nothing,
+  and a removal or switch-off still takes effect, recorded right after.** That covers sign-in,
+  registration, password resets (from the command line and by an admin), device tokens, stored
+  secrets, Google, sign-in providers, telemetry export, the Collect switch and the Reactive Resume
+  key. A sign-in cookie is set only once its session is recorded, and an audit or settings event
+  is reported only once its change has committed
   ([#661](https://github.com/bgoleno/opportun/issues/661),
   [#779](https://github.com/bgoleno/opportun/issues/779),
   [#802](https://github.com/bgoleno/opportun/issues/802),
