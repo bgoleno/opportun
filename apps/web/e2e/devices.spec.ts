@@ -256,3 +256,86 @@ test('capture: a LinkedIn profile posted by the extension becomes a contact (FR-
   await expect(contacts).toContainText('Dana Testworth');
   await expect(contacts.getByRole('row', { name: /Dana Testworth/ })).toContainText('Captured');
 });
+
+// qa on #918: one long word for a name (100 characters, the server's limit) pushed Revoke off the
+// screen and the page sideways. A live row and a revoked one.
+test('device token: a long unbroken name stays in its row, all of it, and Revoke stays on screen (#921)', async ({
+  page,
+}) => {
+  await registerUser(page);
+  const live = 'W'.repeat(100);
+  const revoked = 'm'.repeat(100);
+  await createDeviceToken(page, revoked, ['mail:push']);
+  await page
+    .getByRole('listitem', { name: revoked, exact: true })
+    .getByRole('button', { name: 'Revoke' })
+    .click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Revoke' }).click();
+  await expect(
+    page
+      .getByRole('listitem', { name: revoked, exact: true })
+      .getByText('Revoked', { exact: true }),
+  ).toBeVisible();
+  await createDeviceToken(page, live, ['mail:push', 'capture:push']);
+
+  for (const width of [375, 768, 1280, 1920]) {
+    await page.setViewportSize({ width, height: 900 });
+    const measured = await page.evaluate(
+      (names) => {
+        const vw = document.documentElement.clientWidth;
+        return {
+          sideways: document.documentElement.scrollWidth - vw,
+          rows: names.map((name) => {
+            const row = [...document.querySelectorAll('ul[aria-label="Device tokens"] > li')].find(
+              (li) => li.getAttribute('aria-label') === name,
+            )!;
+            const box = row.getBoundingClientRect();
+            // Every line of the name, as drawn.
+            const text = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+            while (text.nextNode() !== null && text.currentNode.textContent !== name);
+            const range = document.createRange();
+            range.selectNodeContents(text.currentNode);
+            const lines = [...range.getClientRects()];
+            // Drawn in full: nothing between the name and the page clips it.
+            let clipped = false;
+            for (let el = text.currentNode.parentElement; el !== null; el = el.parentElement) {
+              const cs = getComputedStyle(el);
+              if (cs.textOverflow === 'ellipsis' || cs.webkitLineClamp !== 'none') clipped = true;
+              if (
+                el !== document.documentElement &&
+                el !== document.body &&
+                cs.overflowX !== 'visible'
+              ) {
+                const b = el.getBoundingClientRect();
+                if (lines.some((l) => l.right > b.right + 0.5)) clipped = true;
+              }
+            }
+            return {
+              rowRight: box.right,
+              lines: lines.length,
+              nameRight: Math.max(...lines.map((l) => l.right)),
+              clipped,
+              buttons: [...row.querySelectorAll('button')].map((b) => ({
+                name: b.textContent,
+                left: b.getBoundingClientRect().left,
+                right: b.getBoundingClientRect().right,
+              })),
+            };
+          }),
+        };
+      },
+      [live, revoked],
+    );
+    const at = `at ${width} px: ${JSON.stringify(measured)}`;
+    expect(measured.sideways, at).toBe(0);
+    for (const r of measured.rows) {
+      expect(r.rowRight, at).toBeLessThanOrEqual(width);
+      expect(r.nameRight, at).toBeLessThanOrEqual(r.rowRight);
+      expect(r.clipped, at).toBe(false);
+    }
+    const [revoke] = measured.rows[0]!.buttons;
+    expect(revoke, at).toMatchObject({ name: 'Revoke' });
+    expect(revoke!.left, at).toBeGreaterThanOrEqual(0);
+    expect(revoke!.right, at).toBeLessThanOrEqual(measured.rows[0]!.rowRight);
+  }
+});
