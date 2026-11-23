@@ -55,18 +55,23 @@ export const ek = {
 
 /**
  * Whether a create may have made a token nobody has seen: anything but the server's own refusal
- * (4xx). A dropped connection, a proxy's answer or one with no token in it says nothing of what the
- * server did (#904).
+ * (4xx). A dropped connection, a proxy's answer (an error api() had to name itself, `http_408`) or
+ * one with no token in it says nothing of what the server did (#904).
  */
 export function answerLost(err: unknown): boolean {
-  return !(err instanceof ApiError) || err.status >= 500;
+  return !(err instanceof ApiError) || err.status >= 500 || err.code === `http_${err.status}`;
 }
 
+/** What the list marks a token with whose value nobody was shown. */
+export const NOT_SHOWN = 'Not shown here';
+
 export const lostTokenText = (name: string): string =>
-  `Could not confirm that "${name}" was created. If the list of device tokens has a new one by that name, its value can no longer be shown: revoke it there and create another.`;
+  `Could not confirm that "${name}" was created. If it was, its value can no longer be shown: revoke what the list marks "${NOT_SHOWN}", and create another.`;
 
 /** Creates a device token; an answer without one is a lost answer. */
-export async function createDeviceToken<T extends { token: string }>(body: unknown): Promise<T> {
+export async function createDeviceToken<T extends { id: string; token: string }>(
+  body: unknown,
+): Promise<T> {
   const res = await api<T | undefined>('/device-tokens', { method: 'POST', body });
   if (typeof res?.token !== 'string') throw new Error('no token in the answer');
   return res;
@@ -100,14 +105,20 @@ export function ExtensionSetupDialog({
   open,
   onOpenChange,
   displayName,
+  listed,
   onLost,
+  onShown,
   pollMs = 2000,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   displayName: string;
-  /** The token of this name may have been made, and its answer was lost. */
-  onLost?: (name: string) => void;
+  /** The ids of the tokens in the list now. */
+  listed?: () => string[];
+  /** The token of this name may have been made, and its answer was lost; the ids from before it. */
+  onLost?: (name: string, before: string[]) => void;
+  /** This one was made, and its value is on screen. */
+  onShown?: (id: string, name: string) => void;
   /** How often to look for this token's first use; small in tests. */
   pollMs?: number;
 }) {
@@ -205,6 +216,7 @@ export function ExtensionSetupDialog({
     e.preventDefault();
     setBusy(true);
     setError(null);
+    const before = listed?.() ?? [];
     try {
       const res = await createDeviceToken<MintedToken>({
         // One token for the extension (tl and sec on #182): it keeps every token in one place,
@@ -217,12 +229,13 @@ export function ExtensionSetupDialog({
       setName(res.name);
       setPassword('');
       void qc.invalidateQueries({ queryKey: ek.tokens });
+      onShown?.(res.id, proposedName);
     } catch (err) {
       // Read again whatever failed: a token made without its answer is then in the list (#904).
       void qc.invalidateQueries({ queryKey: ek.tokens });
       if (answerLost(err)) {
         setError(lostTokenText(proposedName));
-        onLost?.(proposedName);
+        onLost?.(proposedName, before);
       } else {
         setError(
           err instanceof ApiError && err.code === 'invalid_password'

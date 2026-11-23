@@ -175,15 +175,16 @@ test('device token: one whose answer is lost is listed, and can be revoked', asy
     dialog.getByText(/^Could not confirm that "Lost MacBook" was created/),
   ).toBeVisible();
   await dialog.getByRole('button', { name: 'Cancel' }).click();
-  await expect(page.getByText(/^Could not confirm that "Lost MacBook" was created/)).toBeVisible();
+  await expect(page.getByText(/^"Lost MacBook" was created, but its value/)).toBeVisible();
   const row = page.getByRole('listitem', { name: 'Lost MacBook' });
+  await expect(row.getByText('Not shown here')).toBeVisible();
   await row.getByRole('button', { name: 'Revoke' }).click();
   await page
     .getByRole('dialog', { name: 'Revoke Lost MacBook?' })
     .getByRole('button', { name: 'Revoke' })
     .click();
   await expect(row.getByText('Revoked', { exact: true })).toBeVisible();
-  await expect(page.getByText(/Could not confirm/)).toBeHidden();
+  await expect(page.getByText(/its value was not shown here/)).toBeHidden();
 });
 
 test('capture: a LinkedIn profile posted by the extension becomes a contact (FR-C5)', async ({

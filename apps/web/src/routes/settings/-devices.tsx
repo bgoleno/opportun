@@ -31,6 +31,7 @@ import {
   ek,
   ExtensionSetupDialog,
   lostTokenText,
+  NOT_SHOWN,
   type ArtifactList,
 } from './-extensionSetup';
 
@@ -84,6 +85,34 @@ export function relativeTime(ms: number, now: number = Date.now()): string {
   return new Date(ms).toLocaleDateString();
 }
 
+/** Creates whose answer was lost: what they made, if anything, is in the list unseen (#904). */
+interface Lost {
+  /** The names they were sent with, and whether a create of that name has been shown since. */
+  names: { name: string; settled: boolean }[];
+  /** The ids that cannot be theirs: the list before the first of them, and those shown since. */
+  known: string[];
+}
+
+/** The live tokens that a lost create may have made, of one name or of any. */
+function unseen(lost: Lost | null, list: DeviceToken[], name?: string): DeviceToken[] {
+  if (lost === null) return [];
+  return list.filter(
+    (t) =>
+      t.revokedAt === null &&
+      !lost.known.includes(t.id) &&
+      (name === undefined ? lost.names.some((n) => n.name === t.name) : t.name === name),
+  );
+}
+
+function dropNames(lost: Lost | null, done: (n: Lost['names'][number]) => boolean): Lost | null {
+  if (lost === null) return null;
+  const names = lost.names.filter((n) => !done(n));
+  return names.length === 0 ? null : { ...lost, names };
+}
+
+const foundTokenText = ({ name, settled }: Lost['names'][number]): string =>
+  `"${name}" was created, but its value was not shown here and no longer can be. Revoke what the list marks "${NOT_SHOWN}"${settled ? '' : ', and create another'}.`;
+
 export function DevicesCard() {
   const qc = useQueryClient();
   const tokens = useQuery({
@@ -104,8 +133,9 @@ export function DevicesCard() {
   const [settingUp, setSettingUp] = useState(false);
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
-  /** The name of a token whose create was never answered: it may be in the list, unseen (#904). */
-  const [lost, setLost] = useState<string | null>(null);
+  const [lost, setLost] = useState<Lost | null>(null);
+  /** Every token shown here since the page opened: one may be missing from the list for a moment. */
+  const shownIds = useRef<string[]>([]);
   const [revoking, setRevoking] = useState<DeviceToken | null>(null);
   const refresh = () => qc.invalidateQueries({ queryKey: dk.tokens });
   const revoke = useMutation({
@@ -115,6 +145,36 @@ export function DevicesCard() {
   });
 
   const items = tokens.data?.items ?? [];
+  const listNow = () => qc.getQueryData<{ items: DeviceToken[] }>(dk.tokens)?.items ?? [];
+  const onLost = (name: string, before: string[]) =>
+    setLost((cur) => ({
+      // From before the first lost create: a second one's list may hold the first one's token.
+      known: cur?.known ?? [...before, ...shownIds.current],
+      names: [...(cur?.names ?? []).filter((n) => n.name !== name), { name, settled: false }],
+    }));
+  async function onShown(id: string, name: string) {
+    shownIds.current.push(id);
+    setLost((cur) =>
+      cur === null
+        ? null
+        : {
+            known: [...cur.known, id],
+            names: cur.names.map((n) => (n.name === name ? { name, settled: true } : n)),
+          },
+    );
+    await refresh();
+    // A list that could not be read says nothing of what was made.
+    const state = qc.getQueryState(dk.tokens);
+    if (state?.status !== 'success' || state.isInvalidated) return;
+    setLost((cur) =>
+      dropNames(cur, (n) => n.settled && unseen(cur, listNow(), n.name).length === 0),
+    );
+  }
+  function dismiss() {
+    setLost(null);
+    // One the server made after the list was last read (sec on #918).
+    void refresh();
+  }
   return (
     <Card data-tour="devices-card">
       <CardHeader>
@@ -142,8 +202,17 @@ export function DevicesCard() {
         <AppleMailLine status={appleMail.data} />
         {lost === null ? null : (
           <div className="grid justify-items-start gap-2">
-            <FormError message={lostTokenText(lost)} />
-            <Button size="sm" variant="outline" onClick={() => setLost(null)}>
+            {lost.names.map((n) => (
+              <FormError
+                key={n.name}
+                message={
+                  unseen(lost, items, n.name).length === 0
+                    ? lostTokenText(n.name)
+                    : foundTokenText(n)
+                }
+              />
+            ))}
+            <Button size="sm" variant="outline" onClick={dismiss}>
               Dismiss
             </Button>
           </div>
@@ -156,7 +225,12 @@ export function DevicesCard() {
         ) : (
           <ul aria-label="Device tokens" className="grid gap-2">
             {items.map((t) => (
-              <TokenRow key={t.id} token={t} onRevoke={() => setRevoking(t)} />
+              <TokenRow
+                key={t.id}
+                token={t}
+                unseen={unseen(lost, [t]).length > 0}
+                onRevoke={() => setRevoking(t)}
+              />
             ))}
           </ul>
         )}
@@ -169,18 +243,25 @@ export function DevicesCard() {
         open={settingUp}
         onOpenChange={setSettingUp}
         displayName={me.data?.displayName ?? 'this browser'}
-        onLost={setLost}
+        listed={() => listNow().map((t) => t.id)}
+        onLost={onLost}
+        onShown={(id, name) => void onShown(id, name)}
       />
       <CreateDialog
         open={creating}
-        onOpenChange={setCreating}
-        onCreated={(token) => {
+        onOpenChange={(open) => {
+          setCreating(open);
+          // One the server made after the list was last read (sec on #918).
+          if (!open && lost !== null) void refresh();
+        }}
+        listed={() => listNow().map((t) => t.id)}
+        onCreated={(res) => {
           setCreating(false);
-          setCreated(token);
-          void refresh();
+          setCreated(res.token);
+          void onShown(res.id, res.name);
         }}
         onFailed={() => void refresh()}
-        onLost={setLost}
+        onLost={onLost}
       />
       {created === null ? null : <ShowOnceDialog token={created} onDone={() => setCreated(null)} />}
       <ConfirmDialog
@@ -194,11 +275,15 @@ export function DevicesCard() {
         onConfirm={async () => {
           if (revoking === null) return;
           await revoke.mutateAsync(revoking.id);
-          // Said until no live token of that name is left: names need not differ.
-          const another = items.some(
-            (t) => t.name === lost && t.revokedAt === null && t.id !== revoking.id,
+          // A lost one revoked: nothing is left to say of its name, unless another of it is unseen.
+          setLost((cur) =>
+            dropNames(
+              cur,
+              (n) =>
+                unseen(cur, [revoking], n.name).length > 0 &&
+                unseen(cur, listNow(), n.name).every((t) => t.id === revoking.id),
+            ),
           );
-          if (revoking.name === lost && !another) setLost(null);
         }}
       />
     </Card>
@@ -291,13 +376,22 @@ function AppleMailLine({ status }: { status: AppleMailStatus | undefined }) {
   );
 }
 
-function TokenRow({ token, onRevoke }: { token: DeviceToken; onRevoke: () => void }) {
+function TokenRow({
+  token,
+  unseen: notShown,
+  onRevoke,
+}: {
+  token: DeviceToken;
+  unseen: boolean;
+  onRevoke: () => void;
+}) {
   const revoked = token.revokedAt !== null;
   return (
     <li aria-label={token.name} className="grid gap-1 rounded-md border px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{token.name}</span>
         {revoked ? <Badge variant="secondary">Revoked</Badge> : null}
+        {notShown ? <Badge variant="destructive">{NOT_SHOWN}</Badge> : null}
         {!revoked ? (
           <Button size="sm" variant="outline" className="ml-auto" onClick={onRevoke}>
             Revoke
@@ -329,11 +423,13 @@ interface FieldErrors {
 function CreateDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (token: string) => void;
+  /** The ids of the tokens in the list now. */
+  listed: () => string[];
+  onCreated: (made: { id: string; name: string; token: string }) => void;
   /** Whatever failed: the list is read again, as the token may have been made all the same. */
   onFailed: () => void;
-  /** The token of this name may have been made, and its answer was lost. */
-  onLost: (name: string) => void;
+  /** The token of this name may have been made, and its answer was lost; the ids from before it. */
+  onLost: (name: string, before: string[]) => void;
 }) {
   // Whether the dialog is still open when a create settles: read then, not when it started.
   const open = useRef(props.open);
@@ -366,20 +462,22 @@ function CreateDialog(props: {
     if (Object.keys(next).length > 0) return;
     setBusy(true);
     setError(null);
+    const before = props.listed();
+    const asked = name.trim();
     try {
       const res = await createDeviceToken<DeviceToken & { token: string }>({
-        name: name.trim(),
+        name: asked,
         scopes,
         password,
       });
       reset();
-      props.onCreated(res.token);
+      props.onCreated({ id: res.id, name: asked, token: res.token });
     } catch (err) {
       props.onFailed();
       if (answerLost(err)) {
         // The page says so too, and alone does when the dialog was closed meanwhile.
-        if (open.current) setError(lostTokenText(name.trim()));
-        props.onLost(name.trim());
+        if (open.current) setError(lostTokenText(asked));
+        props.onLost(asked, before);
       } else {
         setError(
           err instanceof ApiError && err.code === 'invalid_password'
