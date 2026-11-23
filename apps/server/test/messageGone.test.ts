@@ -13,7 +13,7 @@ import { rejectCommunication } from '../src/repos/reject';
 import { useApi } from './api';
 import { testDialect } from './db';
 import type { TestClient } from './isolation';
-import { pauseAt } from './race';
+import { pauseAt, someoneBlocked } from './race';
 
 const boot = useApi();
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
@@ -45,6 +45,13 @@ const classify = (a: TestClient, id: string, payload: Record<string, unknown>) =
 
 const accept = (a: TestClient, id: string) =>
   a.request({ method: 'POST', url: `/api/v1/communications/${id}/accept-transition`, payload: {} });
+
+/** What a call ends as: `done`, or the code it is refused with. */
+const ended = (p: Promise<unknown>): Promise<string> =>
+  p.then(
+    () => 'done',
+    (err: { code?: string }) => err.code ?? 'error',
+  );
 
 const timeline = async (a: TestClient, oppId: string) => {
   const res = await a.request({ method: 'GET', url: `/api/v1/opportunities/${oppId}/timeline` });
@@ -136,9 +143,10 @@ describe('a rejected message (#895)', () => {
   });
 
   // SQLite runs one writing transaction at a time, so there the read inside the link's transaction
-  // cannot be overtaken; on Postgres it can, and the condition is in the UPDATE itself.
+  // cannot be overtaken; on Postgres it can, and the condition is in the UPDATE itself. A reject waits
+  // for the user's lock the link holds (#920, below), so the row is written here by a plain UPDATE.
   it.runIf(testDialect === 'postgres')(
-    'rejected between the link reading it and writing it: the reject stands',
+    'written as rejected between the link reading it and writing it: the link changes nothing',
     async () => {
       const { app, a } = await boot();
       const opp = await opportunity(app, a, 'Engineer');
@@ -146,16 +154,14 @@ describe('a rejected message (#895)', () => {
       // The link is parked inside its transaction on purpose.
       onSlowTransaction(() => undefined);
       const pause = pauseAt('reclassify.read');
-      const linking = reclassify(app.db, ctxOf(a), id, { opportunityId: opp.id }).then(
-        () => 'linked',
-        (err: { code?: string }) => err.code ?? 'error',
-      );
+      const linking = ended(reclassify(app.db, ctxOf(a), id, { opportunityId: opp.id }));
       try {
         await pause.reached;
-        await rejectCommunication(app.db, ctxOf(a), id, {
-          reason: 'spam',
-          expectedOpportunityId: null,
-        });
+        await app.db
+          .update(communications)
+          .set({ rejectedAt: 1, rejectionReason: 'spam' })
+          .where(eq(communications.id, id))
+          .run();
         pause.release();
         expect(await linking).toBe('message_rejected');
       } finally {
@@ -163,13 +169,66 @@ describe('a rejected message (#895)', () => {
         setRaceHook(undefined);
       }
       const after = await row(app, id);
-      expect(after.rejectedAt).not.toBeNull();
+      expect(after.rejectedAt).toBe(1);
       expect(after.opportunityId).toBeNull();
-      expect((await app.db.select().from(dismissalFeedback).all()).map((f) => f.kind)).toEqual([
-        'rejection',
-      ]);
+      expect(await app.db.select().from(dismissalFeedback).all()).toEqual([]);
     },
   );
+
+  /** Parks `first` at reclassify.read and rejects the message beside it, as seen before: unlinked. */
+  const rejectBeside = async (
+    app: FastifyInstance,
+    a: TestClient,
+    id: string,
+    first: () => Promise<unknown>,
+  ) => {
+    onSlowTransaction(() => undefined);
+    const pause = pauseAt('reclassify.read');
+    const one = ended(first());
+    await pause.reached;
+    const reject = ended(
+      rejectCommunication(app.db, ctxOf(a), id, { reason: 'spam', expectedOpportunityId: null }),
+    );
+    const blocked = await someoneBlocked(app);
+    pause.release();
+    const out = [await one, await reject];
+    expect(blocked).toBe(true);
+    return out;
+  };
+  const feedback = async (app: FastifyInstance) =>
+    (await app.db.select().from(dismissalFeedback).all()).map((f) => f.kind).sort();
+
+  it('a reject beside a link waits for it, and is refused as changed', async () => {
+    const { app, a } = await boot();
+    const opp = await opportunity(app, a, 'Engineer');
+    const id = await message(app, a);
+    expect(
+      await rejectBeside(app, a, id, () =>
+        reclassify(app.db, ctxOf(a), id, { opportunityId: opp.id }),
+      ),
+    ).toEqual(['done', 'message_changed']);
+    expect(await row(app, id)).toMatchObject({
+      opportunityId: opp.id,
+      rejectedAt: null,
+      snippet: 'A snippet',
+    });
+    expect(await feedback(app)).toEqual(['classification']);
+  });
+
+  it('a reject beside a correction that leaves the link waits for it, and is done', async () => {
+    const { app, a } = await boot();
+    const id = await message(app, a);
+    expect(
+      await rejectBeside(app, a, id, () =>
+        reclassify(app.db, ctxOf(a), id, { classification: 'other' }),
+      ),
+    ).toEqual(['done', 'done']);
+    expect(await row(app, id)).toMatchObject({
+      opportunityId: null,
+      rejectedAt: expect.any(Number),
+    });
+    expect(await feedback(app)).toEqual(['classification', 'rejection']);
+  });
 });
 
 describe('a suggested move that is no longer there says why (#895)', () => {
