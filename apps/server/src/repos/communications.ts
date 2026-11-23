@@ -875,7 +875,7 @@ const label = (v: string | null): string => v ?? 'none';
 /**
  * The user's correction: records a classification feedback row (FR-D6 pattern) and relinks.
  * A changed link drops the stored proposal, which was about the old opportunity. A rejected
- * message is refused, and nothing is written.
+ * message is refused and nothing is written, except that it can still be unlinked.
  */
 export async function reclassify(
   db: Db,
@@ -912,6 +912,10 @@ export async function reclassify(
     }
     if (linkChanged) changes.push(opportunityId === null ? 'unlinked' : 'relinked');
     const now = Date.now();
+    const unlinkOnly =
+      input.opportunityId === null &&
+      input.classification === undefined &&
+      input.outreachKind === undefined;
     // A rejected message is gone (#895): its content was erased, so correcting or linking it would
     // put an entry with no subject or text on an opportunity's timeline. The condition is in the
     // UPDATE, so a reject that commits first leaves this changing nothing (as rejectCommunication
@@ -931,7 +935,7 @@ export async function reclassify(
         needsReview: needsReviewFor(classification, outreachKind, 1, opportunityId !== null),
         updatedAt: now,
       })
-      .where(and(ownedComm(ctx, id), notRejected()))
+      .where(and(ownedComm(ctx, id), unlinkOnly ? undefined : notRejected()))
       .returning({ id: communications.id })
       .all();
     if (updated.length === 0) {

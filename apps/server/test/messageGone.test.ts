@@ -1,5 +1,5 @@
 // A message rejected in another tab or session is gone (https://github.com/bgoleno/opportun/issues/895):
-// it can't be linked, unlinked or reclassified, which would put an entry with no subject or text
+// it can't be linked or reclassified, which would put an entry with no subject or text
 // on an opportunity's timeline, and a move it suggested is refused with the reason.
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
@@ -78,7 +78,6 @@ describe('a rejected message (#895)', () => {
   });
 
   it.each([
-    ['unlinked', { opportunityId: null }],
     ['reclassified', { classification: 'networking' }],
     ['marked not spam', { classification: 'solicitation', outreachKind: 'targeted' }],
   ])('cannot be %s either', async (_, payload) => {
@@ -99,6 +98,30 @@ describe('a rejected message (#895)', () => {
     expect(res.statusCode, res.body).toBe(409);
     expect((res.json() as { error: object }).error).toMatchObject(REFUSED);
     expect(JSON.stringify(await row(app, id))).toBe(before);
+  });
+
+  it('can still be unlinked, and only that', async () => {
+    const { app, a } = await boot();
+    const opp = await opportunity(app, a, 'Engineer');
+    const id = await message(app, a);
+    expect((await classify(a, id, { opportunityId: opp.id })).statusCode).toBe(200);
+    await rejectCommunication(app.db, ctxOf(a), id, {
+      reason: 'spam',
+      expectedOpportunityId: opp.id,
+    });
+    const before = JSON.stringify(await row(app, id));
+    for (const more of [{ classification: 'networking' }, { outreachKind: null }]) {
+      const res = await classify(a, id, { opportunityId: null, ...more });
+      expect(res.statusCode, res.body).toBe(409);
+      expect((res.json() as { error: object }).error).toMatchObject(REFUSED);
+    }
+    expect(JSON.stringify(await row(app, id))).toBe(before);
+
+    const res = await classify(a, id, { opportunityId: null });
+    expect(res.statusCode, res.body).toBe(200);
+    const after = await row(app, id);
+    expect(after.opportunityId).toBeNull();
+    expect(after.rejectedAt).not.toBeNull();
   });
 
   it('a message that was never there is still not found, and one that is there still links', async () => {

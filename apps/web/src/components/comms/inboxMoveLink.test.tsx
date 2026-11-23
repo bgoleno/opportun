@@ -251,18 +251,16 @@ describe('the toasts of an action that takes its row out of the list (#895)', ()
 
 describe('a refused link (#895)', () => {
   it.each([
-    ['Link to opportunity', 'needs_review', BASE, undefined, 'Message not linked'],
-    ['Change link', 'linked', LINKED, 'linked', 'Message not unlinked'],
+    ['Link to opportunity', 'needs_review', BASE],
+    ['Change link', 'linked', { ...LINKED, companyName: null }],
   ] as const)(
     '%s on a message rejected elsewhere says why when the row goes',
-    async (button, view, row, tab, title) => {
+    async (button, view, row) => {
       const user = userEvent.setup();
       serve(view, row, null, { 'POST /communications/c1/classify': REJECTED });
-      renderWithProviders(<Inbox {...(tab === undefined ? {} : { initialTab: tab })} />);
-      const dialog = await openLink(user, button);
-      if (tab === undefined) await pickAcme(user, dialog);
-      else await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
-      expect(await toastRegion().findByText(title)).toBeInTheDocument();
+      renderWithProviders(<Inbox initialTab={view} />);
+      await pickAcme(user, await openLink(user, button));
+      expect(await toastRegion().findByText('Message not linked')).toBeInTheDocument();
       expect(
         toastRegion().getByText('This message has been rejected, so it was left as it is.'),
       ).toBeInTheDocument();
@@ -270,6 +268,21 @@ describe('a refused link (#895)', () => {
       expect(screen.queryByRole('dialog')).toBeNull();
     },
   );
+
+  it('a failed Unlink is said in a toast when the row has gone', async () => {
+    const user = userEvent.setup();
+    serve('linked', LINKED, null, {
+      'POST /communications/c1/classify': {
+        status: 500,
+        body: { error: { code: 'server_error', message: 'The server could not do that.' } },
+      },
+    });
+    renderWithProviders(<Inbox initialTab="linked" />);
+    const dialog = await openLink(user, 'Change link');
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink' }));
+    expect(await toastRegion().findByText('Message not unlinked')).toBeInTheDocument();
+    expect(toastRegion().getByText('The server could not do that.')).toBeInTheDocument();
+  });
 
   it('says why and closes when the list still holds the row, as when its reload fails', async () => {
     const user = userEvent.setup();
