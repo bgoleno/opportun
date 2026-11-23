@@ -76,6 +76,57 @@ test('device tokens: Escape does not lose one, and the next one shows as well', 
   await expect(page.getByRole('list', { name: 'Device tokens' })).toContainText('Home MacBook');
 });
 
+test('extension setup: Escape asks first, on top of the setup, and staying keeps the token', async ({
+  page,
+}) => {
+  // Whether the extension has been built here does not matter: the setup only needs a download.
+  await page.route('**/api/v1/artifacts/extension', (route) =>
+    route.fulfill({
+      json: {
+        baseUrl: 'http://127.0.0.1',
+        buildCommand: 'pnpm build',
+        targets: [
+          {
+            id: 'chrome',
+            label: 'Chrome, Edge, Brave',
+            filename: 'opportun-chrome.zip',
+            available: true,
+            buildStamp: null,
+          },
+        ],
+      },
+    }),
+  );
+  await registerUser(page);
+  await page.goto('/settings/integrations');
+  await page.getByRole('button', { name: 'Set up', exact: true }).click();
+  const setup = page.getByRole('dialog', { name: 'Set up the browser extension' });
+  await setup.getByLabel('Password').fill(PASSWORD);
+  await setup.getByRole('button', { name: 'Continue' }).click();
+  const token = setup.getByText(/^odt_/);
+  await expect(token).toBeVisible();
+
+  const question = page.getByRole('dialog', { name: 'Close before the extension has checked in?' });
+  await page.keyboard.press('Escape');
+  await expect(question).toBeVisible();
+  // Escape on the question leaves it, as on any other dialog.
+  await page.keyboard.press('Escape');
+  // Out of the page, not only hidden: the browser hides it before the app hears that it closed, and
+  // an Escape in between would ask a question the app still counts as asked.
+  await expect(page.getByText('Close before the extension has checked in?')).toHaveCount(0);
+  await expect(token).toBeVisible();
+  // Asked again, on top of the setup: the question's button can be clicked.
+  await page.keyboard.press('Escape');
+  await expect(question).toBeVisible();
+  await question.getByRole('button', { name: 'Cancel' }).click();
+  await expect(question).toBeHidden();
+  await expect(token).toBeVisible();
+  // And leaving for real still works.
+  await setup.getByRole('button', { name: 'Close setup' }).click();
+  await question.getByRole('button', { name: 'Close anyway' }).click();
+  await expect(setup).toBeHidden();
+});
+
 test('another dialog still closes on Escape', async ({ page }) => {
   await registerUser(page);
   await page.goto('/settings/integrations');
