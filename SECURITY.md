@@ -164,7 +164,7 @@ and never keeps alive something the user asked to end.
   - a stored secret's creation and edit, the Google client and connection, the Reactive Resume key,
     and the administrator's sign-in provider settings;
   - turning telemetry collection or export on, or pointing export at a new destination (export
-    starts only after the commit);
+    starts only after the commit), and the administrator opening registration;
   - the demo's command-line account, whose password is shown only after it commits.
 - **Something removed or stopped commits first, then is recorded.** A failed audit write fails the
   request, but the removal or stop has already taken effect:
@@ -173,7 +173,8 @@ and never keeps alive something the user asked to end.
   - deleting a stored secret, disconnecting Google, removing the Reactive Resume key, and the
     administrator removing a sign-in provider;
   - turning telemetry collection or export off, and putting the previous export settings back when
-    new ones could not be started.
+    new ones could not be started;
+  - the administrator closing registration.
 - **A failed first Google connection revokes its grant.** If the tokens Google issued cannot be
   stored, the server revokes them at Google (best effort) so the account does not list the app as
   authorized. It does not on a reconnection, where that would end the connection already stored.
