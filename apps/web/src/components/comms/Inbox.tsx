@@ -442,10 +442,13 @@ function InboxList({
   useEffect(() => {
     if (fresh !== undefined) setLastLoaded(fresh);
   }, [fresh]);
-  const data = fresh ?? (error ? lastLoaded : undefined);
-  // The rows on screen can answer an earlier request: while the next loads, or after it failed.
-  const otherFilters = data !== undefined && data.filters !== filterKey(filters);
-  const otherPage = data !== undefined && !otherFilters && data.page !== page;
+  const held = fresh ?? (error ? lastLoaded : undefined);
+  // What is held can answer an earlier request: while the next loads, or after it failed. Its rows
+  // stay on screen then, but when it has none there is nothing to keep, and nothing it says ("no
+  // messages match") is about what is asked for now (tl on #906).
+  const otherFilters = held !== undefined && held.filters !== filterKey(filters);
+  const otherPage = held !== undefined && !otherFilters && held.page !== page;
+  const data = (otherFilters || otherPage) && held?.items.length === 0 ? undefined : held;
   // What was asked for, not what is being typed: the list on screen answers the debounced values.
   const filtered =
     (filters.q ?? '').trim() !== '' ||

@@ -1367,6 +1367,86 @@ describe('Inbox: what it says is true of the rows shown (#894)', () => {
     expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
   });
 
+  // tl on #906: an empty page that answers another request is no rows to keep.
+  it('a step back to a page that fails says so, and keeps nothing of the emptied page', async () => {
+    const user = userEvent.setup();
+    let rows = ALL.slice(0, 3);
+    let failing = false;
+    mockApi({
+      'GET /communications': (call: { search: string }) => {
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        // The list's first page, not the tab count's own read of it.
+        if (failing && limit === 2 && offset === 0) return FAILED;
+        return {
+          status: 200,
+          body: { items: rows.slice(offset, offset + limit), total: rows.length },
+        };
+      },
+      'GET /integrations/gmail': GMAIL,
+    });
+    const { queryClient } = renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    // Page 1 is no longer cached and can't be had; page 2's only message leaves.
+    queryClient.removeQueries({
+      predicate: ({ queryKey }) =>
+        queryKey[0] === 'communications' && queryKey.at(-1) === 2 && queryKey.at(-2) === 0,
+    });
+    rows = ALL.slice(0, 2);
+    failing = true;
+    await act(() => queryClient.invalidateQueries());
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/^The server could not do that\.$/);
+    expect(screen.queryByText('Loading...')).toBeNull();
+    expect(screen.queryByText(/still shown/)).toBeNull();
+    expect(screen.queryByText(/^Showing /)).toBeNull();
+    failing = false;
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a filter that fails after one that matched nothing claims nothing about either', async () => {
+    const user = userEvent.setup();
+    let failing = true;
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    mockApi({
+      'GET /communications': async (call: { search: string }) => {
+        const q = new URLSearchParams(call.search).get('q');
+        if (q === 'alpha') return { status: 200, body: { items: [], total: 0 } };
+        if (q === 'beta') {
+          await held;
+          if (failing) return FAILED;
+        }
+        return { status: 200, body: { items: ALL.slice(0, 2), total: 2 } };
+      },
+      'GET /integrations/gmail': GMAIL,
+    });
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    const box = screen.getByRole('searchbox', { name: 'Keyword' });
+    await user.click(box);
+    await user.paste('alpha');
+    await screen.findByText('No messages match these filters.');
+    await user.clear(box);
+    await user.paste('beta');
+    // While it loads, nothing has been said about "beta" yet either.
+    expect(await screen.findByText('Loading...')).toBeInTheDocument();
+    expect(screen.queryByText('No messages match these filters.')).toBeNull();
+    release();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^The server could not do that\.$/);
+    expect(screen.queryByText('No messages match these filters.')).toBeNull();
+    expect(screen.queryByText(/from before the filters changed/)).toBeNull();
+    expect(screen.queryByText('Loading...')).toBeNull();
+    failing = false;
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+  });
+
   it.each([
     ['Keyword', 'keyword'],
     ['Sender', 'sender'],
