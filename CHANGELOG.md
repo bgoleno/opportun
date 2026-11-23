@@ -240,9 +240,6 @@ merged after it.
   [#644](https://github.com/bgoleno/opportun/pull/644),
   [#701](https://github.com/bgoleno/opportun/pull/701),
   [#751](https://github.com/bgoleno/opportun/pull/751)).
-- **A tailoring chat reply that is stopped or fails partway records the AI usage and cost it
-  incurred**, measured or estimated, as a finished one does
-  (PR [#752](https://github.com/bgoleno/opportun/pull/752)).
 - **Each user gets a fair share of a job board host.** One user's burst of board lookups no longer
   makes other users' lookups to the same board time out. The nightly board probe no longer stops a
   vendor for everyone because of a wait on this server, and one user's failing companies can stop
