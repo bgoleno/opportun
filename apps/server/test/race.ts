@@ -4,9 +4,10 @@
 // caller that never arrives fails the test after a timeout instead of hanging it.
 import { afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { writeGateOf } from '../src/db/client';
+import { withTransaction, writeGateOf } from '../src/db/client';
 import { onSlowTransaction } from '../src/db/gate';
 import { setRaceHook } from '../src/lib/racePoints';
+import type { Exec } from '../src/repos/base';
 import { queryOne, type HasDb } from './db';
 
 const ARRIVAL_TIMEOUT_MS = 3000;
@@ -193,4 +194,43 @@ export async function heldApart<A, B>(
     );
   }
   return await Promise.all([a, b]);
+}
+
+/**
+ * Whether somebody came to be blocked within 5 s: on any lock on Postgres (a row's too, unlike
+ * settledOrWaiting), at the gate on SQLite. Look before letting the parked one go and assert after,
+ * so a failure leaves nothing parked.
+ */
+export async function someoneBlocked(app: HasDb): Promise<boolean> {
+  const deadline = performance.now() + 5_000;
+  for (;;) {
+    const gate = writeGateOf(app.db);
+    const n =
+      gate === undefined
+        ? ((
+            await queryOne<{ n: number }>(
+              app,
+              sql`SELECT count(*)::int AS n FROM pg_stat_activity
+                  WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+            )
+          )?.n ?? 0)
+        : gate.waiting();
+    if (n > 0) return true;
+    if (performance.now() > deadline) return false;
+    await new Promise((r) => setTimeout(r, POLL_MS));
+  }
+}
+
+/** A transaction that does `first`, is held open until `go`, and commits. */
+export function heldOpen(app: HasDb, first: (tx: Exec) => Promise<unknown>) {
+  let go!: () => void;
+  let arrived!: () => void;
+  const gate = new Promise<void>((r) => (go = r));
+  const reached = new Promise<void>((r) => (arrived = r));
+  const done = withTransaction(app.db, async (tx) => {
+    await first(tx);
+    arrived();
+    await gate;
+  });
+  return { reached, go, done };
 }
