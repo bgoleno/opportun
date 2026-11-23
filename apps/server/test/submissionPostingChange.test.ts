@@ -347,6 +347,41 @@ describe('lock order: the attempt, then the user, then rows (tl on #154; the dea
     expect(await rowOf(app, d.id)).toMatchObject({ status: 'draft' });
   });
 
+  // #889: whether the link changes is read again under the user's lock, so the attempt's lock has
+  // to be held already by a save that sends the link it last saw. A link alone (what the opportunity
+  // page sends) waits on the attempt's lock and decides after it, as a link with a title does (tl on
+  // #910).
+  it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+    ['a link and a title', { title: 'One' }, { title: 'Two' }],
+    ['a link alone', {}, {}],
+    ['a link alone, after a link and a title', { title: 'One' }, {}],
+    ['a link and a title, after a link alone', {}, { title: 'Two' }],
+  ])(
+    'an edit sending back the link it saw, after another changed it: the attempt is marked both times (%s)',
+    async (_w, one, two) => {
+      const { app, a } = await boot(ON);
+      const d = await reviewed(app, a);
+      const [first, second] = await heldApart(
+        app,
+        'opportunities.update.locked',
+        () => api(a, 'PATCH', `/opportunities/${d.oppId}`, { ...one, postingUrl: NEW_URL }),
+        () => api(a, 'PATCH', `/opportunities/${d.oppId}`, { ...two, postingUrl: OLD_URL }),
+      );
+      expect(first.statusCode, first.body).toBe(200);
+      expect(second.statusCode, second.body).toBe(200);
+      const opp = await getOpportunity(app.db, ctxOf(a), d.oppId);
+      // The link and the identity are one link's: the second save's.
+      expect(opp).toMatchObject({ ...one, ...two, postingUrl: OLD_URL });
+      expect(opp.atsJobRef).toMatchObject({ externalId: OLD_REF.externalId });
+      const [marks] = await app.db
+        .select({ n: count() })
+        .from(auditLog)
+        .where(and(eq(auditLog.userId, a.userId), eq(auditLog.event, 'submission.posting_changed')))
+        .all();
+      expect(marks?.n).toBe(2);
+    },
+  );
+
   it('a merge moving the live attempt, against an edit of the merged-away opportunity: both finish', async () => {
     const { app, a } = await boot(ON);
     const d = await draft(app, a); // the live attempt is on d.oppId, the one merged away
