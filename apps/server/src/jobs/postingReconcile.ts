@@ -25,6 +25,7 @@ import { getOpportunity } from '../repos/opportunities';
 import { POSTING_RECONCILE_KIND } from '../lib/jobKinds';
 import { requireService, type JobHandler } from './registry';
 import { confirm, flag, noBodies, type ReconcileOutcome } from '../lib/postingReconcile';
+import { opportunityGone, settleUnfinishedCheck } from '../lib/postingChecks';
 
 export { POSTING_RECONCILE_KIND };
 
@@ -147,10 +148,25 @@ export const postingReconcileJob: JobHandler<z.infer<typeof PayloadSchema>> = {
   async run(db, payload, ctx) {
     if (ctx.userId === null) throw new Error(`${POSTING_RECONCILE_KIND} needs a user`);
     const user: UserCtx = { userId: ctx.userId, isAdmin: false };
-    const outcome = await reconcilePosting(db, user, payload.opportunityId, {
-      fetch: requireService(ctx, 'sourceFetch'),
-      log: requireService(ctx, 'log'),
-    });
+    let outcome: ReconcileOutcome;
+    try {
+      outcome = await reconcilePosting(db, user, payload.opportunityId, {
+        fetch: requireService(ctx, 'sourceFetch'),
+        log: requireService(ctx, 'log'),
+      });
+    } catch (err) {
+      // Deleted, or merged into another, while the board was read (#897): there is nothing left to
+      // check, and a retry would only fail again. Looked up rather than read off the error: a
+      // missing company is a 404 too, and is a real failure.
+      if (!(await opportunityGone(db, user, payload.opportunityId))) throw err;
+      await ctx.setResult({ status: 'gone' });
+      return;
+    }
     await ctx.setResult(outcome);
+  },
+  // Its posting must not stay `searching`, with its page still saying it is being checked (#869).
+  async onDead(db, payload, { userId }) {
+    if (userId === null) return;
+    await settleUnfinishedCheck(db, { userId, isAdmin: false }, payload.opportunityId);
   },
 };
