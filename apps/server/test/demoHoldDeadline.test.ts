@@ -68,69 +68,145 @@ function heldProvider(answer: Promise<unknown>) {
   return fetchMock;
 }
 
+/**
+ * A demo server with these limits, a signed-in visitor, and a request of theirs that makes an AI
+ * call. `send` waits until the call is out. It handles the request from the moment it is sent
+ * (`settled`): one the server ends is rejected while the test is waiting for something else, and
+ * Vitest fails a run with a rejection nothing handles yet (#939).
+ */
+async function visitorWithAiCall(limits: {
+  holdMs: number;
+  aiCallMs: number;
+  stopMarginMs: number;
+}) {
+  const { app, dataDir } = await testApp({ demo: true }, { build: { demoResetLimits: limits } });
+  const env = demoEnv(dataDir);
+  await runDemoResetGated(app.db, env, undefined);
+  const gate = app.jobs.services.demoResetGate;
+  if (gate === undefined) throw new Error('a demo server has a reset gate');
+  const user1 = DEMO_USERS[1]!;
+  const visitor = await signIn(app, user1.email, USER1_PASSWORD);
+  const opp = await visitor.request({
+    method: 'POST',
+    url: '/api/v1/opportunities',
+    payload: { companyName: 'Hold Deadline Co', title: 'Engineer', sourceKind: 'manual' },
+  });
+  expect(opp.statusCode, opp.body).toBe(201);
+  const contact = await visitor.request({
+    method: 'POST',
+    url: '/api/v1/network',
+    payload: { name: 'Jane Doe', company: 'Hold Deadline Co' },
+  });
+  expect(contact.statusCode, contact.body).toBe(201);
+  const send = async (fetchMock: ReturnType<typeof heldProvider>) => {
+    const request = visitor.request({
+      method: 'GET',
+      url: `/api/v1/opportunities/${(opp.json() as { id: string }).id}/referral-candidates?rank=true`,
+    });
+    const settled = Promise.allSettled([request]).then(([r]) => r);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: 5_000 });
+    return { settled };
+  };
+  return { app, env, gate, user1, send };
+}
+
 describe('a demo request that outlives its hold writes nothing after the reset (#684)', () => {
   it('its AI call ends before the hold does, so the reset replaces what it wrote', async () => {
     // The hold's bound is shorter than the AI call's own limit, as the start limit plus the AI
-    // limit are longer than the hold in production (20 s + 40 s > 50 s).
-    const { app, dataDir } = await testApp(
-      { demo: true },
-      { build: { demoResetLimits: { holdMs: 600, aiCallMs: 3_000, stopMarginMs: 150 } } },
-    );
+    // limit are longer than the hold in production (20 s + 40 s > 50 s), so only the stop (2 s in)
+    // can end the call. Seconds from the stop to the bound, as in production (5 s): a busy machine
+    // must not reach the bound (#939). The reset waits until after the stop, not until the bound:
+    // with no stop it fails there.
+    const { app, env, gate, user1, send } = await visitorWithAiCall({
+      holdMs: 10_000,
+      aiCallMs: 20_000,
+      stopMarginMs: 8_000,
+    });
     try {
-      const env = demoEnv(dataDir);
-      await runDemoResetGated(app.db, env, undefined);
-      const gate = app.jobs.services.demoResetGate;
-      if (gate === undefined) throw new Error('a demo server has a reset gate');
-      const user1 = DEMO_USERS[1]!;
-      const visitor = await signIn(app, user1.email, USER1_PASSWORD);
-
-      const opp = await visitor.request({
-        method: 'POST',
-        url: '/api/v1/opportunities',
-        payload: { companyName: 'Hold Deadline Co', title: 'Engineer', sourceKind: 'manual' },
-      });
-      expect(opp.statusCode, opp.body).toBe(201);
-      const contact = await visitor.request({
-        method: 'POST',
-        url: '/api/v1/network',
-        payload: { name: 'Jane Doe', company: 'Hold Deadline Co' },
-      });
-      expect(contact.statusCode, contact.body).toBe(201);
       let resetFinished!: () => void;
       const afterReset = new Promise<void>((r) => (resetFinished = r));
       const fetchMock = heldProvider(afterReset);
 
       // The ranking request makes its AI call; the reset starts while the call is out.
-      const ranking = visitor.request({
-        method: 'GET',
-        url: `/api/v1/opportunities/${(opp.json() as { id: string }).id}/referral-candidates?rank=true`,
-      });
-      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: 2_000 });
-      await runDemoResetGated(app.db, env, gate, { timeoutMs: 5_000 });
+      const { settled } = await send(fetchMock);
+      const runsNow = () =>
+        app.db
+          .select({ id: taskRuns.id, createdAt: taskRuns.createdAt })
+          .from(taskRuns)
+          .where(and(eq(taskRuns.userId, user1.id), eq(taskRuns.taskKey, REFERRAL_TASK)))
+          .all();
+      // What the request wrote, once it has let go of the gate and before the reset replaces it.
+      let written: Awaited<ReturnType<typeof runsNow>> = [];
+      const exclusive = gate.exclusive.bind(gate);
+      vi.spyOn(gate, 'exclusive').mockImplementation((fn, timeoutMs) =>
+        exclusive(async () => {
+          written = await runsNow();
+          return fn();
+        }, timeoutMs),
+      );
+      await runDemoResetGated(app.db, env, gate, { timeoutMs: 8_000 });
       const resetAt = Date.now();
       // Only now may the provider answer: a call still out gets its answer after the reset.
       resetFinished();
-      await Promise.allSettled([ranking]);
+      const outcome = await settled;
       // Let anything the handler still had to do run.
       await vi.waitFor(() => expect(gate.held).toBe(0), { timeout: 5_000 });
       await new Promise((r) => setTimeout(r, 300));
 
-      // Nothing the request wrote is left in the reseeded account: on main its task run (and
-      // its ranking) came after the reset.
-      const runs = await app.db
-        .select({ createdAt: taskRuns.createdAt })
-        .from(taskRuns)
-        .where(and(eq(taskRuns.userId, user1.id), eq(taskRuns.taskKey, REFERRAL_TASK)))
-        .all();
+      // Nothing the request wrote is left in the reseeded account, and nothing came after: on main
+      // its task run (and its ranking) came after the reset.
+      expect(written, 'the task run written before the reset').toHaveLength(1);
+      const runs = await runsNow();
       expect(
-        runs.filter((r) => r.createdAt >= resetAt),
-        'a referral task run written after the reset',
+        runs.filter((r) => r.createdAt >= resetAt || r.id === written[0]!.id),
+        'a referral task run that outlived the reset, or was written after it',
       ).toEqual([]);
+      // And the client is answered (without a ranking): the stop came in time for its reply.
+      expect(outcome, 'the request').toMatchObject({
+        status: 'fulfilled',
+        value: { statusCode: 200 },
+      });
     } finally {
       app.server.closeAllConnections();
       await app.close();
     }
-  }, 20_000);
+  }, 40_000);
+
+  it('a request still running at the bound is ended: its client sees the connection closed (#618, #939)', async () => {
+    const { app, gate, send } = await visitorWithAiCall({
+      holdMs: 2_500,
+      aiCallMs: 20_000,
+      stopMarginMs: 500,
+    });
+    try {
+      // A provider call that does not end at the stop, as a handler too slow to finish by the
+      // bound: it ends when the test says, after the client has seen its connection closed.
+      let endCall!: () => void;
+      const ended = new Promise<void>((r) => (endCall = r));
+      let stopped: AbortSignal | null | undefined;
+      const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit): Promise<Response> => {
+        stopped = init?.signal;
+        await ended;
+        throw init?.signal?.reason ?? new Error('not aborted');
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const { settled } = await send(fetchMock);
+      // The bound gives the gate back with the handler still running, so a reset need not wait for
+      // it. The request is rejected meanwhile, with the test waiting for something else.
+      await vi.waitFor(() => expect(gate.held).toBe(0), { timeout: 10_000 });
+      expect(await settled).toMatchObject({
+        status: 'rejected',
+        reason: { code: 'LIGHT_ECONNRESET' },
+      });
+      expect(stopped?.aborted, 'told to stop before it was ended').toBe(true);
+      endCall();
+      // The handler's end, with no client left, is nobody's unhandled rejection either.
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      app.server.closeAllConnections();
+      await app.close();
+    }
+  }, 40_000);
 });
 
 describe("a hold's stop signal (#684)", () => {
