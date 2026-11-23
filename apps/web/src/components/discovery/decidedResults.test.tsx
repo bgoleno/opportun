@@ -6,7 +6,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import type { DiscoveryResult } from './api';
 import { DecidedResults } from './DecidedResults';
 
@@ -215,6 +215,27 @@ describe('DecidedResults', () => {
       expect(within(row).getByRole('button', { name: /unsuppress/i })).toBeEnabled(),
     );
     expect(within(row).queryByText('Unsuppressed')).toBeNull();
+  });
+
+  it('a result unsuppressed elsewhere says so in plain words, and its row is read again (#896)', async () => {
+    const SENTENCE = 'This result is already unsuppressed. There is nothing more to do.';
+    const r = result({ id: 'd1', posting: { company: 'Initech', title: 'Reopened Elsewhere' } });
+    let released = false;
+    mockApi({
+      'GET /discovery/results': (call: ApiCall) =>
+        queueHandler({ dismissed: [released ? { ...r, dedupeKey: null } : r] })(call),
+      'POST /discovery/results/d1/unsuppress': () => {
+        released = true;
+        return { status: 409, body: { error: { code: 'not_suppressing', message: SENTENCE } } };
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<DecidedResults />);
+    const row = await screen.findByRole('listitem', { name: 'Reopened Elsewhere at Initech' });
+    await user.click(within(row).getByRole('button', { name: /unsuppress/i }));
+    expect(await toastRegion().findByText(SENTENCE)).toBeInTheDocument();
+    expect(await within(row).findByText('Unsuppressed')).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: /unsuppress/i })).toBeNull();
   });
 
   it('keyboard: j/k move the selection between rows (issue #155)', async () => {

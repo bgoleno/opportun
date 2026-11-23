@@ -188,6 +188,7 @@ const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 
 /** Gmail ingestion: a separate read-only grant, then sync on demand (and every 15 minutes). */
 export function GmailCard() {
+  const qc = useQueryClient();
   const google = useGoogleStatus();
   const gmail = useGmailStatus();
   const sync = useGmailSync();
@@ -233,13 +234,14 @@ export function GmailCard() {
                 onClick={() =>
                   sync.mutate(undefined, {
                     onSuccess: () => toast({ title: 'Sync queued', variant: 'success' }),
+                    // Disconnected elsewhere, say: the Google card above follows too (#896).
+                    onError: () => void qc.invalidateQueries({ queryKey: rk.google }),
                   })
                 }
               >
                 Sync now
               </Button>
             </div>
-            {sync.error ? <FormError message={errorMessage(sync.error)} /> : null}
           </>
         ) : (
           <>
@@ -267,6 +269,8 @@ export function GmailCard() {
             {connect.error ? <FormError message={errorMessage(connect.error)} /> : null}
           </>
         )}
+        {/* Outside the branches above: a sync refused as disconnected turns the card over (#896). */}
+        {sync.error ? <FormError message={errorMessage(sync.error)} /> : null}
         {gmail.data === undefined ? null : (
           <GmailLookbackField
             value={gmail.data.lookbackDays}

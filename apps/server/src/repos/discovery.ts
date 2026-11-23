@@ -686,9 +686,25 @@ export async function unsuppressResult(
   if (result.disposition === 'accepted') {
     if (result.opportunityId === null) throw new HttpError(409, 'no_linked_opportunity');
     const opp = await getOpportunity(db, ctx, result.opportunityId);
-    if (opp.stage !== 'dismissed') throw new HttpError(409, 'opportunity_still_active');
+    if (opp.stage !== 'dismissed') {
+      throw new HttpError(
+        409,
+        'opportunity_still_active',
+        "This job's opportunity is still in your pipeline. Dismiss the opportunity first, then unsuppress this result.",
+        undefined,
+        { userFacing: true },
+      );
+    }
   }
-  if (result.dedupeKey === null) throw new HttpError(409, 'not_suppressing');
+  if (result.dedupeKey === null) {
+    throw new HttpError(
+      409,
+      'not_suppressing',
+      'This result is already unsuppressed. There is nothing more to do.',
+      undefined,
+      { userFacing: true },
+    );
+  }
   await db
     .update(discoveryResults)
     .set({ dedupeKey: null, updatedAt: Date.now() })

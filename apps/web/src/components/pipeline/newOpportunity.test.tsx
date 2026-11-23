@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
@@ -53,4 +53,33 @@ describe('NewOpportunityDialog', () => {
     await waitFor(() => expect(api.calls).toHaveLength(2));
     expect(api.calls[1]).toMatchObject({ search: '?force=true', body: api.calls[0]?.body });
   });
+
+  it.each([
+    ['Company', 200],
+    ['Title', 300],
+  ])(
+    'a %s over its limit of %i is said in plain words, and nothing is sent (#896)',
+    async (label, max) => {
+      const api = mockApi({
+        'POST /opportunities': { status: 201, body: { id: 'n', title: 't', companyName: 'c' } },
+      });
+      const user = userEvent.setup();
+      renderWithProviders(<NewOpportunityDialog open onOpenChange={() => undefined} />);
+      const dialog = await screen.findByRole('dialog', { name: 'New opportunity' });
+      for (const other of ['Company', 'Title']) {
+        fireEvent.change(within(dialog).getByLabelText(other), {
+          target: { value: 'x'.repeat(other === label ? max + 1 : 1) },
+        });
+      }
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      expect(await within(dialog).findByText(`Use at most ${max} characters`)).toBeInTheDocument();
+      expect(api.calls).toHaveLength(0);
+      // Exactly at it is sent.
+      fireEvent.change(within(dialog).getByLabelText(label), {
+        target: { value: 'x'.repeat(max) },
+      });
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      await waitFor(() => expect(api.calls).toHaveLength(1));
+    },
+  );
 });
