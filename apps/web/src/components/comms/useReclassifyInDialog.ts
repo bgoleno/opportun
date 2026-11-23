@@ -10,11 +10,14 @@ const isRejected = (err: unknown): boolean =>
 /**
  * A correction made from a row's dialog (#895). Its outcome is reported whether or not the row is
  * still there, since the list reloads first and can take the row and the dialog with it. A failure
- * is shown in the dialog (`error`) while it is open, and in a toast when it is gone, or when the
- * message is.
+ * is shown in the dialog (`error`) while it is open. It is a toast when the dialog is not: closed
+ * while the request was out (#919), or gone with its row. And when the message is gone.
  */
-export function useReclassifyInDialog(id: string, close: () => void) {
+export function useReclassifyInDialog(id: string, open: boolean, close: () => void) {
   const correction = useReclassify();
+  // Whether the dialog is on screen when the request settles: read then, not when it started.
+  const isOpen = useRef(open);
+  isOpen.current = open;
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -22,6 +25,7 @@ export function useReclassifyInDialog(id: string, close: () => void) {
       mounted.current = false;
     };
   }, []);
+  const onScreen = () => mounted.current && isOpen.current;
   return {
     isPending: correction.isPending,
     error: correction.error,
@@ -29,12 +33,15 @@ export function useReclassifyInDialog(id: string, close: () => void) {
       void correction.mutateAsync({ id, input }).then(
         () => {
           toast({ title: titles.done, variant: 'success' });
-          close();
+          // Only this dialog: a row shows one at a time, and another can be open by now.
+          if (onScreen()) close();
         },
         (err: unknown) => {
-          if (mounted.current && !isRejected(err)) return;
+          if (onScreen() && !isRejected(err)) return;
           toast({ title: titles.failed, description: errorMessage(err), variant: 'destructive' });
-          close();
+          if (onScreen()) close();
+          // Said: not again in the dialog when it is next opened.
+          correction.reset();
         },
       );
     },
