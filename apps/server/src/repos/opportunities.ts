@@ -62,7 +62,7 @@ import {
   removeFromIndex,
   removeOpportunityFromIndex,
 } from './search';
-import { runCount, withTransaction } from '../db/client';
+import { lockScope, runCount, withTransaction } from '../db/client';
 
 export type OpportunityRow = typeof opportunities.$inferSelect;
 /**
@@ -412,6 +412,10 @@ export async function createOpportunity(
   opts: { force?: boolean } = {},
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
+    // The user's lock before the claim, which can write a dismissed holder's row: the company lookup
+    // takes it anyway, and an update holding it while waiting on that row would close a cycle
+    // (#889; lock order: submissionScope).
+    await lockScope(tx, userScope(ctx));
     if (input.roleTargetId != null) await assertRoleTargetOwned(tx, ctx, input.roleTargetId);
     const key = dedupeKey(input.companyName, input.title, input.location);
     let storedKey: string | null = key;
@@ -423,6 +427,9 @@ export async function createOpportunity(
     } else {
       await claimDedupeKey(tx, ctx, key, null);
     }
+    // The key claimed, the company not yet looked up: where a claim and the user's lock could cross
+    // (test/opportunityUpdateRace.test.ts).
+    await racePoint('opportunities.create.locked');
     const company = await findOrCreateCompanySync(tx, ctx, input.companyName);
     const sortOrder = await nextSortOrder(tx, ctx, 'discovered');
     const now = Date.now();
@@ -497,7 +504,19 @@ export class DescriptionChanged extends Error {
   override name = 'DescriptionChanged';
 }
 
-/** Edits descriptive fields. Changing company, title or location re-claims the dedupe key. */
+/**
+ * The user's lock (lock order: submissionScope). A create, and an update of the company, title,
+ * location or posting link, hold it from before they read what they write from (#889).
+ */
+const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
+
+/**
+ * Edits descriptive fields. Changing company, title or location re-claims the dedupe key; a patch
+ * with none of the three writes neither the company nor the key, so it cannot put back what another
+ * save has changed since this one read the row. Those three, and a posting link, are saved one at a
+ * time, under the user's lock and from a read made under it: each save's key and ATS identity come
+ * from the company and link the last one left (#889).
+ */
 export async function updateOpportunity(
   db: Db,
   ctx: UserCtx,
@@ -519,18 +538,29 @@ export async function updateOpportunity(
   } = {},
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
-    const current = await getViewSync(tx, ctx, id);
-    // A new posting URL will mark the live attempt (#144): its lock comes first, before the
-    // company lookup below takes the user's (lock order: submissionScope).
-    const urlWillChange = patch.postingUrl !== undefined && patch.postingUrl !== current.postingUrl;
-    const lockedAttempt = urlWillChange ? await lockLiveAttempt(tx, ctx, id) : null;
+    let current = await getViewSync(tx, ctx, id);
+    // A new posting URL will mark the live attempt (#144): its lock comes first, before the user's
+    // below (lock order: submissionScope). Taken for any posting URL, the same one too: whether it
+    // is a change is known only from the read made under the user's lock, below.
+    const lockedAttempt =
+      patch.postingUrl === undefined ? null : await lockLiveAttempt(tx, ctx, id);
     if (patch.roleTargetId != null) await assertRoleTargetOwned(tx, ctx, patch.roleTargetId);
     const { companyName, ...fields } = patch;
+    const changesKey =
+      companyName !== undefined || fields.title !== undefined || fields.location !== undefined;
+    // Two saves could each change one part of the key and each make it from the other's old part. So
+    // could a link's identity be kept from a company another save has just changed (#785), or from a
+    // link it has just replaced (tl on #910). So these are made one at a time, and from the row as
+    // the last one left it: on Postgres the first read can be of before the locks were had.
+    if (changesKey || patch.postingUrl !== undefined) {
+      await lockScope(tx, userScope(ctx));
+      current = await getViewSync(tx, ctx, id);
+    }
     let companyId = current.companyId;
     if (companyName !== undefined)
       companyId = (await findOrCreateCompanySync(tx, ctx, companyName)).id;
     let key = current.dedupeKey;
-    if (key !== null) {
+    if (changesKey && key !== null) {
       key = dedupeKey(
         companyName ?? current.companyName,
         fields.title ?? current.title,
@@ -564,8 +594,8 @@ export async function updateOpportunity(
       .set({
         ...fields,
         ...(dropForCompany ? { atsJobRef: null } : urlChanged ? { atsJobRef: newRef } : {}),
-        companyId,
-        dedupeKey: key,
+        ...(companyName === undefined ? {} : { companyId }),
+        ...(changesKey ? { dedupeKey: key } : {}),
         updatedAt: now,
       })
       .where(
