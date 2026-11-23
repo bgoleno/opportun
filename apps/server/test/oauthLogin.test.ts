@@ -1206,6 +1206,26 @@ describe('oauth link and unlink', () => {
     expect(gone.statusCode).toBe(404);
   });
 
+  it('a start is limited by address, the one sent back to the login page too', async () => {
+    const { app } = await boot();
+    const start = (remoteAddress: string) =>
+      app.inject({
+        method: 'GET',
+        url: '/api/v1/auth/oauth/github/start?mode=login',
+        remoteAddress,
+      });
+    for (let i = 0; i < 30; i++) {
+      const res = await start('203.0.113.9');
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe('/login?oauth=not_configured');
+    }
+    const over = await start('203.0.113.9');
+    expect(over.statusCode).toBe(429);
+    expect(over.headers.location).toBeUndefined();
+    // Another address has its own count.
+    expect((await start('203.0.113.10')).statusCode).toBe(302);
+  });
+
   it('unlinking one already unlinked, and linking one no longer set up, say so (#896)', async () => {
     const { a } = await boot();
     const gone = await a.request({
