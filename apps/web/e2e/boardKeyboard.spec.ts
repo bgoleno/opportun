@@ -367,9 +367,14 @@ test.describe('a keyboard drag steps to the adjacent column in both directions (
 // #886: the board is narrower than its columns (its chain scrolls sideways), and a column scrolled
 // out of view could not be reached: the card stayed where it was. Every column is reachable at each
 // width, and the card is shown over the one it is announced over.
-const WIDTHS = [768, 1024, 1280, 1366, 1440, 1600, 1920];
-/** Which end columns are expanded. Both are rails by default. */
-const LAYOUTS = [[], ['Dismissed'], ['Dismissed', 'Closed']];
+const WIDTHS = [768, 900, 1024, 1280, 1366, 1440, 1600, 1920];
+/** Which end columns are expanded (both are rails by default), and the widths walked with them. */
+const LAYOUTS: { expanded: ('Dismissed' | 'Closed')[]; widths: number[] }[] = [
+  { expanded: [], widths: WIDTHS },
+  { expanded: ['Dismissed'], widths: WIDTHS },
+  { expanded: ['Closed'], widths: [768, 900, 1024] },
+  { expanded: ['Dismissed', 'Closed'], widths: WIDTHS },
+];
 
 /** Resizes, and waits out the resize: dnd-kit's keyboard sensor cancels a drag on one. */
 async function resize(page: Page, width: number) {
@@ -383,11 +388,13 @@ async function resize(page: Page, width: number) {
   );
 }
 
-/** The board's chain scrolled to its left edge, as it opens. */
-const scrollToStart = (page: Page) =>
-  page.evaluate(() => {
-    for (const area of document.querySelectorAll('[data-board-scroller]')) area.scrollLeft = 0;
-  });
+/** The board's chain scrolled to one end. */
+const scrollBoard = (page: Page, to: 'start' | 'end') =>
+  page.evaluate((end) => {
+    for (const area of document.querySelectorAll('[data-board-scroller]')) {
+      area.scrollLeft = end === 'end' ? area.scrollWidth : 0;
+    }
+  }, to);
 
 /** Picks `moved` up, steps through `walk`, each announced and shown there, and cancels. */
 async function walkColumns(
@@ -397,7 +404,7 @@ async function walkColumns(
   from: string,
   walk: (readonly ['ArrowLeft' | 'ArrowRight', string])[],
 ) {
-  await scrollToStart(page);
+  await scrollBoard(page, 'start');
   await moved.focus();
   await page.keyboard.press('Space');
   await expect(liveRegion(page)).toHaveText(`${name} is over the ${from} column.`);
@@ -436,7 +443,7 @@ async function cardShownOver(page: Page, name: string): Promise<boolean | null> 
 }
 
 test.describe('a keyboard drag reaches every column at any board width (#886)', () => {
-  for (const expanded of LAYOUTS) {
+  for (const { expanded, widths } of LAYOUTS) {
     const layout = expanded.length === 0 ? 'both collapsed' : `${expanded.join(' and ')} expanded`;
     test(`walks every column both ways at each width, ${layout}`, async ({ page }) => {
       test.setTimeout(240_000);
@@ -446,24 +453,37 @@ test.describe('a keyboard drag reaches every column at any board width (#886)', 
       const name = `${opp.company}: ${opp.title}`;
       const gone = { company: 'Initrode', title: 'Dismissed Card' };
       const goneName = `${gone.company}: ${gone.title}`;
+      const fresh = { company: 'Initrode', title: 'New Card' };
+      const freshName = `${fresh.company}: ${fresh.title}`;
+      await createOpportunity(page, fresh);
       await createOpportunity(page, opp);
       await moveWithMenu(page, opp, 'Interested');
       await expect(column(page, 'Interested').getByRole('article', { name })).toBeVisible();
       // `dismissed` expands Dismissed as well.
-      if (expanded.length > 0) await dismissed(page, gone);
+      if (expanded.includes('Dismissed')) await dismissed(page, gone);
       if (expanded.includes('Closed')) {
         await page.getByRole('button', { name: /^Expand Closed/ }).click();
       }
       const last = COLUMNS.length - 1;
-      for (const width of WIDTHS) {
-        await test.step(`${width} px, a card in Interested`, async () => {
+      for (const width of widths) {
+        await test.step(`${width} px, a card in New`, async () => {
           await resize(page, width);
+          // It can't be scrolled any further into view (qa on #900).
+          await walkColumns(
+            page,
+            card(page, fresh.company, fresh.title),
+            freshName,
+            'New',
+            rightTo(0),
+          );
+        });
+        await test.step(`${width} px, a card in Interested`, async () => {
           await walkColumns(page, card(page, opp.company, opp.title), name, 'Interested', [
             ...rightTo(COLUMNS.indexOf('Interested')),
             ...leftFrom(last),
           ]);
         });
-        if (expanded.length === 0) continue;
+        if (!expanded.includes('Dismissed')) continue;
         await test.step(`${width} px, a card in Dismissed`, async () => {
           const at = COLUMNS.indexOf('Dismissed');
           await walkColumns(page, card(page, gone.company, gone.title), goneName, 'Dismissed', [
@@ -474,6 +494,121 @@ test.describe('a keyboard drag reaches every column at any board width (#886)', 
       }
     });
   }
+
+  for (const end of ['Dismissed', 'Closed']) {
+    test(`picked up in each chain column at 768 px with ${end} expanded: over its own column, and a drop there changes nothing`, async ({
+      page,
+    }) => {
+      test.setTimeout(120_000);
+      await page.setViewportSize({ width: 1920, height: 1000 });
+      await registerUser(page);
+      const chain = COLUMNS.slice(0, 6);
+      for (const col of chain) {
+        const opp = { company: 'Initrode', title: `Card in ${col}` };
+        await createOpportunity(page, opp);
+        if (col !== 'New') await moveWithMenu(page, opp, col);
+      }
+      await page.getByRole('button', { name: `Expand ${end} (0)` }).click();
+      await resize(page, 768);
+      for (const col of chain) {
+        await test.step(col, async () => {
+          const name = `Initrode: Card in ${col}`;
+          // As the board opens, and scrolled to either end, the focused card away from view.
+          for (const scrolled of ['focused', 'start', 'end'] as const) {
+            await card(page, 'Initrode', `Card in ${col}`).focus();
+            if (scrolled !== 'focused') await scrollBoard(page, scrolled);
+            await page.keyboard.press('Space');
+            await expect(liveRegion(page), scrolled).toHaveText(
+              `${name} is over the ${col} column.`,
+            );
+            // The sensor listens from a timer after the pick-up (see keyboardDrop).
+            await page.waitForTimeout(100);
+            await page.keyboard.press('Space');
+            await expect(liveRegion(page), scrolled).toHaveText(
+              `${name} was dropped on the ${col} column.`,
+            );
+            await expect(page.getByRole('dialog')).toHaveCount(0);
+            await expect(column(page, col).getByRole('article', { name })).toHaveCount(1);
+          }
+        });
+      }
+    });
+  }
+
+  test('a focused card the board was scrolled away from is picked up in its own column, at 768 and 900 px', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.setViewportSize({ width: 1920, height: 1000 });
+    await registerUser(page);
+    const opp = { company: 'Initrode', title: 'Walking Card' };
+    const name = `${opp.company}: ${opp.title}`;
+    await createOpportunity(page, opp);
+    await moveWithMenu(page, opp, 'Interested');
+    await page.getByRole('button', { name: /^Expand Dismissed/ }).click();
+    await page.getByRole('button', { name: /^Expand Closed/ }).click();
+    for (const layout of ['both expanded', 'Dismissed expanded']) {
+      if (layout === 'Dismissed expanded') {
+        await page.getByRole('button', { name: 'Collapse Closed' }).click();
+      }
+      for (const width of [768, 900]) {
+        await resize(page, width);
+        for (const away of ['start', 'end'] as const) {
+          await card(page, opp.company, opp.title).focus();
+          await scrollBoard(page, away);
+          await page.keyboard.press('Space');
+          const where = `${layout}, ${width} px, scrolled to the ${away}`;
+          await expect(liveRegion(page), where).toHaveText(
+            `${name} is over the Interested column.`,
+          );
+          await stepTo(page, 'ArrowRight', `${name} is over the Preparing column.`);
+          await page.keyboard.press('Escape');
+          await expect(liveRegion(page)).toHaveText(`Moving ${name} was cancelled.`);
+        }
+      }
+    }
+  });
+
+  test('Down and Up reorder within a column at 768 px with Dismissed expanded, and never leave it', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1920, height: 1000 });
+    await registerUser(page);
+    for (const title of ['Card One', 'Card Two', 'Card Three']) {
+      await createOpportunity(page, { company: 'Initrode', title });
+    }
+    const cards = column(page, 'New').getByRole('article');
+    await expect(cards).toHaveCount(3);
+    const order = () => cards.evaluateAll((all) => all.map((a) => a.getAttribute('aria-label')));
+    const before = await order();
+    await page.getByRole('button', { name: /^Expand Dismissed/ }).click();
+    await resize(page, 768);
+
+    const reorder = async (
+      index: number,
+      key: 'ArrowDown' | 'ArrowUp',
+      wanted: (string | null)[],
+    ) => {
+      await cards.nth(index).focus();
+      await page.keyboard.press('Space');
+      const name = (await order()).at(index);
+      const over = `${name} is over the New column.`;
+      await expect(liveRegion(page)).toHaveText(over);
+      // The sensor listens from a timer after the pick-up (see keyboardDrop), and a move within a
+      // column is announced in the same words, so there is nothing else to wait for.
+      await page.waitForTimeout(200);
+      await page.keyboard.press(key);
+      await page.waitForTimeout(200);
+      await expect(liveRegion(page)).toHaveText(over);
+      await page.keyboard.press('Space');
+      await expect(liveRegion(page)).toHaveText(`${name} was dropped on the New column.`);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect.poll(order).toEqual(wanted);
+    };
+    const [one, two, three] = before;
+    await reorder(0, 'ArrowDown', [two!, one!, three!]);
+    await reorder(2, 'ArrowUp', [two!, three!, one!]);
+  });
 
   test('dropped on a column that was out of view at 768 px: it moves there', async ({ page }) => {
     await page.setViewportSize({ width: 768, height: 1000 });

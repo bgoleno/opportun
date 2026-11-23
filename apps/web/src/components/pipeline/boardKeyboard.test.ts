@@ -202,27 +202,31 @@ describe('the board keyboard drag on a board narrower than its columns (#886)', 
       rects.set(id, live);
       droppables.set(id, { id, node: { current: node } } as unknown as DroppableContainer);
     });
-    const step: KeyboardStep = { current: null };
+    const step: KeyboardStep = { at: null, column: null };
     const getter = boardKeyboardCoordinates(
       () => columns,
       (id) => String(id),
       step,
     );
     const dragged = rect(108, 160, 272, 96);
-    const go = (code: string, over: string) =>
-      getter({ code, preventDefault: vi.fn() } as unknown as KeyboardEvent, {
+    let last: { scrollableAncestors: Element[] };
+    const go = (code: string, over: string, scrollableAncestors: Element[] = []) => {
+      const context = {
+        active: { id: 'new' },
+        collisionRect: dragged,
+        droppableRects: rects,
+        droppableContainers: droppables,
+        over: { id: over },
+        scrollableAncestors,
+      };
+      last = context;
+      return getter({ code, preventDefault: vi.fn() } as unknown as KeyboardEvent, {
         active: 'new',
         currentCoordinates: { x: dragged.left, y: dragged.top },
-        context: {
-          active: { id: 'new' },
-          collisionRect: dragged,
-          droppableRects: rects,
-          droppableContainers: droppables,
-          over: { id: over },
-          scrollableAncestors: [],
-        } as never,
+        context: context as never,
       });
-    return { area, step, go, rects, droppables };
+    };
+    return { area, step, go, rects, droppables, lastContext: () => last };
   }
 
   /** The card's centre for the coordinates the getter gave. */
@@ -231,11 +235,11 @@ describe('the board keyboard drag on a board narrower than its columns (#886)', 
   it('scrolls a column that is out of view into view, and puts the card on it', () => {
     const b = narrowBoard(0);
     const at = b.go(KeyboardCode.Right, 'interested');
-    expect(b.step.current).toBe('preparing');
+    expect(b.step.at).toBe('preparing');
     expect(b.area.scrollLeft).toBe(288);
     expect(centre(at)).toBe(100 + 600 - 288 / 2);
     // And back, leftwards.
-    b.step.current = 'interested';
+    b.step.at = 'interested';
     b.area.scrollLeft = 588;
     b.go(KeyboardCode.Left, 'interested');
     expect(b.area.scrollLeft).toBe(0);
@@ -245,10 +249,10 @@ describe('the board keyboard drag on a board narrower than its columns (#886)', 
     const b = narrowBoard(0);
     for (const column of ['interested', 'preparing', 'offer', 'closed']) {
       b.go(KeyboardCode.Right, 'new');
-      expect(b.step.current).toBe(column);
+      expect(b.step.at).toBe(column);
     }
     expect(b.go(KeyboardCode.Right, 'new')).toBeUndefined();
-    expect(b.step.current).toBe('closed');
+    expect(b.step.at).toBe('closed');
   });
 
   it('centres a column wider than the area', () => {
@@ -260,43 +264,106 @@ describe('the board keyboard drag on a board narrower than its columns (#886)', 
   it('reaches every column when the area has no width at all', () => {
     const b = narrowBoard(0, 0);
     expect(b.go(KeyboardCode.Right, 'new')).toBeDefined();
-    expect(b.step.current).toBe('interested');
+    expect(b.step.at).toBe('interested');
   });
 
-  it('scrolls the area to its end beside a pinned column', () => {
+  it('leaves a pinned column, always in view, alone', () => {
     const b = narrowBoard(10);
     b.go(KeyboardCode.Right, 'offer');
-    expect(b.step.current).toBe('closed');
-    expect(b.area.scrollLeft).toBe(1188);
+    expect(b.step.at).toBe('closed');
+    expect(b.area.scrollLeft).toBe(10);
+  });
+
+  it('leaves dnd-kit nothing to scroll on a step, and what it had on Up and Down', () => {
+    const b = narrowBoard(0);
+    const stepped = b.go(KeyboardCode.Right, 'new', [b.area]);
+    expect(stepped).toBeDefined();
+    expect(b.lastContext().scrollableAncestors).toEqual([]);
+    vi.mocked(sortableKeyboardCoordinates).mockReturnValueOnce({ x: 1, y: 2 });
+    b.go(KeyboardCode.Down, 'interested', [b.area]);
+    expect(b.lastContext().scrollableAncestors).toEqual([b.area]);
   });
 
   it('forgets its step on Up and Down when they move, and keeps it when they do not', () => {
     const b = narrowBoard(0);
     const spy = vi.mocked(sortableKeyboardCoordinates);
-    b.step.current = 'offer';
+    b.step.at = 'offer';
     spy.mockReturnValueOnce(undefined);
     b.go(KeyboardCode.Down, 'offer');
-    expect(b.step.current).toBe('offer');
+    expect(b.step.at).toBe('offer');
     spy.mockReturnValueOnce({ x: 1, y: 2 });
     b.go(KeyboardCode.Up, 'offer');
-    expect(b.step.current).toBeNull();
+    expect(b.step.at).toBeNull();
   });
 
-  it('is over the column stepped to, wherever the card is; a pointer, or no step, is as before', () => {
-    const step: KeyboardStep = { current: 'closed' };
-    const args = {
-      active: { id: 'other' } as never,
-      collisionRect: rect(1010, 170, 272, 96),
-      droppableRects: RECTS,
-      droppableContainers: containers,
-      pointerCoordinates: null,
-    };
-    expect(keyboardFirst(step)(args).map((c) => c.id)).toEqual(['closed']);
-    const pointer = { ...args, pointerCoordinates: { x: 1100, y: 200 } };
-    expect(keyboardFirst(step)(pointer)).toEqual(boardCollision(pointer));
-    for (const current of [null, 'gone']) {
-      expect(keyboardFirst({ current })(args)).toEqual(boardCollision(args));
+  it('keeps the column it is in with the step', () => {
+    const b = narrowBoard(0);
+    b.go(KeyboardCode.Right, 'new');
+    expect(b.step).toEqual({ at: 'interested', column: 'interested' });
+    vi.mocked(sortableKeyboardCoordinates).mockReturnValueOnce({ x: 1, y: 2 });
+    b.go(KeyboardCode.Down, 'interested');
+    expect(b.step).toEqual({ at: null, column: 'interested' });
+  });
+
+  const at = (over: Partial<Parameters<typeof boardCollision>[0]> = {}) => ({
+    active: { id: 'other' } as never,
+    collisionRect: rect(1010, 170, 272, 96),
+    droppableRects: RECTS,
+    droppableContainers: containers,
+    pointerCoordinates: null,
+    ...over,
+  });
+
+  it('is over what the step says, wherever the card is; a pointer is as before', () => {
+    for (const id of ['closed', 'card']) {
+      const step: KeyboardStep = { at: id, column: columnOf(id)! };
+      const far = at({ collisionRect: rect(0, 0, 272, 96) });
+      expect(keyboardFirst(step, columnOf)(far).map((c) => c.id)).toEqual([id]);
+      const pointer = at({ pointerCoordinates: { x: 1100, y: 200 } });
+      expect(keyboardFirst(step, columnOf)(pointer)).toEqual(boardCollision(pointer));
     }
-    expect(boardCollision(args)[0]?.id).toBe('card');
+    for (const none of [
+      { at: null, column: null },
+      { at: 'gone', column: null },
+    ]) {
+      expect(keyboardFirst(none, columnOf)(at())).toEqual(boardCollision(at()));
+    }
+    expect(boardCollision(at())[0]?.id).toBe('card');
+  });
+
+  // #833: a chain card scrolled away under a pinned column is not under the dragged card.
+  it('by where it is, only what is on screen can be under the card', () => {
+    const b = narrowBoard(0, 112);
+    const node = document.createElement('article');
+    b.area.append(node);
+    b.rects.set('hidden card', rect(230, 150, 200, 96));
+    b.droppables.set('hidden card', {
+      id: 'hidden card',
+      node: { current: node },
+    } as unknown as DroppableContainer);
+    const placed = at({
+      collisionRect: rect(114, 160, 272, 96),
+      droppableRects: b.rects,
+      droppableContainers: [...b.droppables.values()],
+    });
+    expect(boardCollision(placed).map((c) => c.id)).toEqual(['closed']);
+  });
+
+  // 768 px with one end column expanded: 112 px of chain, so a 272 px card's centre is past its
+  // end, under the pinned column (qa on #900).
+  it('after Up or Down stays in its column while its centre is in it, on screen or not', () => {
+    const b = narrowBoard(0, 112);
+    const own = (id: UniqueIdentifier) => String(id);
+    const placed = at({
+      collisionRect: rect(108, 160, 272, 96),
+      droppableRects: b.rects,
+      droppableContainers: [...b.droppables.values()],
+    });
+    expect(boardCollision(placed)[0]?.id).toBe('closed');
+    const step: KeyboardStep = { at: null, column: 'new' };
+    expect(keyboardFirst(step, own)(placed)[0]?.id).toBe('new');
+    // Out of its column, where it is decides.
+    step.column = 'offer';
+    expect(keyboardFirst(step, own)(placed)).toEqual(boardCollision(placed));
   });
 });

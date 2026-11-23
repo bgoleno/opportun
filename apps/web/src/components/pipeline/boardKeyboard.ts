@@ -13,6 +13,7 @@ import {
   type ClientRect,
   type CollisionDescriptor,
   type CollisionDetection,
+  type DroppableContainer,
   type KeyboardCoordinateGetter,
   type UniqueIdentifier,
 } from '@dnd-kit/core';
@@ -45,29 +46,26 @@ export function visibleRect(
   return { ...rect, left, right, width: right - left };
 }
 
-/** The column a keyboard drag last stepped to, or null: not yet, or Up or Down since. */
+/**
+ * Where a keyboard drag is (#886), both null when there is none.
+ * - `at` is what the card is over, whatever its centre is under: the card itself from its pick-up,
+ *   the column after Left or Right. Null once Up or Down has moved it.
+ * - `column` is the column that is in. A chain column narrower than the card leaves the card's
+ *   centre under a pinned column beside it, so after Up or Down the card stays in this column
+ *   while its centre is anywhere in it, on screen or not.
+ */
 export interface KeyboardStep {
-  current: string | null;
+  at: UniqueIdentifier | null;
+  column: string | null;
 }
 
 /**
- * Scrolls the board's area, at once, so that a chain column is in view (centred when it is wider
- * than the area). A pinned terminal column is always in view: the area is then scrolled to its end
- * beside it, which also leaves dnd-kit's sensor nothing of its own to scroll (it scrolls a card's
- * scrollable ancestors toward the arrow, and would scroll instead of moving the card).
+ * Scrolls the board's area, at once, so that a chain column is in view, centred when it is wider
+ * than the area. A pinned terminal column is always in view.
  */
-function bringIntoView(
-  target: HTMLElement | null | undefined,
-  from: HTMLElement | null | undefined,
-) {
-  const board = `[${BOARD_SCROLLER_ATTR}]`;
-  const area = target?.closest(board);
-  if (target == null) return;
-  if (area == null) {
-    const fromArea = from?.closest(board);
-    if (fromArea != null) fromArea.scrollLeft = fromArea.scrollWidth;
-    return;
-  }
+function bringIntoView(target: HTMLElement | null | undefined) {
+  const area = target?.closest(`[${BOARD_SCROLLER_ATTR}]`);
+  if (target == null || area == null) return;
   const a = area.getBoundingClientRect();
   const t = target.getBoundingClientRect();
   if (t.width > a.width) area.scrollLeft += t.left + t.width / 2 - (a.left + a.width / 2);
@@ -81,7 +79,7 @@ function bringIntoView(
  * centre line of its visible part, near its top; nothing at either end. `step` records the column,
  * which is what the card is then over (`keyboardFirst`), wherever scrolling leaves the card.
  * Up and Down: sortableKeyboardCoordinates, so reordering within a column (#240) is unchanged, and
- * what the card is over is again decided by where it is.
+ * what the card is over is decided by where it is.
  * `columnOf` names the column of a droppable: a column itself, or a card's column.
  */
 export function boardKeyboardCoordinates(
@@ -92,26 +90,33 @@ export function boardKeyboardCoordinates(
   return (event, args) => {
     if (event.code !== KeyboardCode.Left && event.code !== KeyboardCode.Right) {
       const next = sortableKeyboardCoordinates(event, args);
-      if (next !== undefined && step !== undefined) step.current = null;
+      if (next !== undefined && step !== undefined) step.at = null;
       return next;
     }
     event.preventDefault();
     const { active, collisionRect, droppableContainers, droppableRects, over } = args.context;
     if (active === null || collisionRect === null) return undefined;
     const order = columns();
-    // Where the card is now: the column it stepped to, or what it is over, or at the start of a
-    // drag its own column.
-    const current = step?.current ?? columnOf(over?.id ?? active.id) ?? columnOf(active.id);
+    // Where the card is now: what the step says, or what it is over, or at the start of a drag its
+    // own column.
+    const current = columnOf(step?.at ?? over?.id ?? active.id) ?? columnOf(active.id);
     const at = current === undefined ? -1 : order.indexOf(current);
     if (current === undefined || at === -1) return undefined;
     const target = order[at + (event.code === KeyboardCode.Right ? 1 : -1)];
     if (target === undefined) return undefined;
     const node = droppableContainers.get(target)?.node.current;
-    bringIntoView(node, droppableContainers.get(current)?.node.current);
+    bringIntoView(node);
+    // The board has scrolled itself. dnd-kit's sensor next scrolls the card's scrollable ancestors
+    // toward the arrow by its own rule, reading them from this same context, which would take the
+    // column away from under the card again, so a step leaves it none to scroll.
+    args.context.scrollableAncestors = [];
     // dnd-kit's measured rectangles follow the scroll, so this is where the column is now.
     const measured = droppableRects.get(target);
     if (measured === undefined) return undefined;
-    if (step !== undefined) step.current = target;
+    if (step !== undefined) {
+      step.at = target;
+      step.column = target;
+    }
     // Its visible part (#833): the centre of a column half scrolled away can be hidden under
     // the pinned terminal columns. Null only when the board's area has no width left at all.
     const rect = visibleRect(measured, node) ?? measured;
@@ -123,23 +128,50 @@ export function boardKeyboardCoordinates(
 }
 
 /**
- * The column a keyboard drag stepped to, when it has (#886); otherwise `boardCollision`. A step
- * names its column, so it does not depend on where the card and a scrolled column ended up. Only
- * for the keyboard: a pointer drag has pointer coordinates, and never a step.
+ * What a keyboard drag is over (#886): what its step says (`KeyboardStep.at`); else, after Up or
+ * Down, its column's droppable that holds the card's centre, on screen or not, smallest first; else
+ * `boardCollision`. A pointer drag has pointer coordinates and no step: always `boardCollision`.
  */
-export function keyboardFirst(step: Readonly<KeyboardStep>): CollisionDetection {
+export function keyboardFirst(
+  step: Readonly<KeyboardStep>,
+  columnOf: (id: UniqueIdentifier) => string | undefined,
+): CollisionDetection {
   return (args) => {
-    if (args.pointerCoordinates === null && step.current !== null) {
-      const container = args.droppableContainers.find((c) => c.id === step.current);
-      if (container !== undefined) {
-        return [{ id: container.id, data: { droppableContainer: container, value: 0 } }];
-      }
+    if (args.pointerCoordinates !== null) return boardCollision(args);
+    const at = args.droppableContainers.find((c) => c.id === step.at);
+    if (at !== undefined) return [{ id: at.id, data: { droppableContainer: at, value: 0 } }];
+    if (step.column !== null) {
+      const own = args.droppableContainers.filter((c) => columnOf(c.id) === step.column);
+      const holding = holdingCentre(args, own, (rect) => rect);
+      if (holding.length > 0) return holding;
     }
     return boardCollision(args);
   };
 }
 
 const area = (r: ClientRect) => r.width * r.height;
+
+/** The containers whose rectangle, as `seen` gives it, holds the card's centre, smallest first. */
+function holdingCentre(
+  args: Parameters<CollisionDetection>[0],
+  containers: readonly DroppableContainer[],
+  seen: (rect: ClientRect, node: HTMLElement | null) => ClientRect | null,
+): CollisionDescriptor[] {
+  const { collisionRect, droppableRects } = args;
+  const cx = collisionRect.left + collisionRect.width / 2;
+  const cy = collisionRect.top + collisionRect.height / 2;
+  const holding: CollisionDescriptor[] = [];
+  for (const container of containers) {
+    const measured = droppableRects.get(container.id);
+    if (measured === undefined) continue;
+    const r = seen(measured, container.node.current);
+    if (r === null) continue;
+    if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
+      holding.push({ id: container.id, data: { droppableContainer: container, value: area(r) } });
+    }
+  }
+  return holding.sort((a, b) => a.data.value - b.data.value);
+}
 
 /**
  * The pointer's column first (a pointer drag, as before); then every droppable whose rectangle
@@ -149,20 +181,8 @@ const area = (r: ClientRect) => r.width * r.height;
 export const boardCollision: CollisionDetection = (args) => {
   const pointer = pointerWithin(args);
   if (pointer.length > 0) return pointer;
-  const { collisionRect, droppableRects, droppableContainers } = args;
-  const cx = collisionRect.left + collisionRect.width / 2;
-  const cy = collisionRect.top + collisionRect.height / 2;
-  const holding: CollisionDescriptor[] = [];
-  for (const container of droppableContainers) {
-    const measured = droppableRects.get(container.id);
-    if (measured === undefined) continue;
-    // Only what is on screen can be under the card (#833): see visibleRect.
-    const r = visibleRect(measured, container.node.current);
-    if (r === null) continue;
-    if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
-      holding.push({ id: container.id, data: { droppableContainer: container, value: area(r) } });
-    }
-  }
-  if (holding.length > 0) return holding.sort((a, b) => a.data.value - b.data.value);
+  // Only what is on screen can be under the card (#833): see visibleRect.
+  const holding = holdingCentre(args, args.droppableContainers, visibleRect);
+  if (holding.length > 0) return holding;
   return rectIntersection(args);
 };

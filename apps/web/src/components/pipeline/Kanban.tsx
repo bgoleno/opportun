@@ -151,9 +151,13 @@ export function Kanban(props: {
   // For the keyboard getter (#475): the columns in on-screen order, and a droppable's column.
   const order = useRef<readonly string[]>([]);
   const columnOfId = useRef<(id: UniqueIdentifier) => string | undefined>(() => undefined);
-  // The column the keyboard drag has stepped to (#886): shared by the getter and the collision.
-  const [step] = useState<KeyboardStep>(() => ({ current: null }));
-  const [collision] = useState(() => keyboardFirst(step));
+  // Where a keyboard drag is (#886): shared by the getter and the collision.
+  const [step] = useState<KeyboardStep>(() => ({ at: null, column: null }));
+  const [collision] = useState(() => keyboardFirst(step, (id) => columnOfId.current(id)));
+  const place = (at: UniqueIdentifier | null) => {
+    step.at = at;
+    step.column = at === null ? null : (columnOfId.current(at) ?? null);
+  };
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     // Space only to pick up (issue #240): the default also starts a drag on Enter, which
@@ -168,8 +172,6 @@ export function Kanban(props: {
         (id) => columnOfId.current(id),
         step,
       ),
-      // At once, not smoothly: the next arrow press reads where the columns are.
-      scrollBehavior: 'auto',
       keyboardCodes: START_WITH_SPACE_ONLY,
     }),
   );
@@ -252,7 +254,7 @@ export function Kanban(props: {
   };
 
   function onDragEnd(e: DragEndEvent) {
-    step.current = null;
+    place(null);
     setActiveId(null);
     const drop = dropOf(e.active.id, e.over?.id);
     if (drop.kind === 'stage') {
@@ -319,7 +321,9 @@ export function Kanban(props: {
       collisionDetection={collision}
       accessibility={{ announcements }}
       onDragStart={(e) => {
-        step.current = null;
+        // A keyboard drag is over its own card until an arrow moves it (#886): at a narrow width
+        // the card's centre can be under a pinned column, however the board is scrolled.
+        place(e.activatorEvent instanceof KeyboardEvent ? e.active.id : null);
         // A keyboard drag starts with its card in view (#833, qa): a card at the end of a chain
         // column the pinned terminal columns cover (an expanded Dismissed hides the end of Offer)
         // is scrolled into the board's area, so it is over its own column, and announced there.
@@ -334,7 +338,7 @@ export function Kanban(props: {
         setOutcome('');
       }}
       onDragCancel={() => {
-        step.current = null;
+        place(null);
         setActiveId(null);
       }}
       onDragEnd={onDragEnd}
