@@ -27,6 +27,8 @@ import { registerTwoUsers, type TestClient } from './isolation';
 
 /** When set, the check's own outcome can't be written either, as with a company that is gone. */
 let flagFails = false;
+/** How many of the next notes of an ended check can't be written. */
+let notesToFail = 0;
 vi.mock('../src/lib/postingReconcile', async (orig) => {
   const real = await orig<typeof import('../src/lib/postingReconcile')>();
   return {
@@ -36,7 +38,10 @@ vi.mock('../src/lib/postingReconcile', async (orig) => {
       return real.flag(...args);
     },
     writeReconcileNote: (...args: Parameters<typeof real.writeReconcileNote>) => {
-      if (flagFails) throw notFound();
+      if (notesToFail > 0) {
+        notesToFail -= 1;
+        throw notFound();
+      }
       return real.writeReconcileNote(...args);
     },
   };
@@ -44,10 +49,12 @@ vi.mock('../src/lib/postingReconcile', async (orig) => {
 
 const boot = useApi();
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
-const log = { warn: () => {}, info: () => {}, error: () => {} } as never;
+const quiet = { warn: () => {}, info: () => {}, error: () => {} };
+const log = quiet as never;
 afterEach(() => {
   setRaceHook(undefined);
   flagFails = false;
+  notesToFail = 0;
 });
 
 const NOTE = {
@@ -136,15 +143,24 @@ describe('at boot, a check nothing is left to finish ends (#869)', () => {
   });
 
   it('one that cannot be settled does not stop the others', async () => {
-    const { app, a } = await boot();
-    const opp = await searching(app, a);
-    flagFails = true;
-    await expect(settleAbandonedChecks(app.db, log)).resolves.toBe(0);
-    flagFails = false;
-    const other = await searching(app, a, 'Other');
-    await expect(settleAbandonedChecks(app.db, log)).resolves.toBe(1);
-    expect(await state(app, other.id)).toEqual(SETTLED);
-    expect(await state(app, opp.id)).toEqual(SETTLED);
+    const { app, a, b } = await boot();
+    const opps = [
+      await searching(app, a, 'One'),
+      await searching(app, a, 'Two'),
+      await searching(app, b, 'Three'),
+    ];
+    // Whichever the sweep reaches first: the two after it are in the same sweep.
+    notesToFail = 1;
+    const warned: string[] = [];
+    const sweepLog = { ...quiet, warn: (_o: unknown, msg: string) => warned.push(msg) } as never;
+    await expect(settleAbandonedChecks(app.db, sweepLog)).resolves.toBe(2);
+    expect(warned).toEqual(['unfinished posting check not settled']);
+    const noted = [];
+    for (const { id } of opps) {
+      expect(await state(app, id)).toEqual(SETTLED);
+      noted.push((await notes(app, id)).length);
+    }
+    expect(noted.sort()).toEqual([0, 1, 1]);
   });
 });
 
