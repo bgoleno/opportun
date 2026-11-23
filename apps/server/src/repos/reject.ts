@@ -14,7 +14,7 @@ import { invalidateTriageContext } from '../lib/triageContext';
 import { newId, parseMailPattern } from '@opportun/core';
 import { and, eq, isNull } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { withTransaction } from '../db/client';
+import { lockScope, withTransaction } from '../db/client';
 import { communications, dismissalFeedback } from '../db/schema';
 import type { RejectionReason } from '../db/schema.shared';
 import { HttpError } from '../lib/errors';
@@ -117,6 +117,8 @@ export async function rejectCommunication(
   if (row.rejectedAt === null) {
     const now = Date.now();
     const erased = await withTransaction(db, async (tx) => {
+      // The user's lock first, as reclassify (#920; the rule is at submissionScope).
+      await lockScope(tx, `user:${ctx.userId}`);
       // The condition is in the erasing UPDATE itself, not a read before it (tl on #666): a link
       // that commits first leaves this updating nothing, and on Postgres a concurrent one waits
       // on the row and the WHERE is checked again, so there is no window between check and erase.

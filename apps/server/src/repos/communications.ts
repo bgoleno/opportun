@@ -32,7 +32,7 @@ import { countWhere, likeContains, type Page } from './list';
 import { rejectCommunication } from './reject';
 import { createOpportunity, transitionOpportunity, type OpportunityView } from './opportunities';
 import { indexActivity, indexCommunication, removeFromIndex } from './search';
-import { withTransaction } from '../db/client';
+import { lockScope, withTransaction } from '../db/client';
 
 export type CommunicationRow = typeof communications.$inferSelect;
 
@@ -884,6 +884,9 @@ export async function reclassify(
   input: ReclassifyInput,
 ): Promise<CommunicationView> {
   return await withTransaction(db, async (tx) => {
+    // The user's lock first: this writes a message and then names its opportunity, and a delete or a
+    // merge of that goes the other way (#920; the rule is at submissionScope).
+    await lockScope(tx, `user:${ctx.userId}`);
     const comm = await getRowSync(tx, ctx, id);
     if (input.opportunityId != null) await assertOpportunityOwned(tx, ctx, input.opportunityId);
     const classification = input.classification ?? comm.classification ?? 'other';

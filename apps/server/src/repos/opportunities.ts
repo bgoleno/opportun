@@ -656,6 +656,8 @@ export async function reorderOpportunities(
   changes: ReorderChange[],
 ): Promise<void> {
   await withTransaction(db, async (tx) => {
+    // The rows are written in the caller's order, and a merge holds two of them (#920).
+    await lockScope(tx, userScope(ctx));
     const now = Date.now();
     for (const { id, sortOrder } of changes) {
       await tx.update(opportunities).set({ sortOrder, updatedAt: now }).where(owned(ctx, id)).run();
@@ -865,6 +867,9 @@ export async function deleteOpportunity(db: Db, ctx: UserCtx, id: string): Promi
   await withTransaction(db, async (tx) => {
     // Its attempts' locks before any row write: the delete cascades to them (#173).
     await lockAttemptsOf(tx, ctx, [id]);
+    // The user's lock first of the rest (#920): whatever writes or names two opportunities, or a
+    // message and then its opportunity, has it, and the delete reaches those rows the other way.
+    await lockScope(tx, userScope(ctx));
     // Then the opportunity's row, its activities', and the search rows last: the order a save of any
     // of them takes, which writes its row and then indexes it. With the search rows first, each could
     // wait for the other (40P01, #917). Locked FOR UPDATE, so an activity being added (its foreign
@@ -909,6 +914,13 @@ export async function mergeOpportunities(
     // submissionScope), in a fixed order so two merges cannot wait on each other: a posting
     // change marks a live attempt, and mail ingest confirms a submitted one (#173).
     await lockAttemptsOf(tx, ctx, [keepId, otherId]);
+    // The user's lock (#920), then both rows, in the delete's order and before anything is read: an
+    // add, a link or a save of either is done before the merge and goes with it, or waits and finds
+    // the other gone. The search rows come last.
+    await lockScope(tx, userScope(ctx));
+    for (const id of [keepId, otherId].sort()) {
+      if (!(await lockOpportunityRow(tx, ctx, id))) throw notFound();
+    }
     const keep = await getViewSync(tx, ctx, keepId);
     const other = await getViewSync(tx, ctx, otherId);
     const now = Date.now();
@@ -1021,12 +1033,12 @@ export async function mergeOpportunities(
       })
       .returning()
       .get();
-    await indexActivity(tx, ctx, note);
-    await removeFromIndex(tx, ctx, 'opportunity', otherId);
     // Everything moved, the other opportunity not yet deleted: a test parks the merge here to
     // prove the lock order with an edit of that opportunity (test/submissionPostingChange.test.ts).
     await racePoint('opportunities.merge.moved');
     await tx.delete(opportunities).where(owned(ctx, otherId)).run();
+    await indexActivity(tx, ctx, note);
+    await removeFromIndex(tx, ctx, 'opportunity', otherId);
     return await getViewSync(tx, ctx, keepId);
   });
 }
@@ -1053,6 +1065,8 @@ export async function dismissPossibleDuplicate(
   otherId: string,
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
+    // Writes one of them and then names both (#920).
+    await lockScope(tx, userScope(ctx));
     await getViewSync(tx, ctx, id);
     await getViewSync(tx, ctx, otherId);
     const now = Date.now();
