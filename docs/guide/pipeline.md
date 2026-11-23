@@ -404,8 +404,9 @@ confirming the attach is gone.
 
 If Find posting cannot read the company's board, or could not finish looking for one, the Details
 tab says "Couldn't read the company's board just now, so nothing was checked." in one notice, with
-**Try again** and **Add by hand** (the second opens the search and paste dialog; a confirmed
-posting has nothing to add, so it is not offered there). It stands in for the state's own line,
+**Try again** and **Add by hand** (the second opens "Add the posting", for a posting link or pasted text, with no
+search, since there is no board that was read to search; a confirmed posting has nothing to add,
+so it is not offered there). It stands in for the state's own line,
 so there is one notice and one **Try again**; the state's **Confirm** stays beside it when the
 state offers one. While a background check runs, only "Checking the company's job board for this
 posting." shows. The notice goes when a check ends or you attach or confirm a posting. A company
@@ -425,8 +426,8 @@ What it says afterwards depends on what changed:
   the timeline.
 
 A Refetch is not your confirmation: when it changes nothing or keeps your description, the
-posting stays as it was, matched or confirmed by you. One that replaces the description with the
-board's copy counts as matched. A row you pick yourself is always recorded on the timeline.
+posting stays as it was, matched or confirmed by you. One that changes anything while the description is
+not yours counts as matched. A row you pick yourself is always recorded on the timeline.
 
 The description is stored as text, so it survives the posting being taken down. A description
 you wrote or edited yourself is never overwritten; one Opportun wrote, such as the page text
