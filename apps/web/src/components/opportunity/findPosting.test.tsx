@@ -232,6 +232,86 @@ describe('Find posting', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/still checking this posting/i);
   });
 
+  // #936: the job is the user's already, as another opportunity.
+  describe('a job already tracked (#936)', () => {
+    const refused = (details: Record<string, unknown>) => ({
+      status: 409,
+      body: { error: { code: 'duplicate', ...details } },
+    });
+    const NAMED = {
+      existingId: 'opp-9',
+      existingTitle: 'Product Manager, SIEM',
+      existingCompany: 'Sentinel Edge',
+    };
+
+    it('Find posting says so, and links to the opportunity', async () => {
+      setup({ 'POST /opportunities/opp-1/find-posting': () => refused(NAMED) });
+      renderWithProviders(<DetailsPanel opp={BARE} />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent(
+        'This job is already tracked as Product Manager, SIEM at Sentinel Edge.',
+      );
+      expect(
+        within(alert).getByRole('link', { name: 'Product Manager, SIEM at Sentinel Edge' }),
+      ).toHaveAttribute('href', '/opportunities/opp-9');
+      expect(screen.queryByText(/already exists/i)).toBeNull();
+    });
+
+    it('a row picked in the dialog says so too', async () => {
+      setup({
+        'POST /opportunities/opp-1/find-posting': {
+          outcome: 'candidates',
+          candidates: [CANDIDATE('Staff Product Manager, SIEM', 'United States', '1')],
+          board: [CANDIDATE('Staff Product Manager, SIEM', 'United States', '1')],
+        },
+        'POST /opportunities/opp-1/posting': () => refused(NAMED),
+      });
+      renderWithProviders(<DetailsPanel opp={BARE} />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Attach' }));
+      const alert = await within(dialog).findByRole('alert');
+      expect(
+        within(alert).getByRole('link', { name: 'Product Manager, SIEM at Sentinel Edge' }),
+      ).toHaveAttribute('href', '/opportunities/opp-9');
+    });
+
+    // An older server, or one that lost it meanwhile, names the id alone.
+    it('with no name, it still says so and links', async () => {
+      setup({
+        'POST /opportunities/opp-1/find-posting': () => refused({ existingId: 'opp-9' }),
+      });
+      renderWithProviders(<DetailsPanel opp={BARE} />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('This job is already tracked as another opportunity.');
+      expect(within(alert).getByRole('link', { name: 'another opportunity' })).toHaveAttribute(
+        'href',
+        '/opportunities/opp-9',
+      );
+    });
+
+    it('with nothing to link to, the shared sentence', async () => {
+      setup({ 'POST /opportunities/opp-1/find-posting': () => refused({}) });
+      renderWithProviders(<DetailsPanel opp={BARE} />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('That already exists.');
+    });
+
+    it('markup in the name is shown as text', async () => {
+      setup({
+        'POST /opportunities/opp-1/find-posting': () =>
+          refused({ ...NAMED, existingTitle: '<img src=x onerror=alert(1)>' }),
+      });
+      renderWithProviders(<DetailsPanel opp={BARE} />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('<img src=x onerror=alert(1)> at Sentinel Edge');
+      expect(alert.querySelector('img')).toBeNull();
+    });
+  });
+
   // Any other failure is not about a check, so a change of state does not take it away.
   it('another error stays when the posting state changes (#870)', async () => {
     let now = { ...BARE, postingState: 'needs_review' } as OpportunityView;

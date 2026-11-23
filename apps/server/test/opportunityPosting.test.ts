@@ -15,10 +15,12 @@ import { eq } from 'drizzle-orm';
 import { communications, opportunities } from '../src/db/schema';
 import { atsJobRefOfUrl } from '../src/lib/atsJobRef';
 import { descriptionFingerprint } from '../src/lib/postingFingerprint';
+import { setRaceHook } from '../src/lib/racePoints';
 import { createCompany } from '../src/repos/companies';
 import { upsertInbound } from '../src/repos/communications';
 import {
   createOpportunity,
+  deleteOpportunity,
   getOpportunity,
   setPostingState,
   updateOpportunity,
@@ -39,7 +41,10 @@ const missingFetch = (async () => ({
 const boot = useApi(() => ({ build: { sourceFetch: missingFetch } }));
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
 
-afterEach(() => resetSources());
+afterEach(() => {
+  resetSources();
+  setRaceHook(undefined);
+});
 
 function posting(title: string, externalId: string): NormalizedPosting {
   return {
@@ -1002,6 +1007,86 @@ describe('POST /opportunities/:id/find-posting', () => {
     });
 
     expect(res.statusCode).toBe(404);
+  });
+});
+
+// The job Find posting found is tracked already (https://github.com/bgoleno/opportun/issues/936): the
+// refusal names that opportunity, the user's own.
+describe('a job already tracked as another opportunity', () => {
+  /** One of a's tracking the job at the board's location, and another without a location. */
+  async function twice() {
+    const { app, a, b } = await boot();
+    const p = posting('Product Manager, SIEM', '7663059003');
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    const tracked = await createOpportunity(app.db, ctxOf(a), {
+      companyName: 'Sentinel Edge',
+      title: 'Product Manager, SIEM',
+      location: p.location!,
+      sourceKind: 'manual',
+    });
+    boardServes([p]);
+    return { app, a, b, id, tracked: tracked.id, p };
+  }
+  const named = (existingId: string) => ({
+    error: {
+      code: 'duplicate',
+      existingId,
+      existingTitle: 'Product Manager, SIEM',
+      existingCompany: 'Sentinel Edge',
+    },
+  });
+
+  it('Find posting: refused, naming it, with nothing attached', async () => {
+    const { app, a, id, tracked } = await twice();
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toEqual(named(tracked));
+    expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+      postingUrl: null,
+      postingState: null,
+      descriptionMd: null,
+    });
+  });
+
+  it('a row picked by hand: the same', async () => {
+    const { a, id, tracked, p } = await twice();
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: { posting: p },
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toEqual(named(tracked));
+  });
+
+  it("another user's opportunity for the job neither refuses nor is named", async () => {
+    const { app, b, tracked, p } = await twice();
+    const id = await seed(app, b, { title: 'Product Manager, SIEM' });
+    boardServes([p]);
+    const res = await b.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ outcome: 'attached' });
+    expect(res.body).not.toContain(tracked);
+  });
+
+  // Gone between the refusal and the lookup: the refusal stands, unnamed.
+  it('one deleted as it is refused: still refused, without a name', async () => {
+    const { app, a, id, tracked } = await twice();
+    setRaceHook(async (point) => {
+      if (point === 'posting.alreadyTracked') await deleteOpportunity(app.db, ctxOf(a), tracked);
+    });
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toEqual({ error: { code: 'duplicate', existingId: tracked } });
   });
 });
 
