@@ -301,6 +301,11 @@ describe('why a start failed', () => {
     expect(startFailureReason(new Database.SqliteError('x', code), SQLITE)).toBe(reason);
   });
 
+  it("another error with a code of SQLite's shape is not SQLite's", () => {
+    expect(startFailureReason(withCode('SQLITE_CORRUPT'), SQLITE)).toBeUndefined();
+    expect(startFailureReason(withCode('ERR_BUSY'), SQLITE)).toBeUndefined();
+  });
+
   it.each<[string, string, StartFailureReason | undefined]>([
     ['EACCES', '/data', 'data_dir'],
     ['EROFS', '/data/db', 'data_dir'],
@@ -311,6 +316,14 @@ describe('why a start failed', () => {
     ['ENOENT', '/app/web/index.html', undefined],
   ])('%s on %s: %s', (code, path, reason) => {
     expect(startFailureReason(Object.assign(withCode(code), { path }), SQLITE)).toBe(reason);
+  });
+
+  it('a parent of a data directory that cannot be used, where the system names that', () => {
+    const cfg = { ...SQLITE, dataDir: '/srv/opportun/data', sqliteDir: '/srv/opportun/data' };
+    const at = (path: string) =>
+      startFailureReason(Object.assign(withCode('EACCES'), { path }), cfg);
+    expect(at('/srv/opportun')).toBe('data_dir');
+    expect(at('/srv/oppo')).toBeUndefined();
   });
 
   it.each<[string, StartFailureReason | undefined]>([
