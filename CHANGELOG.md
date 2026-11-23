@@ -12,8 +12,8 @@ when the milestone's work was merged.
 ### Pipeline board
 
 - **Pipeline board: a card moved by keyboard is picked up in its own column and reaches every
-  column on a board narrower than its columns.** In 0.5.0 it stayed in its column at 768 and
-  1024 px, and at wider widths with Dismissed and Closed expanded. Left and Right now scroll the next
+  column on a board narrower than its columns.** In 0.5.0 it could not reach every column at 768
+  and 1024 px, or at wider widths with Dismissed and Closed expanded. Left and Right now scroll the next
   column into view, and the card is announced in the column it is over. Pointer drags are
   unchanged. At 768 px with both end columns expanded the chain has no width left, so no chain
   column is on screen, though the card still steps through all of them
@@ -27,7 +27,7 @@ when the milestone's work was merged.
   check writes only while the description is still the one it read. When it is not, the check
   writes nothing, including no location, link or duplicate key, and the timeline says it skipped
   the description: "The description changed while the board was being checked, so the board search
-  left it as it is." Re-deriving a posting leaves such a description alone too
+  left it as it is."
   ([#856](https://github.com/bgoleno/opportun/issues/856); PR
   [#883](https://github.com/bgoleno/opportun/pull/883)).
 - **While a background check reads the company's board, the Apply panel and the Resume tab say so
