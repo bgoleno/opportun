@@ -63,7 +63,7 @@ merged after it.
   and the timeline says what each check did
   ([#835](https://github.com/bgoleno/opportun/issues/835); PR
   [#860](https://github.com/bgoleno/opportun/pull/860)).
-- **Recognising a job from its own careers-page link writes a timeline entry**
+- **Find posting writes a timeline entry when it recognises a job from its own careers-page link**
   ([#813](https://github.com/bgoleno/opportun/issues/813); PR
   [#847](https://github.com/bgoleno/opportun/pull/847)).
 - **Posting-link saves: the company's own boards, the later of two saves, and a check that runs
@@ -123,14 +123,16 @@ merged after it.
   are read ([#590](https://github.com/bgoleno/opportun/issues/590); PR
   [#640](https://github.com/bgoleno/opportun/pull/640)).
 - **The Referrals tab keeps up with your contacts.** It shows a contact you just added, renamed or
-  deleted the next time it opens, and a finished LinkedIn or contacts import refreshes it and the
-  network list at once. A referral ask shows the contact's current name, or marks them removed. A
-  used-up AI budget says so instead of "AI is unavailable"
+  deleted the next time it opens, and a LinkedIn or contacts import followed to the end on
+  **Settings > Import/Export** refreshes it and the network list at once. A referral ask shows the
+  contact's current name, or marks them removed. A used-up AI budget says so instead of "AI is
+  unavailable"
   ([#651](https://github.com/bgoleno/opportun/issues/651),
   [#694](https://github.com/bgoleno/opportun/issues/694); PRs
   [#688](https://github.com/bgoleno/opportun/pull/688),
   [#734](https://github.com/bgoleno/opportun/pull/734)).
-- **Deleting a contact also deletes the kept rankings' notes about them**
+- **Deleting a contact drops each kept referral ranking that names them**, and the list is
+  ranked again the next time it opens
   ([#710](https://github.com/bgoleno/opportun/issues/710); PR
   [#718](https://github.com/bgoleno/opportun/pull/718)).
 - **A contact's LinkedIn link must be a linkedin.com address**
@@ -242,8 +244,9 @@ merged after it.
   incurred**, measured or estimated, as a finished one does
   (PR [#752](https://github.com/bgoleno/opportun/pull/752)).
 - **Each user gets a fair share of a job board host.** One user's burst of board lookups no longer
-  makes other users' lookups to the same board time out, and the nightly board probe no longer
-  stops a vendor for everyone because of a wait on this server or one user's failing companies
+  makes other users' lookups to the same board time out. The nightly board probe no longer stops a
+  vendor for everyone because of a wait on this server, and one user's failing companies can stop
+  it for everyone at most once a week
   ([#617](https://github.com/bgoleno/opportun/issues/617); PR
   [#667](https://github.com/bgoleno/opportun/pull/667)).
 - **Observability: a long workflow's trace keeps its root span, and a failed metrics write is
