@@ -17,7 +17,11 @@ import { overMargin, peakSpend } from '../src/testSupport/mockAuth';
 import { MATCH_REPORT, TAILOR_FIND } from '../src/testSupport/mockAi';
 import { MOCK_RESUME_TEXT } from '../src/testSupport/mockDocs';
 import { mockOAuthCode, mockOAuthFetch } from '../src/testSupport/mockOAuth';
-import { FIXTURE_COMPANY, mockSourceFetch } from '../src/testSupport/mockSources';
+import {
+  FIXTURE_COMPANY,
+  mockGreenhouseSource,
+  mockSourceFetch,
+} from '../src/testSupport/mockSources';
 import { connectGoogle } from './fakeGoogle';
 import { testApp } from './helpers';
 import { PASSWORD, registerTwoUsers, setRegistrationOpen, type TestClient } from './isolation';
@@ -686,5 +690,49 @@ describe('peakSpend (#776)', () => {
   it('gives a refunded token straight back', () => {
     const ok = Array.from({ length: 5 }, (_, i) => ({ at: i, refund: true }));
     expect(peakSpend(ok, 30, W)).toBeCloseTo(1, 1);
+  });
+});
+
+describe('Board listing control (#859)', () => {
+  const read = async () => {
+    const out: { id: string | null | undefined; descriptionMd: string | null | undefined }[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the mock ignores its arguments
+    for await (const item of mockGreenhouseSource.fetchPostings({} as any, {} as any, null)) {
+      out.push({ id: item.posting.externalId, descriptionMd: item.posting.descriptionMd });
+    }
+    return out;
+  };
+
+  it('drops, appends and holds the next listings, counts them, and clears to loopback callers only', async () => {
+    const { app } = await mockedApp();
+    const set = (payload: unknown, remoteAddress = '127.0.0.1') =>
+      app.inject({
+        method: 'POST',
+        url: '/__mock/discovery/listing',
+        remoteAddress,
+        payload: payload as object,
+      });
+    expect((await set({ drop: ['1003'] }, '10.0.0.5')).statusCode).toBe(403);
+    expect((await set({ drop: ['not-an-id'] })).statusCode).toBe(400);
+    const ok = await set({ drop: ['1003'], append: { '1002': ' Now also Kafka.' }, holdMs: 300 });
+    expect(ok.statusCode).toBe(200);
+    const started = Date.now();
+    const rows = await read();
+    expect(Date.now() - started).toBeGreaterThanOrEqual(290);
+    expect(rows.map((r) => r.id)).toEqual(['1001', '1002']);
+    expect(rows[1]?.descriptionMd).toMatch(/ Now also Kafka\.$/);
+    const state = await app.inject({
+      method: 'GET',
+      url: '/__mock/discovery/listing',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(state.json()).toMatchObject({ reads: 1, listing: { drop: ['1003'], holdMs: 300 } });
+    const cleared = await app.inject({
+      method: 'DELETE',
+      url: '/__mock/discovery/listing',
+      remoteAddress: '127.0.0.1',
+    });
+    expect(cleared.statusCode).toBe(204);
+    expect((await read()).map((r) => r.id)).toEqual(['1001', '1002', '1003']);
   });
 });

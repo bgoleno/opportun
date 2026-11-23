@@ -60,10 +60,50 @@ export const FIXTURE_POSTINGS: readonly NormalizedPosting[] = [
 ];
 
 /** The ats_greenhouse override: the fixture postings whatever the configured slug. */
+/**
+ * What the next board listings do, for e2e specs on the posting flows (#859): hold the answer
+ * (a slow board, so a user can save while a check waits on it), leave jobs out (a job the posting
+ * names is no longer on the board), or add text to a job's description (the board's copy changed).
+ * Set with POST MOCK_SOURCE_PATH/listing and cleared with DELETE; a spec clears it when it is done.
+ */
+/** The longest a spec may hold one listing answer (per request; the body schema caps it too). */
+export const MAX_LISTING_HOLD_MS = 20_000;
+const LISTING_HOLD_STEP_MS = 50;
+
+interface ListingControl {
+  holdMs: number;
+  drop: readonly string[];
+  append: Readonly<Record<string, string>>;
+}
+const NO_CONTROL: ListingControl = { holdMs: 0, drop: [], append: {} };
+let listing: ListingControl = NO_CONTROL;
+/** Board listings read so far (GET MOCK_SOURCE_PATH/listing). */
+let listingReads = 0;
+
+/** Clears the listing control and its count (the app's close, and DELETE MOCK_SOURCE_PATH/listing). */
+export function resetListingControl(): void {
+  listing = NO_CONTROL;
+  listingReads = 0;
+}
+
 export const mockGreenhouseSource: DiscoverySource = {
   kind: 'ats_greenhouse',
   async *fetchPostings() {
-    for (const posting of FIXTURE_POSTINGS) yield { posting: { ...posting }, nextCursor: null };
+    listingReads += 1;
+    const control = listing;
+    // The hold is waited out in fixed steps, so no timer takes a duration from the request
+    // body; the body schema and MAX_LISTING_HOLD_MS bound how many steps there are.
+    const holdMs = Math.min(Math.max(control.holdMs, 0), MAX_LISTING_HOLD_MS);
+    for (let waited = 0; waited < holdMs; waited += LISTING_HOLD_STEP_MS) {
+      await new Promise((r) => setTimeout(r, LISTING_HOLD_STEP_MS));
+    }
+    for (const posting of FIXTURE_POSTINGS) {
+      if (posting.externalId != null && control.drop.includes(posting.externalId)) continue;
+      const extra = posting.externalId == null ? undefined : control.append[posting.externalId];
+      const descriptionMd =
+        extra === undefined ? posting.descriptionMd : `${posting.descriptionMd}${extra}`;
+      yield { posting: { ...posting, descriptionMd }, nextCursor: null };
+    }
   },
 };
 
@@ -143,6 +183,12 @@ export const mockSourceFetch: typeof safeFetch = async (url) => {
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const SuggestBody = z.object({ email: z.string().min(1).max(320) });
+const JobId = z.string().regex(/^\d{1,12}$/);
+const ListingBody = z.object({
+  holdMs: z.number().int().min(0).max(MAX_LISTING_HOLD_MS).default(0),
+  drop: z.array(JobId).max(10).default([]),
+  append: z.record(JobId, z.string().max(500)).default({}),
+});
 
 /** Registers the mock-only discovery routes (outside /api, loopback callers only). */
 export async function mockSourceRoutes(app: FastifyInstance): Promise<void> {
@@ -158,6 +204,28 @@ export async function mockSourceRoutes(app: FastifyInstance): Promise<void> {
       .get();
     if (user === undefined) return reply.code(404).send({ error: { message: 'no such user' } });
     return reply.send(await suggestCompanies(app.db, { userId: user.id, isAdmin: false }));
+  });
+
+  /** The listing control (see ListingControl): set, read with its count, and cleared. */
+  app.post(`${MOCK_SOURCE_PATH}/listing`, async (req, reply) => {
+    if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) {
+      return reply.code(403).send({ error: { message: 'loopback only' } });
+    }
+    listing = ListingBody.parse(req.body ?? {});
+    return reply.send({ listing, reads: listingReads });
+  });
+  app.get(`${MOCK_SOURCE_PATH}/listing`, async (req, reply) => {
+    if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) {
+      return reply.code(403).send({ error: { message: 'loopback only' } });
+    }
+    return reply.send({ listing, reads: listingReads });
+  });
+  app.delete(`${MOCK_SOURCE_PATH}/listing`, async (req, reply) => {
+    if (!LOOPBACK.has(req.socket.remoteAddress ?? '')) {
+      return reply.code(403).send({ error: { message: 'loopback only' } });
+    }
+    resetListingControl();
+    return reply.code(204).send();
   });
 
   /** The single-job requests answered so far (see jobChecks). */

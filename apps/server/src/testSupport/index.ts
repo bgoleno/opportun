@@ -22,7 +22,12 @@ import { mockJobRoutes } from './mockJobs';
 import { createMockDocumentStore } from './mockDocs';
 import { createMockGoogleApi, mockGoogleTokenFetch } from './mockGoogle';
 import { mockOAuthFetch } from './mockOAuth';
-import { mockGreenhouseSource, mockSourceFetch, mockSourceRoutes } from './mockSources';
+import {
+  mockGreenhouseSource,
+  mockSourceFetch,
+  mockSourceRoutes,
+  resetListingControl,
+} from './mockSources';
 
 export const MOCK_FLAGS = [
   'OPPORTUN_AI_MOCK',
@@ -84,7 +89,10 @@ export function testSupportFromEnv(env: NodeJS.ProcessEnv, cfg: Config): TestSup
       }
       if (on('OPPORTUN_SOURCE_MOCK')) {
         registerSource(mockGreenhouseSource);
-        app.addHook('onClose', async () => resetSources());
+        app.addHook('onClose', async () => {
+          resetSources();
+          resetListingControl();
+        });
         await app.register(mockSourceRoutes);
       }
     },
