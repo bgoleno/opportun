@@ -448,7 +448,8 @@ describe('Find posting', () => {
       'POST /opportunities/opp-1/find-posting': {
         outcome: 'attached',
         unchanged: true,
-        opportunity: { ...BARE, postingState: 'confirmed', postingStateDetail: 'user_confirmed' },
+        keptDescription: true,
+        opportunity: { ...BARE, postingState: 'confirmed' },
         candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
       },
     });
@@ -457,6 +458,48 @@ describe('Find posting', () => {
     expect(await toastRegion().findByText('Nothing changed')).toBeInTheDocument();
     expect(toastRegion().getByText('Your own description was kept.')).toBeInTheDocument();
     expect(screen.queryByText(/matches the company's board/)).toBeNull();
+  });
+
+  // The user's confirmation does not say whose text it is.
+  it('a Refetch that changes nothing on a posting you confirmed matches when the text is the board’s (#866)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        unchanged: true,
+        opportunity: { ...BARE, postingState: 'confirmed', postingStateDetail: 'user_confirmed' },
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(
+      await toastRegion().findByText("The posting matches the company's board."),
+    ).toBeInTheDocument();
+  });
+
+  it('a Refetch that changed the link and kept your description says both, and offers no Undo (#866)', async () => {
+    const matched = { ...BARE, postingState: 'confirmed', postingStateDetail: null };
+    setup({
+      'GET /opportunities/opp-1': matched,
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        changed: ['link'],
+        keptDescription: true,
+        opportunity: matched,
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+      },
+    });
+    renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Refetch' }));
+    const ask = await screen.findByRole('dialog', { name: 'Refetch this posting?' });
+    await userEvent.click(within(ask).getByRole('button', { name: 'Refetch' }));
+    expect(
+      await toastRegion().findByText(
+        'Updated from the board: posting link. Your own description was kept.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Matched on the company's board.")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull();
   });
 
   it('a Refetch that changes nothing says what the board read left out (#866)', async () => {

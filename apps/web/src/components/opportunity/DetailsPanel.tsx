@@ -334,15 +334,16 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         setUnreachableAt(checksEnded);
         return;
       }
+      // A description of the user's is kept without comparing it, so it is not said to match (tl on
+      // #930).
+      const kept = result.keptDescription === true ? ['Your own description was kept.'] : [];
+      const note = result.note === undefined ? [] : [result.note];
       if (result.outcome === 'attached' && result.unchanged === true) {
-        // A Refetch that found the same job, link and description (#835, qa on #830). A description
-        // of the user's is kept without comparing it, so it is not said to match (tl on #930).
-        const kept = result.opportunity?.postingStateDetail === 'user_confirmed';
+        // A Refetch that found the same job, link and description (#835, qa on #830).
+        const same = kept.length > 0 ? kept : ["The posting matches the company's board."];
         toast({
           title: 'Nothing changed',
-          description: `${
-            kept ? 'Your own description was kept.' : "The posting matches the company's board."
-          }${result.note === undefined ? '' : ` ${result.note}`}`,
+          description: [...same, ...note].join(' '),
           variant: 'success',
         });
         return;
@@ -352,7 +353,7 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         const what = result.changed.map((c) => CHANGED_SAID.get(c) ?? c).join(', ');
         toast({
           title: 'Posting updated',
-          description: `Updated from the board: ${what}.${result.note === undefined ? '' : ` ${result.note}`}`,
+          description: [`Updated from the board: ${what}.`, ...kept, ...note].join(' '),
           variant: 'success',
         });
         return;

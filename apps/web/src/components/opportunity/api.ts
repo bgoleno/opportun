@@ -224,6 +224,8 @@ export interface FindPostingResult {
   unchanged?: true;
   /** What a Refetch changed (#866): absent on a first attach, and when `unchanged`. */
   changed?: ('link' | 'job' | 'description' | 'location' | 'remote' | 'compensation')[];
+  /** 'attached' with the user's own description left as it was, not compared (#866). */
+  keptDescription?: true;
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity?: OpportunityView;
   candidate?: PostingCandidateView;

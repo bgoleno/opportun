@@ -84,6 +84,8 @@ const FindResponse = z.object({
   unchanged: z.literal(true).optional(),
   /** What a Refetch changed (#866): absent on a first attach, and when `unchanged`. */
   changed: z.array(z.enum(POSTING_CHANGES)).optional(),
+  /** 'attached' with the user's own description left as it was, not compared with the board's. */
+  keptDescription: z.literal(true).optional(),
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity: OpportunityView.optional(),
   candidate: CandidateView.optional(),
@@ -242,7 +244,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         // only ever comes from an email-linked job id, never a board read). Forwarded onto the
         // timeline entry (attachPosting) and in this response, so a person watching the moment
         // sees it in the toast and it still stands after the toast is gone.
-        const { opportunity, changed } = await attachPostingSaying(
+        const { opportunity, changed, keptDescription } = await attachPostingSaying(
           db,
           ctx,
           id,
@@ -263,7 +265,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
                 },
               }
             : { readFrom: outcome.readFrom },
-          { keepDescription: true, quietIfUnchanged: true },
+          { keepDescription: true, byFindPosting: true },
         );
         const note = outcome.note === undefined ? {} : { note: outcome.note };
         // A Refetch says what it changed, or that it changed nothing (#835, #866, qa on #830 and
@@ -277,6 +279,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             : changed.length === 0
               ? { unchanged: true as const }
               : { changed }),
+          ...(keptDescription ? { keptDescription: true as const } : {}),
           ...note,
         };
       }
