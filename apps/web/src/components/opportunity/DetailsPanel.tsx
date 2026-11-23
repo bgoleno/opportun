@@ -23,8 +23,10 @@ import {
   type OpportunityView,
 } from '@/lib/opportunities';
 import {
+  CHECK_FINISHED,
   isPostingSearching,
   useAttachments,
+  useCheckOver,
   useChecksEnded,
   useConfirmPosting,
   useDeleteAttachment,
@@ -300,6 +302,7 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   const rederive = useRederivePosting(opp.id);
   const [found, setFound] = useState<FindPostingResult | null>(null);
   const checksEnded = useChecksEnded(opp.postingState);
+  const checkOver = useCheckOver(opp.id);
   /** `untilCheck`: the refusal for a running check, true only until that check ends (#870). */
   const [findError, setFindError] = useState<{ message: string; untilCheck?: number } | null>(null);
   /**
@@ -370,6 +373,10 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
       }
       setFound(result);
     } catch (err) {
+      if (isPostingSearching(err) && checkOver()) {
+        toast(CHECK_FINISHED);
+        return;
+      }
       setFindError({
         message: errorMessage(err),
         ...(isPostingSearching(err) ? { untilCheck: checksEnded } : {}),

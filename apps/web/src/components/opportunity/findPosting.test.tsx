@@ -168,6 +168,48 @@ describe('Find posting', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
+  // tl and qa on #885: the check ended, in the state the page already showed, before the refusal's
+  // own refresh read it, so the page saw no change. The refresh itself says the check is over.
+  it('a check that ended unseen, in the same state, leaves no refusal, and it is said (#866)', async () => {
+    const opp = {
+      ...BARE,
+      postingState: 'needs_review',
+      postingStateDetail: 'none_found',
+    } as OpportunityView;
+    const api = setup({
+      'GET /opportunities/opp-1': opp,
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: { error: { code: 'posting_searching' } },
+      }),
+    });
+    renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await toastRegion().findByText('Check finished')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/still checking this posting/i)).toBeNull();
+    expect(
+      api.calls.filter((c: ApiCall) => c.method === 'GET' && c.path === '/opportunities/opp-1'),
+    ).toHaveLength(2);
+  });
+
+  // The refresh failed: nothing says the check is over, so the refusal stands.
+  it('a refusal whose refresh fails is shown (#866)', async () => {
+    const opp = { ...BARE, postingState: 'needs_review' } as OpportunityView;
+    let refused = false;
+    setup({
+      'GET /opportunities/opp-1': () =>
+        refused ? { status: 500, body: { error: { code: 'internal' } } } : opp,
+      'POST /opportunities/opp-1/find-posting': () => {
+        refused = true;
+        return { status: 409, body: { error: { code: 'posting_searching' } } };
+      },
+    });
+    renderWithProviders(<Live />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/still checking this posting/i);
+  });
+
   // Any other failure is not about a check, so a change of state does not take it away.
   it('another error stays when the posting state changes (#870)', async () => {
     let now = { ...BARE, postingState: 'needs_review' } as OpportunityView;

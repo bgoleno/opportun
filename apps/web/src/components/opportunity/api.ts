@@ -285,6 +285,32 @@ export function useChecksEnded(postingState: OpportunityView['postingState']): n
   return next.ended;
 }
 
+/**
+ * Whether the check a Find posting refusal speaks of is over already (#866, tl and qa on #885):
+ * called once the refusal is in, when the refresh after it has been read (useFindPosting waits for
+ * it). The check can have ended in the state the page showed, which useChecksEnded cannot see.
+ * Says no when that refresh failed, or nothing on the page reads the opportunity: not known.
+ */
+export function useCheckOver(id: string): () => boolean {
+  const qc = useQueryClient();
+  return () => {
+    const read = qc.getQueryState<OpportunityView>(qk.opportunity(id));
+    return (
+      read?.data !== undefined &&
+      read.status === 'success' &&
+      !read.isInvalidated &&
+      read.data.postingState !== 'searching'
+    );
+  };
+}
+
+/** Said in place of a refusal for a check that is over: the click is answered (#866). */
+export const CHECK_FINISHED = {
+  title: 'Check finished',
+  description: "The board check finished while this page was open; it's up to date now.",
+  variant: 'success',
+} as const;
+
 /** Attaches a chosen candidate, a pasted link or pasted description text. */
 export function useAttachPosting(id: string) {
   const qc = useQueryClient();
