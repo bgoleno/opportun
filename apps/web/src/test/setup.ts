@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
 import { resetToasts } from '@/components/ui/toast';
+import { takeMockProblems } from './mockProblems';
 
 // How long findBy* and waitFor wait for an element, 1000 ms by default. On a loaded host a
 // worker can take longer than that to render a mocked response, and the wait failed with the
@@ -23,6 +24,12 @@ Element.prototype.scrollIntoView = () => undefined;
 Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.setPointerCapture ??= () => undefined;
 Element.prototype.releasePointerCapture ??= () => undefined;
+
+// A mocked API told to answer something a server never does (mockApi, #941) fails its test.
+afterEach(() => {
+  const problems = takeMockProblems();
+  if (problems.length > 0) throw new Error(`mockApi: ${[...new Set(problems)].join('; ')}`);
+});
 
 afterEach(() => {
   cleanup();
