@@ -427,7 +427,9 @@ function TokenRow({
   return (
     <li aria-label={token.name} className="grid gap-1 rounded-md border px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">{token.name}</span>
+        {/* The user's own words, so it can be one long one: it breaks anywhere rather than push
+            Revoke, and the page, off the screen (#921). */}
+        <span className="font-medium [overflow-wrap:anywhere]">{token.name}</span>
         {revoked ? <Badge variant="secondary">Revoked</Badge> : null}
         {notShown ? <Badge variant="destructive">{NOT_SHOWN}</Badge> : null}
         {!revoked ? (
