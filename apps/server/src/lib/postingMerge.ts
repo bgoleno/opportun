@@ -11,6 +11,7 @@
 // paraphrase or an invention is dropped. Redundancy is the acceptable failure mode: a passage
 // kept that the ATS already covered is noise. An invented requirement is not acceptable,
 // because the stored description is what resume tailoring and the match score read.
+import { possessive } from '@opportun/core';
 import { isGroundedIn, MAX_DESCRIPTION } from './linkedinCapture';
 
 export interface MergeInput {
@@ -58,7 +59,7 @@ export function mergePostingText(input: MergeInput): string {
     '',
     `## Also on the ${input.siteLabel} posting`,
     '',
-    `*Not covered by ${input.company}'s own posting.*`,
+    `*Not covered by ${possessive(input.company)} own posting.*`,
     '',
     ...kept.map((p) => `- ${p.replace(/\n+/g, ' ')}`),
   ].join('\n');
