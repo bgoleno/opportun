@@ -108,8 +108,8 @@ export async function attachPosting(
 
 /**
  * attachPosting, with what it changed on a posting already confirmed (#866): null on a first
- * attach, empty when nothing changed. Worked out here, against the row this write replaced: the
- * caller's own copy can be seconds old, and an edit made meanwhile is not the attach's change.
+ * attach, empty when nothing changed. Worked out here, against the row read just before the write:
+ * the caller's own copy can be seconds old, and an edit made meanwhile is not the attach's change.
  */
 export async function attachPostingSaying(
   db: Db,

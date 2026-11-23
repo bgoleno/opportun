@@ -437,8 +437,45 @@ describe('Find posting', () => {
     });
     renderWithProviders(<DetailsPanel opp={BARE} />);
     await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
-    expect(await screen.findByText('Nothing changed')).toBeInTheDocument();
+    expect(await toastRegion().findByText('Nothing changed')).toBeInTheDocument();
+    expect(toastRegion().getByText("The posting matches the company's board.")).toBeInTheDocument();
     expect(screen.queryByText('Posting attached')).not.toBeInTheDocument();
+  });
+
+  // tl on #930: a description kept is not compared, so the toast must not say it matches.
+  it('a Refetch that changes nothing and kept your description says it was kept (#866)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        unchanged: true,
+        opportunity: { ...BARE, postingState: 'confirmed', postingStateDetail: 'user_confirmed' },
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await toastRegion().findByText('Nothing changed')).toBeInTheDocument();
+    expect(toastRegion().getByText('Your own description was kept.')).toBeInTheDocument();
+    expect(screen.queryByText(/matches the company's board/)).toBeNull();
+  });
+
+  it('a Refetch that changes nothing says what the board read left out (#866)', async () => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        unchanged: true,
+        opportunity: BARE,
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+        note: 'Large Workday board: part read.',
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(
+      await toastRegion().findByText(
+        "The posting matches the company's board. Large Workday board: part read.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it('attaches a single match without opening the picker', async () => {

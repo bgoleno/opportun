@@ -335,10 +335,14 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         return;
       }
       if (result.outcome === 'attached' && result.unchanged === true) {
-        // A Refetch that found the same job, link and description (#835, qa on #830).
+        // A Refetch that found the same job, link and description (#835, qa on #830). A description
+        // of the user's is kept without comparing it, so it is not said to match (tl on #930).
+        const kept = result.opportunity?.postingStateDetail === 'user_confirmed';
         toast({
           title: 'Nothing changed',
-          description: "The posting matches the company's board.",
+          description: `${
+            kept ? 'Your own description was kept.' : "The posting matches the company's board."
+          }${result.note === undefined ? '' : ` ${result.note}`}`,
           variant: 'success',
         });
         return;
