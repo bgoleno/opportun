@@ -52,6 +52,21 @@ when the milestone's work was merged.
   ([#903](https://github.com/bgoleno/opportun/issues/903); PR
   [#907](https://github.com/bgoleno/opportun/pull/907)).
 
+### Inbox
+
+- **Inbox: when a page fails to load, the range shown is still the rows on screen, and you can try
+  again.** A failed page says so ("Page 2 couldn't load. ... Page 1 is still shown.") with **Try
+  again**, and **Next** asks for that page again. While a page loads, the range stays the rows on
+  screen. A new filter that fails keeps the rows and the selection and says the messages are from
+  before the filters changed
+  ([#894](https://github.com/bgoleno/opportun/issues/894); PR
+  [#906](https://github.com/bgoleno/opportun/pull/906)).
+- **Inbox: leaving the page with bulk Reject open no longer says the messages are gone, and a
+  filter over 200 characters is refused in plain words.** The keyword filter says it is too long,
+  200 characters at most, and no messages are listed until it is shorter. It is never sent
+  ([#894](https://github.com/bgoleno/opportun/issues/894); PR
+  [#906](https://github.com/bgoleno/opportun/pull/906)).
+
 ### Docs
 
 - **Docs: the Settings guide covers Linked accounts and what checking an AI key sends; the Inbox
