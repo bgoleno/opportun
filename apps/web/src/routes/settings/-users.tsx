@@ -182,7 +182,10 @@ function listOf(items: string[]): string {
     : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
-/** The temporary password, shown once: closing the dialog forgets it. */
+/**
+ * The temporary password, shown once: the dialog forgets it when it closes, so only Done closes it
+ * (#903).
+ */
 function TemporaryPasswordDialog(props: {
   user: AdminUser;
   password: string;
@@ -202,13 +205,8 @@ function TemporaryPasswordDialog(props: {
     }
   }
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) props.onDone();
-      }}
-    >
-      <DialogContent className="max-w-md">
+    <Dialog open onOpenChange={() => undefined}>
+      <DialogContent className="max-w-md" showClose={false} guardClose>
         <DialogHeader>
           <DialogTitle>Temporary password</DialogTitle>
           <DialogDescription>

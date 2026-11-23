@@ -99,6 +99,20 @@ export function toasts(page: Page): Locator {
   return page.getByRole('region', { name: /^Notifications/ });
 }
 
+/**
+ * Escape twice on a dialog that only its own button may close, which has to be there after each. A
+ * browser lets the page refuse the first only (with no click or typing in between, the second closes
+ * the dialog without asking), and the app then has to show it again (showOnce.spec.ts).
+ */
+export async function pressEscapeTwice(page: Page, dialog: Locator): Promise<void> {
+  for (let i = 0; i < 2; i++) {
+    await page.keyboard.press('Escape');
+    // Time for the browser's own close to land, then shown: not merely not closed yet.
+    await page.waitForTimeout(300);
+    await expect(dialog).toBeVisible();
+  }
+}
+
 /** The kanban card for an opportunity ("Company: Title"). */
 export function card(page: Page, company: string, title: string): Locator {
   return page.getByRole('article', { name: `${company}: ${title}`, exact: true });
