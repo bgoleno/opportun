@@ -635,6 +635,39 @@ describe('POST /opportunities/:id/find-posting', () => {
     expect(await entries(app, a, id)).toHaveLength(2);
   });
 
+  // qa's 0.5.0 pass: the fields came back, and the answer was "unchanged".
+  it('a Refetch that puts back fields the user cleared names them (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    boardServes([
+      {
+        ...posting('Staff Product Manager, SIEM', '7663059003'),
+        location: 'Berlin',
+        remote: true,
+      },
+    ]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    const cleared = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/opportunities/${id}`,
+      payload: { location: null, remote: null },
+    });
+    expect(cleared.json()).toMatchObject({ location: null, remote: null });
+
+    const body = await refetch(a, id);
+
+    expect(body).toMatchObject({
+      changed: ['location', 'remote'],
+      opportunity: { location: 'Berlin', remote: true },
+    });
+    expect(body.unchanged).toBeUndefined();
+    expect((await entries(app, a, id)).map((i) => i.bodyMd)).toContainEqual(
+      expect.stringContaining('Took location, remote from the board.'),
+    );
+    // With those back, the next one changes nothing, and says so.
+    expect(await refetch(a, id)).toMatchObject({ unchanged: true });
+  });
+
   it('a row picked by hand is recorded even when it changes nothing (#866)', async () => {
     const { app, a } = await boot();
     const id = await seed(app, a, { title: 'Product Manager, SIEM' });
