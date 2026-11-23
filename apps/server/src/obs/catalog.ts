@@ -811,9 +811,9 @@ export const START_FAILURES = {
   database_move_failed:
     'server failed to start: the copy of opportun.db made in SQLITE_DIR failed its integrity check and was removed. The original is preserved in DATA_DIR as opportun.db.pre-volume-migration: check it, and the disk.',
   sqlite_damaged:
-    'server failed to start: opportun.db (in SQLITE_DIR, or DATA_DIR where SQLITE_DIR is not set) is damaged or is not a SQLite database. Check the disk, and restore a backup (docs/install.md section 6).',
+    'server failed to start: opportun.db (in SQLITE_DIR or DATA_DIR) is damaged or is not a SQLite database. Check the disk, and restore a backup (docs/install.md section 6).',
   sqlite_unopenable:
-    'server failed to start: opportun.db (in SQLITE_DIR, or DATA_DIR where SQLITE_DIR is not set) could not be opened for writing. Check that it and its directory are writable by the user the server runs as.',
+    'server failed to start: opportun.db (in SQLITE_DIR or DATA_DIR) could not be opened for writing. Check that it and its directory are writable by the user the server runs as.',
   sqlite_busy:
     'server failed to start: another process is holding opportun.db. Check that no second copy of the server, and no command-line tool, is using it.',
   disk_full:
