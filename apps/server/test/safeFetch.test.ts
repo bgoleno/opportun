@@ -966,9 +966,9 @@ describe('allowlists and linkedin.com (grep)', () => {
     // the registered sites' fetch hosts are not literals here (#769), and test/siteContract.test.ts
     // checks every one of those against the prohibited hosts, and the whole built list against
     // one written out in that test.
-    expect(allowlists.some((l) => l.includes('safeFetch.ts') && l.includes('api.lever.co'))).toBe(
-      true,
-    );
+    expect(
+      allowlists.some((l) => l.includes('safeFetch.ts') && l.includes('api.smartrecruiters.com')),
+    ).toBe(true);
     for (const content of allowlistContents)
       expect(content.toLowerCase()).not.toContain('linkedin');
     expect(ATS_ALLOW_HOSTS.some((h) => h.toLowerCase().includes('linkedin'))).toBe(false);

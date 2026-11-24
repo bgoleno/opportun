@@ -85,6 +85,8 @@ describe('captureSiteOf: which tabs may be read at all', () => {
       `https://indeed.com.example.org/viewjob?jk=${JK}`,
       `https://uk.indeed.com/viewjob?jk=${JK}`,
       `https://www.indeed.co.uk/viewjob?jk=${JK}`,
+      // A site's own host is not read below another label (sec on #880).
+      'https://x.www.linkedin.com/jobs/view/1/',
       'https://bank.example/',
       'chrome://extensions/',
       'not a url',

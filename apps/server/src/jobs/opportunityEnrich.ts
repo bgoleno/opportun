@@ -19,13 +19,11 @@ import { enqueue } from '../lib/jobQueue';
 import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../lib/titleMatch';
 import { boardConfig, boardFromUrl } from '../lib/atsBoard';
 import { AiUnavailableError, CaptureOutputSchema, renderPrompt, runStructured } from '@opportun/ai';
-import { decodeEntities, greenhouse, type HostRule, newId } from '@opportun/core';
+import { decodeEntities, newId } from '@opportun/core';
 import { and, asc, eq, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { htmlToText } from '../adapters/gmail';
-import { ASHBY_HOST } from '../adapters/sources/ashby';
-import { greenhouseModule } from '../sites/greenhouse';
-import { LEVER_HOST } from '../adapters/sources/lever';
+import { siteOfKind } from '../sites';
 import { fetchWorkdayDetail, workdayBoard } from '../adapters/sources/workday';
 import type { Db } from '../db/client';
 import { activities, communications, companies, opportunities, roleTargets } from '../db/schema';
@@ -412,73 +410,32 @@ export async function workdayPostingText(
   }
 }
 
-function greenhouseListingUrl(slug: string): string | null {
-  try {
-    return greenhouseModule.api!.urls.board(slug);
-  } catch {
-    return null;
-  }
-}
-
-/** Public board APIs of the three known ATS providers, as title+url anchors. */
+/**
+ * A board's listing, from its site module, as title+url anchors: none for a kind whose site has no
+ * such listing, or a slug its URL builder refuses.
+ */
 export async function boardAnchors(
   fetch: typeof safeFetch,
   board: { kind: string; slug: string },
 ): Promise<PageAnchor[]> {
-  // Greenhouse's URL is its site module's (#769), which refuses a slug no board has: no anchors.
-  const greenhouseUrl = board.kind === 'ats_greenhouse' ? greenhouseListingUrl(board.slug) : null;
-  const spec =
-    greenhouseUrl !== null
-      ? {
-          host: greenhouse.fetchHosts[0]! as string | HostRule,
-          url: greenhouseUrl,
-          pick: (body: unknown): PageAnchor[] => {
-            const jobs = (body as { jobs?: unknown[] })?.jobs ?? [];
-            return jobs.flatMap((j) => {
-              const job = j as { title?: unknown; absolute_url?: unknown };
-              return typeof job.title === 'string' && typeof job.absolute_url === 'string'
-                ? [{ url: job.absolute_url, text: job.title }]
-                : [];
-            });
-          },
-        }
-      : board.kind === 'ats_lever'
-        ? {
-            host: LEVER_HOST,
-            url: `https://${LEVER_HOST}/v0/postings/${board.slug}?mode=json`,
-            pick: (body: unknown): PageAnchor[] =>
-              (Array.isArray(body) ? body : []).flatMap((j) => {
-                const job = j as { text?: unknown; hostedUrl?: unknown };
-                return typeof job.text === 'string' && typeof job.hostedUrl === 'string'
-                  ? [{ url: job.hostedUrl, text: job.text }]
-                  : [];
-              }),
-          }
-        : board.kind === 'ats_ashby'
-          ? {
-              host: ASHBY_HOST,
-              url: `https://${ASHBY_HOST}/posting-api/job-board/${board.slug}`,
-              pick: (body: unknown): PageAnchor[] => {
-                const jobs = (body as { jobs?: unknown[] })?.jobs ?? [];
-                return jobs.flatMap((j) => {
-                  const job = j as { title?: unknown; jobUrl?: unknown };
-                  return typeof job.title === 'string' && typeof job.jobUrl === 'string'
-                    ? [{ url: job.jobUrl, text: job.title }]
-                    : [];
-                });
-              },
-            }
-          : null;
-  if (spec === null) return [];
+  const site = siteOfKind(board.kind);
+  const pick = site?.api?.boardLinks;
+  if (site === undefined || pick === undefined) return [];
+  let url;
+  try {
+    url = site.api!.urls.board({ site: site.identity.id, slug: board.slug });
+  } catch {
+    return [];
+  }
   let res;
   try {
-    res = await fetch(spec.url, { allowHosts: [spec.host], maxBytes: BOARD_MAX_BYTES });
+    res = await fetch(url, { allowHosts: site.identity.fetchHosts, maxBytes: BOARD_MAX_BYTES });
   } catch {
     return [];
   }
   if (res.status < 200 || res.status >= 300) return [];
   try {
-    return spec.pick(JSON.parse(res.body.toString('utf8'))).slice(0, 500);
+    return pick(JSON.parse(res.body.toString('utf8'))).slice(0, 500);
   } catch {
     return [];
   }

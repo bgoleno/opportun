@@ -158,18 +158,22 @@ describe('detectAts', () => {
     expect(outcome).toMatchObject({ status: 'found', kind: 'ats_greenhouse', org: 'initech' });
   });
 
-  // The Greenhouse site's fetch host is an exact rule (#769): that host only, on every hop.
-  it('does not follow a greenhouse probe onto a subdomain of its API host', async () => {
+  // A site's fetch host is an exact rule (#769): that host only, on every hop.
+  it.each([
+    ['greenhouse', 'boards-api.greenhouse.io', '/v1/boards/initech/jobs', GREENHOUSE_JOBS],
+    ['lever', 'api.lever.co', '/v0/postings/initech?mode=json&limit=1', LEVER_JOBS],
+    ['ashby', 'api.ashbyhq.com', '/posting-api/job-board/initech', GREENHOUSE_JOBS],
+  ])('does not follow a %s probe onto a subdomain of its API host', async (_, host, path, jobs) => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     const company = await createCompany(app.db, ctx, { name: 'Initech', status: 'followed' });
-    const probe = 'https://boards-api.greenhouse.io/v1/boards/initech/jobs';
-    const elsewhere = 'https://x.boards-api.greenhouse.io/v1/boards/initech/jobs';
+    const probe = `https://${host}${path}`;
+    const elsewhere = `https://x.${host}${path}`;
     const { fetch, requested } = net(
-      { 'x.boards-api.greenhouse.io': [PUBLIC_IP] },
+      { [`x.${host}`]: [PUBLIC_IP] },
       {
         [probe]: () => respond(302, '', { location: elsewhere }),
-        [elsewhere]: () => respond(200, GREENHOUSE_JOBS),
+        [elsewhere]: () => respond(200, jobs),
       },
     );
 

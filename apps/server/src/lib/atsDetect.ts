@@ -11,12 +11,7 @@ import {
   type SourceContext,
   type SourceKind,
 } from '../adapters/discoverySource';
-import { ASHBY_HOST } from '../adapters/sources/ashby';
-import { arr, ATS_MAX_BYTES, obj } from '../adapters/sources/atsCommon';
-import { greenhouse, type HostRule } from '@opportun/core';
-import { GREENHOUSE_HOST } from '../adapters/sources/greenhouse';
-import { greenhouseModule } from '../sites/greenhouse';
-import { LEVER_HOST } from '../adapters/sources/lever';
+import { siteOfKind, SLUG_SITES } from '../sites';
 import { fetchWorkdayPage, workdayBoard } from '../adapters/sources/workday';
 import { withTransaction, type Db, type Exec } from '../db/client';
 import { companies, discoverySources } from '../db/schema';
@@ -59,54 +54,19 @@ export const atsDetectDedupeKey = (companyId: string): string => `${ATS_DETECT_K
 const CAREERS_MAX_BYTES = 2 * 1024 * 1024;
 const MAX_PAGE_CANDIDATES = 5;
 
-interface Probe {
-  kind: AtsKind;
-  host: string;
-  /**
-   * What the probe's fetch may reach, when not `[host]` and its subdomains: a registered site's
-   * own exact rules (#769), that host only, on every hop.
-   */
-  allow?: readonly HostRule[];
-  url(slug: string): string;
-  /** True when the 200 body is that provider's board answer AND it is serving a posting. */
-  verify(body: unknown): boolean;
-}
+// A slug-addressed board is asked by its site module's own probe (apps/server/src/sites, #769), one
+// per provider, in SLUG_SITES' order; each uses only its own public API host.
+//
+// A board counts as this company's only when it is serving at least one posting. An empty board
+// that merely exists is a decoy: one tracked company kept an empty Ashby board while its postings
+// lived on another provider, and recording the empty one hid the real ATS and made every later search
+// answer "nothing on the board". A company that genuinely has no openings is recorded as 'none'
+// and asked for its careers URL, and weekly re-verification picks the board up once it posts.
 
-/**
- * One probe per provider, in probing order; each uses only its own public API host.
- *
- * A board counts as this company's only when it is serving at least one posting. An empty board
- * that merely exists is a decoy: one tracked company kept an empty Ashby board while its postings
- * lived on another provider, and recording the empty one hid the real ATS and made every later search
- * answer "nothing on the board". A company that genuinely has no openings is recorded as 'none'
- * and asked for its careers URL, and weekly re-verification picks the board up once it posts.
- */
-export const ATS_PROBES: readonly Probe[] = [
-  {
-    kind: 'ats_greenhouse',
-    host: GREENHOUSE_HOST,
-    allow: greenhouse.fetchHosts,
-    // The jobs list rather than the board's metadata, which cannot show whether it is serving
-    // anything. Without `content=true` the response carries titles and ids only.
-    url: (slug) => greenhouseModule.api!.urls.board(slug),
-    verify: (body) => arr(obj(body).jobs).length > 0,
-  },
-  {
-    kind: 'ats_lever',
-    host: LEVER_HOST,
-    url: (slug) => `https://${LEVER_HOST}/v0/postings/${slug}?mode=json&limit=1`,
-    verify: (body) => Array.isArray(body) && body.length > 0,
-  },
-  {
-    kind: 'ats_ashby',
-    host: ASHBY_HOST,
-    url: (slug) => `https://${ASHBY_HOST}/posting-api/job-board/${slug}`,
-    verify: (body) => arr(obj(body).jobs).length > 0,
-  },
-];
-
-/** The providers addressed by a slug on a fixed host: the only ones `boardApisOnly` reaches. */
-const SLUG_ADDRESSED: ReadonlySet<string> = new Set(ATS_PROBES.map((p) => p.kind));
+/** The kinds addressed by a slug on a fixed host, in probing order: all `boardApisOnly` reaches. */
+export const SLUG_KINDS: readonly AtsKind[] = SLUG_SITES.map(
+  (m) => m.identity.sourceKind as AtsKind,
+);
 
 // ---------------------------------------------------------------------------
 // Slug candidates and careers-page links (pure)
@@ -170,28 +130,7 @@ export function scanCareersHtml(html: string): AtsBoard[] {
 // ---------------------------------------------------------------------------
 // Detection
 
-type ProbeResult = 'hit' | 'miss' | 'error';
-
-async function probe(sctx: SourceContext, p: Probe, slug: string): Promise<ProbeResult> {
-  let res;
-  try {
-    res = await sctx.fetch(p.url(slug), {
-      allowHosts: p.allow ?? [p.host],
-      maxBytes: ATS_MAX_BYTES,
-    });
-  } catch (err) {
-    // The slug names the company's board: only the ATS kind is logged (14.8).
-    sctx.log.warn({ 'opportun.ats.kind': p.kind, err }, 'ats probe failed');
-    return 'error';
-  }
-  if (res.status === 429 || res.status >= 500) return 'error';
-  if (res.status < 200 || res.status >= 300) return 'miss';
-  try {
-    return p.verify(JSON.parse(res.body.toString('utf8'))) ? 'hit' : 'miss';
-  } catch {
-    return 'miss';
-  }
-}
+type ProbeResult = 'yes' | 'no' | 'unknown';
 
 /**
  * A Workday board is verified by its CXS listing serving at least one posting. Only an unknown
@@ -203,17 +142,20 @@ async function probeWorkday(sctx: SourceContext, board: AtsBoard): Promise<Probe
   try {
     page = await fetchWorkdayPage(sctx, workdayBoard(boardConfig(board)), 0, 1);
   } catch (err) {
-    if (err instanceof SourceConfigError) return 'miss';
+    if (err instanceof SourceConfigError) return 'no';
     sctx.log.warn({ 'opportun.ats.kind': board.kind, err }, 'ats probe failed');
-    return 'error';
+    return 'unknown';
   }
-  return page.jobPostings.length > 0 ? 'hit' : 'miss';
+  return page.jobPostings.length > 0 ? 'yes' : 'no';
 }
 
 async function probeBoard(sctx: SourceContext, board: AtsBoard): Promise<ProbeResult> {
   if (board.kind === 'ats_workday') return probeWorkday(sctx, board);
-  const p = ATS_PROBES.find((candidate) => candidate.kind === board.kind);
-  return p === undefined ? 'miss' : probe(sctx, p, board.slug);
+  const site = siteOfKind(board.kind);
+  const probe = site?.api?.probe;
+  return site === undefined || probe === undefined
+    ? 'no'
+    : probe(sctx, { site: site.identity.id, slug: board.slug });
 }
 
 export type CareersPageOutcome = 'absent' | 'blocked' | 'no_board_links' | 'links_unverified';
@@ -458,8 +400,8 @@ export async function detectAts(
   let transient = false;
   const tryBoard = async (board: AtsBoard): Promise<boolean> => {
     const result = await probeBoard(sctx, board);
-    if (result === 'error') transient = true;
-    return result === 'hit';
+    if (result === 'unknown') transient = true;
+    return result === 'yes';
   };
   const found = async (board: AtsBoard, via: 'current' | 'slug' | 'careers_page') =>
     ({
@@ -474,7 +416,7 @@ export async function detectAts(
   // 1. The board the company was last verified on (re-verification).
   const recorded = await recordedBoard(db, ctx, company);
   const current =
-    recorded !== null && opts.boardApisOnly === true && !SLUG_ADDRESSED.has(recorded.kind)
+    recorded !== null && opts.boardApisOnly === true && !SLUG_KINDS.includes(recorded.kind)
       ? null
       : recorded;
   // Its error, like a guess's, leaves the company's real board unknown: a guess that hits after it
@@ -483,14 +425,14 @@ export async function detectAts(
   let currentErrored = false;
   if (current !== null) {
     const result = await probeBoard(sctx, current);
-    if (result === 'hit') return await found(current, 'current');
-    if (result === 'error') {
+    if (result === 'yes') return await found(current, 'current');
+    if (result === 'unknown') {
       transient = true;
       currentErrored = true;
     }
   }
   // 2. Slug candidates from the name and domain, each against every slug-addressed provider
-  //    (never Workday: ATS_PROBES has no Workday entry, there is no slug to guess).
+  //    (never Workday: its site is not slug-addressed, there is no slug to guess).
   //    A guess that errored (a 429, a 5xx, no answer, or one the nightly probe skipped because its
   //    vendor is stopped) leaves that vendor's board unknown, and the company's real board may be
   //    the one it could not see. A board with the same slug on a later vendor can then be a
@@ -499,13 +441,13 @@ export async function detectAts(
   //    guesses all answered, after a recorded board that answered, is recorded as before.
   for (const slug of slugCandidates(company.name, company.domain)) {
     let slugErrored = currentErrored;
-    for (const p of ATS_PROBES) {
-      const board = { kind: p.kind, slug };
+    for (const kind of SLUG_KINDS) {
+      const board = { kind, slug };
       const result = await probeBoard(sctx, board);
-      if (result === 'error') {
+      if (result === 'unknown') {
         transient = true;
         slugErrored = true;
-      } else if (result === 'hit') {
+      } else if (result === 'yes') {
         if (slugErrored) {
           throw new AtsDetectTransientError(
             'an ATS probe failed before a board with the same name was found; retrying',

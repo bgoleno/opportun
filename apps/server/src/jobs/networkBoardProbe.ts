@@ -14,7 +14,8 @@
 // after it, and the user's pending probes are cancelled. The rest wait for the next night. It also
 // stops this job's requests to that vendor for every user until the next night's sweep; the other
 // two vendors go on.
-import { ATS_PROBES, recordNone } from '../lib/atsDetect';
+import { recordNone, SLUG_KINDS } from '../lib/atsDetect';
+import { SLUG_SITES } from '../sites';
 import { type AtsKind } from '../lib/atsBoard';
 import { CronExpressionParser } from 'cron-parser';
 import { and, asc, count, desc, eq, gte, inArray, isNull, lt, lte, or } from 'drizzle-orm';
@@ -128,7 +129,11 @@ async function stopVendor(db: Db, ctx: UserCtx, kind: AtsKind, now: number): Pro
 
 /** The vendor a board API request goes to, by its fixed host. */
 const VENDOR_OF_HOST: ReadonlyMap<string, AtsKind> = new Map(
-  ATS_PROBES.map((p) => [p.host, p.kind]),
+  SLUG_SITES.flatMap(({ identity }) =>
+    identity.fetchHosts.flatMap((rule): [string, AtsKind][] =>
+      'exact' in rule ? [[rule.exact, identity.sourceKind as AtsKind]] : [],
+    ),
+  ),
 );
 
 function vendorOf(url: string): AtsKind | undefined {
@@ -221,7 +226,7 @@ async function stoppedSince(db: Db, ctx: UserCtx, since: number): Promise<boolea
  * Under boardApisOnly detection skips that board, so its guesses missing would record "none" over
  * it (tl's blocking 1 on #462, https://github.com/bgoleno/opportun/pull/462).
  */
-const NETWORK_BOARD_KINDS: readonly AtsKind[] = ATS_PROBES.map((p) => p.kind);
+const NETWORK_BOARD_KINDS: readonly AtsKind[] = SLUG_KINDS;
 
 /** Whether this job may probe a company with `atsKind` on record: none yet, or one of the three. */
 function isNetworkBoardKind(atsKind: string | null): boolean {
