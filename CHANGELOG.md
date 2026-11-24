@@ -86,6 +86,16 @@ when the milestone's work was merged.
   ([#920](https://github.com/bgoleno/opportun/issues/920); PR
   [#938](https://github.com/bgoleno/opportun/pull/938)).
 
+- **Capture: once a capture is recorded, no wait for a lock makes the answer an error, and a slow
+  fill no longer answers one.** On Postgres, a fill, stage move or state write that gives up waiting
+  is skipped and logged, and the answer is "saved", so a retry cannot record the capture twice. The
+  posting check is still queued. When the fill gave up, the extension says "Its details could not be
+  added just now. Add them on the opportunity's page." A location that is another opportunity's is
+  left out of the fill instead of refusing the capture, and a capture made while its record waits
+  for a lock answers "busy" with no entry, so made again it is recorded once
+  ([#914](https://github.com/bgoleno/opportun/issues/914); PR
+  [#955](https://github.com/bgoleno/opportun/pull/955)).
+
 ### Sign-in and settings
 
 - **Pressing Escape, or closing while the request is running, no longer loses two-factor recovery
@@ -108,6 +118,13 @@ when the milestone's work was merged.
   be shown. A refusal, a wrong password for example, is said as before
   ([#904](https://github.com/bgoleno/opportun/issues/904); PR
   [#918](https://github.com/bgoleno/opportun/pull/918)).
+- **A long name with no spaces no longer makes Settings > Integrations scroll sideways, and long
+  names, subjects and titles stay inside their dialogs.** A device token's name breaks anywhere in its
+  row, so **Revoke** stays on screen, and a dialog's title and description break the same way. A few
+  dialogs keep their own wrapping: Discovery's posting title and description, and the descriptions of
+  Find posting and Capture
+  ([#921](https://github.com/bgoleno/opportun/issues/921); PR
+  [#953](https://github.com/bgoleno/opportun/pull/953)).
 
 ### Inbox
 
@@ -176,6 +193,15 @@ when the milestone's work was merged.
   updated" and "Nothing changed" messages
   ([#932](https://github.com/bgoleno/opportun/issues/932); PR
   [#945](https://github.com/bgoleno/opportun/pull/945)).
+- **Docs: the Inbox, provider key and metrics screenshots are retaken after the Select fix, and the
+  guide lists every sentence the Apply panel gives after Find posting.** The Inbox shows its filters
+  on one line, and the Settings > AI and Metrics selects draw their arrows inside their boxes. The
+  Apply panel list adds the confirmed-already and board-unreachable sentences and the changed
+  no-board one
+  ([#943](https://github.com/bgoleno/opportun/issues/943),
+  [#952](https://github.com/bgoleno/opportun/issues/952); PRs
+  [#950](https://github.com/bgoleno/opportun/pull/950),
+  [#958](https://github.com/bgoleno/opportun/pull/958)).
 
 ## 0.5.0 (2026-11-22)
 
