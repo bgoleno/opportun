@@ -59,6 +59,8 @@ export interface RowRetry {
 const ROW_RETRY: RowRetry = { firstMs: 1000, maxMs: 30_000, limitMs: 300_000 };
 /** How often a runner looks for rows left running (startRunner's sweep). */
 const SWEEP_MS = 60_000;
+/** Postgres only: SQLite's claim has no answer to lose, and its rows wait for the next start. */
+const SWEPT = SCHEMA_DIALECT === 'postgres';
 /** Upper bound on jobs one drain processes, so a runaway enqueue loop cannot spin forever. */
 const MAX_DRAIN = 10_000;
 /** Jobs run in parallel; OPPORTUN_JOB_WORKERS overrides, 1 restores serial behaviour. */
@@ -269,7 +271,8 @@ async function writeRow(
 /**
  * Hands a job just marked dead to its handler (JobHandler.onDead, #869). Its payload is read as it
  * was stored; one that does not validate has nothing to hand over. A throw is only logged: the job
- * is dead either way.
+ * is dead either way. For a row the sweep ended it runs outside the demo reset's hold (#974), so an
+ * onDead that writes for a shared demo account would need its own.
  */
 async function afterDead(
   db: Db,
@@ -493,13 +496,15 @@ async function runHandler(
       'opportun.job.max_attempts': job.maxAttempts,
       err,
     };
+    // Once, and not in the write: what throws here would throw on each of its tries.
+    const text = errorText(err);
     if (job.attempts >= job.maxAttempts) {
       log?.error(fields, 'job exhausted its retries; marked dead');
       const settle = () => afterDead(db, job, log);
       await writeRow(
         job,
         opts,
-        (own) => finish(db, job.id, 'dead', at, errorText(err), transient, own),
+        (own) => finish(db, job.id, 'dead', at, text, transient, own),
         settle,
       );
       await settle();
@@ -516,7 +521,7 @@ async function runHandler(
               runAt,
               lockedBy: null,
               lockedAt: null,
-              lastError: truncateText(errorText(err), MAX_ERROR_LENGTH),
+              lastError: truncateText(text, MAX_ERROR_LENGTH),
               updatedAt: at,
             })
             .where(and(eq(jobs.id, job.id), own)),
@@ -806,7 +811,8 @@ export function startRunner(
           workerId,
           stopping: () => stopped,
           giveUp: giveUp.signal,
-          keep: (claimed, kept) => unwritten.set(claimKey(claimed), kept),
+          // Only where a sweep takes it.
+          keep: SWEPT ? (claimed, kept) => unwritten.set(claimKey(claimed), kept) : undefined,
         });
         await safeMaterialize(db, clock(), opts);
       } catch (err) {
@@ -847,7 +853,12 @@ export function startRunner(
         .where(and(eq(jobs.status, 'running'), eq(jobs.lockedBy, workerId)))
         .all();
       const running = new Set(rows.map(claimKey));
-      for (const key of unwritten.keys()) if (!running.has(key)) unwritten.delete(key);
+      for (const key of unwritten.keys()) {
+        if (running.has(key)) continue;
+        unwritten.delete(key);
+        // Written after all, its answer lost: the worker that gave it up queued no next occurrence.
+        ended = true;
+      }
       const left = rows.filter((row) => !held.has(claimKey(row)));
       if (left.length === 0) return;
       await racePoint('jobs.sweep.found');
@@ -870,9 +881,9 @@ export function startRunner(
           ended = true;
           if (kept.after !== undefined) after.push(kept.after);
         } catch (err) {
-          if (!isStatementError(err)) throw err;
-          // Refused for what it says, as it would be again: the next sweep ends the row without it.
-          unwritten.delete(key);
+          // Refused for what it says, as it would be again: the next sweep ends the row without it. Any
+          // other error is tried again by then, and the rows after this one are not held up by it.
+          if (isStatementError(err)) unwritten.delete(key);
           opts.onError?.(err);
         }
       }
@@ -883,16 +894,22 @@ export function startRunner(
     } catch (err) {
       opts.onError?.(err);
     }
-    for (const then of after) await then();
+    for (const then of after) {
+      try {
+        await then();
+      } catch (err) {
+        opts.onError?.(err);
+      }
+    }
     // An idle server materializes after no job: the schedule of a row ended here would wait.
     if (ended) await safeMaterialize(db, clock(), opts);
   };
 
   let sweepTimer: NodeJS.Timeout | undefined;
   let sweeping: Promise<void> = Promise.resolve();
-  /** One after another, from the startup's recovery on. SQLite's claim has no answer to lose. */
+  /** One after another, from the startup's recovery on. */
   const scheduleSweep = (): void => {
-    if (stopped || SCHEMA_DIALECT !== 'postgres') return;
+    if (stopped || !SWEPT) return;
     sweepTimer = setTimeout(() => {
       sweeping = sweep().finally(scheduleSweep);
     }, opts.sweepMs ?? SWEEP_MS);

@@ -51,6 +51,7 @@ interface Job {
   maxAttempts?: number;
   /** What the handler does; the run's number, from 1. */
   body?: (run: number, db: Db) => Promise<void>;
+  onDead?: () => Promise<void>;
   gate?: DemoResetGate;
   /** Of the writes that end a job. */
   limitMs?: number;
@@ -95,6 +96,7 @@ async function setUp(job: Job = {}) {
       await job.body?.(n, db);
     },
     async onDead() {
+      await job.onDead?.();
       seen.dead += 1;
     },
   });
@@ -123,19 +125,27 @@ async function setUp(job: Job = {}) {
   const rowOf = async (id: string) =>
     (await by.query<Record<string, unknown>>('SELECT * FROM jobs WHERE id = $1', [id])).rows[0]!;
   const statusOf = async (id: string) => (await rowOf(id)).status;
-  /** The database answers a write of `status` to a job's row with `code`. */
-  const refuse = async (status: string, code: string) => {
-    await by.query(`CREATE OR REPLACE FUNCTION refuse_write() RETURNS trigger LANGUAGE plpgsql AS
+  /** The triggers there are: a second code replaces the function alone, with no moment in between. */
+  const refused = new Set<string>();
+  const refuseWhen = async (name: string, when: string, code: string) => {
+    await by.query(`CREATE OR REPLACE FUNCTION refuse_${name}() RETURNS trigger LANGUAGE plpgsql AS
       $$ BEGIN RAISE EXCEPTION 'refused' USING ERRCODE = '${code}'; END $$`);
-    await by.query('DROP TRIGGER IF EXISTS refuse_write ON jobs');
-    await by.query(`CREATE TRIGGER refuse_write BEFORE UPDATE ON jobs FOR EACH ROW
-      WHEN (NEW.status = '${status}') EXECUTE FUNCTION refuse_write()`);
+    if (refused.has(name)) return;
+    refused.add(name);
+    await by.query(`CREATE TRIGGER refuse_${name} BEFORE UPDATE ON jobs FOR EACH ROW
+      WHEN (${when}) EXECUTE FUNCTION refuse_${name}()`);
   };
-  const accept = () => by.query('DROP TRIGGER IF EXISTS refuse_write ON jobs');
+  /** The database answers a write of `status` to a job's row with `code`. */
+  const refuse = (status: string, code: string) =>
+    refuseWhen(status, `NEW.status = '${status}'`, code);
+  const accept = async () => {
+    for (const name of refused) await by.query(`DROP TRIGGER refuse_${name} ON jobs`);
+    refused.clear();
+  };
   /** Of the test's own job: the app's schedules come due too when a test's clock goes ahead. */
   const said = (message: string) =>
     logs.lines.filter((l) => l.includes(message) && l.includes(KIND));
-  return { app, a, by, seen, start, add, rowOf, statusOf, refuse, accept, said, ...h };
+  return { app, a, by, seen, start, add, rowOf, statusOf, refuse, refuseWhen, accept, said, ...h };
 }
 
 describe.runIf(testDialect === 'postgres')('the claim’s answer is lost (#974)', () => {
@@ -350,6 +360,60 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     next.release();
   });
 
+  it('a kept dead whose row changed between the read and the write is not settled', async () => {
+    const t = await setUp({ maxAttempts: 1, body: failing });
+    await t.refuse('dead', '57P03');
+    const id = await t.add();
+    t.start();
+    await until(() => t.seen.errors.length > 0);
+    const pause = pauseAt('jobs.sweep.found');
+    await pause.reached;
+    await t.accept();
+    await t.by.query("UPDATE jobs SET status = 'done' WHERE id = $1", [id]);
+    pause.release();
+    await sweeps();
+    expect([await t.statusOf(id), t.seen.dead]).toEqual(['done', 0]);
+  });
+
+  it('the first write made, its answer lost: its schedule goes on, on an idle server', async () => {
+    const t = await setUp();
+    let writes = 0;
+    t.on.statement = async (text, run) => {
+      if (!endsJob(text)) return run();
+      writes += 1;
+      if (writes === 1) await run();
+      throw new Error('Connection terminated unexpectedly');
+    };
+    await setSchedule(t.app.db, KIND, { cron: '0 3 * * *', enabled: true });
+    t.start();
+    const pending = async () =>
+      (
+        await t.by.query<{ id: string }>(
+          "SELECT id FROM jobs WHERE kind = $1 AND status = 'pending'",
+          [KIND],
+        )
+      ).rows.map((r) => r.id);
+    await until(async () => (await pending()).length === 1);
+    const [first] = await pending();
+    await t.by.query('UPDATE jobs SET run_at = 0 WHERE id = $1', [first]);
+    await until(() => t.seen.errors.length > 0);
+    expect([await t.statusOf(first!), await pending()]).toEqual(['done', []]);
+    delete t.on.statement;
+    await until(async () => (await pending()).length === 1);
+    expect(t.seen.runs).toBe(1);
+  });
+
+  it('a job that throws what has no text goes back, and is dead at its last attempt', async () => {
+    const bare: unknown = Object.create(null);
+    const t = await setUp({ maxAttempts: 2, limitMs: 60_000, body: () => Promise.reject(bare) });
+    const id = await t.add();
+    t.start();
+    await until(() => t.said(PUT_BACK).length > 0);
+    t.seen.ahead = 60 * 60 * 1000;
+    await until(async () => (await t.statusOf(id)) === 'dead');
+    expect(t.seen.runs).toBe(2);
+  });
+
   it('kept, then refused for what it says: dropped, and the next sweep queues the job again', async () => {
     const t = await setUp();
     await t.refuse('done', '57P03');
@@ -397,7 +461,7 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     expect([t.seen.runs, t.said(PUT_BACK).length]).toEqual([1, 0]);
   });
 
-  it('a stop that ends the wait keeps nothing: the row is the next start’s', async () => {
+  it('a stop ends the wait: the row is the next start’s', async () => {
     const t = await setUp({ limitMs: 60_000 });
     await t.refuse('done', '57P03');
     const id = await t.add();
@@ -435,15 +499,17 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
       expect(t.said(PUT_BACK)).toHaveLength(1);
     });
 
-    it('one whose row the reset deleted: nothing is written', async () => {
-      const t = await setUp({ gate: ENDS_SOON(), limitMs: 60_000, maxAttempts: 1 });
+    it('one whose row the reset deleted before the write: nothing is written or said', async () => {
+      const t = await setUp({ gate: ENDS_SOON(), limitMs: 60_000 });
       await t.refuse('done', '57P03');
       const id = await t.add();
       t.start();
       await until(() => t.said("a job's row could not be written").length > 0);
+      const pause = pauseAt('jobs.sweep.found');
+      await pause.reached;
       await t.by.query('DELETE FROM jobs WHERE id = $1', [id]);
-      await t.accept();
-      await new Promise((r) => setTimeout(r, 1000)); // past the hold's end
+      pause.release();
+      await sweeps();
       expect(await t.rowOf(id)).toBeUndefined();
       expect([t.said(PUT_BACK).length, t.said(MADE_DEAD).length, t.seen.dead]).toEqual([0, 0, 0]);
     });
@@ -649,6 +715,80 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     parked.release();
     await draining;
     expect(t.seen.runs).toBe(1);
+  });
+
+  it('a row that keeps failing does not stop the sweep for the next', async () => {
+    const t = await setUp();
+    t.start();
+    await sweeps();
+    const [bad, good] = [row({ runAt: 0 }), row({ runAt: 1 })];
+    await t.refuseWhen('row', `NEW.id = '${bad.id}'`, '57P03');
+    await t.app.db
+      .insert(jobs)
+      .values([bad, good] as never)
+      .run();
+    await until(async () => (await t.statusOf(good.id)) === 'pending');
+    expect(await t.statusOf(bad.id)).toBe('running');
+    expect(t.seen.errors.length).toBeGreaterThan(0);
+    await t.accept();
+    await until(async () => (await t.statusOf(bad.id)) === 'pending');
+  });
+
+  it('what follows one row’s end throwing does not stop the rest', async () => {
+    const t = await setUp();
+    const THROWS = 'test.sweep_throws';
+    registerJob({
+      kind: THROWS,
+      payloadSchema: z.object({}).refine(() => {
+        throw new Error('the schema threw');
+      }) as never,
+      maxAttempts: 1,
+      run: () => Promise.resolve(),
+      onDead: () => Promise.resolve(),
+    });
+    open.push(async () => unregisterJob(THROWS));
+    t.start();
+    await sweeps();
+    const first = row({ kind: THROWS, attempts: 1, maxAttempts: 1, runAt: 0 });
+    const second = row({ attempts: 3, runAt: 1 });
+    await t.app.db
+      .insert(jobs)
+      .values([first, second] as never)
+      .run();
+    await until(async () => (await t.statusOf(second.id)) === 'dead' && t.seen.dead > 0);
+    expect(await t.statusOf(first.id)).toBe('dead');
+    expect(t.seen.errors.map(String)).toEqual(['Error: the schema threw']);
+    // And the sweeps go on.
+    const third = row({});
+    await t.app.db
+      .insert(jobs)
+      .values(third as never)
+      .run();
+    await until(async () => (await t.statusOf(third.id)) === 'pending');
+  });
+
+  it('a job is claimed while a swept row is settled: the gate is let go first', async () => {
+    let letGo!: () => void;
+    const held = new Promise<void>((r) => (letGo = r));
+    let settling = 0;
+    const t = await setUp({
+      onDead: async () => {
+        settling += 1;
+        await held;
+      },
+    });
+    t.start();
+    await sweeps();
+    const left = row({ attempts: 3 });
+    await t.app.db
+      .insert(jobs)
+      .values(left as never)
+      .run();
+    await until(() => settling === 1);
+    const id = await t.add();
+    await until(async () => (await t.statusOf(id)) === 'done');
+    letGo();
+    await until(() => t.seen.dead === 1);
   });
 
   it('a sweep that fails says so, and the next one goes on', async () => {
