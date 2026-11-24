@@ -981,6 +981,124 @@ describe('jobs api', () => {
     expect(bad.statusCode).toBe(400);
   });
 
+  // https://github.com/bgoleno/opportun/issues/982: the counts are of every job the viewer may see,
+  // whatever the list is limited or filtered to.
+  describe('counts, and the statuses the page filters by (#982)', () => {
+    type Row = { status: 'pending' | 'running' | 'done' | 'dead'; attempts?: number };
+    /** Writes the jobs, each changed a second before the one after it, and returns their ids. */
+    async function write(db: Db, userId: string | null, rows: Row[], at = Date.now()) {
+      const ids = rows.map(() => newId());
+      await db
+        .insert(jobs)
+        .values(
+          rows.map((r, i) => ({
+            id: ids[i]!,
+            kind: 'test.echo',
+            payload: {},
+            status: r.status,
+            attempts: r.attempts ?? 1,
+            maxAttempts: 5,
+            // A day away: no runner takes one while the test reads.
+            runAt: at + 86_400_000,
+            userId,
+            createdAt: at,
+            updatedAt: at - (rows.length - i) * 1000,
+          })),
+        )
+        .run();
+      return ids;
+    }
+    async function setup() {
+      const booted = await boot();
+      await booted.app.db.delete(jobs).run();
+      return booted;
+    }
+    const get = async (
+      c: { request: (r: { method: 'GET'; url: string }) => Promise<unknown> },
+      q: string,
+    ) => {
+      const res = (await c.request({ method: 'GET', url: `/api/v1/jobs${q}` })) as {
+        statusCode: number;
+        body: string;
+        json: () => { items: { id: string; status: string }[]; counts: Record<string, number> };
+      };
+      expect(res.statusCode, res.body).toBe(200);
+      return res.json();
+    };
+
+    it("an administrator's are everyone's and the instance's, a user's are their own", async () => {
+      const { app, a, b } = await setup();
+      await write(app.db, null, [
+        { status: 'pending', attempts: 0 },
+        { status: 'pending', attempts: 2 },
+        { status: 'done' },
+        { status: 'done' },
+        { status: 'dead', attempts: 5 },
+      ]);
+      await write(app.db, a.userId, [{ status: 'running' }, { status: 'done' }]);
+      await write(app.db, b.userId, [
+        { status: 'pending', attempts: 0 },
+        { status: 'pending', attempts: 0 },
+        { status: 'pending', attempts: 1 },
+        { status: 'dead', attempts: 5 },
+      ]);
+      const all = { queued: 3, retrying: 2, running: 1, done: 3, dead: 2 };
+      expect((await get(a, '')).counts).toEqual(all);
+      // Not what the list is limited or filtered to.
+      expect((await get(a, '?limit=1')).counts).toEqual(all);
+      expect((await get(a, '?status=dead&limit=1')).counts).toEqual(all);
+      const own = { queued: 2, retrying: 1, running: 0, done: 0, dead: 1 };
+      expect((await get(b, '')).counts).toEqual(own);
+      expect((await get(b, '?status=running')).counts).toEqual(own);
+    });
+
+    it('no jobs at all count 0 each', async () => {
+      const { a } = await setup();
+      expect(await get(a, '')).toEqual({
+        items: [],
+        counts: { queued: 0, retrying: 0, running: 0, done: 0, dead: 0 },
+      });
+    });
+
+    it('a dead job changed before the 200 most recent is counted, and listed by its status', async () => {
+      const { app, a } = await setup();
+      const [dead] = await write(app.db, null, [{ status: 'dead' }], Date.now() - 3_600_000);
+      await write(
+        app.db,
+        null,
+        Array.from({ length: 201 }, (): Row => ({ status: 'done' })),
+      );
+      const recent = await get(a, '?limit=200');
+      expect(recent.items).toHaveLength(200);
+      expect(recent.items.map((j) => j.id)).not.toContain(dead);
+      expect(recent.counts).toMatchObject({ dead: 1, done: 201 });
+      expect((await get(a, '?status=dead&limit=200')).items.map((j) => j.id)).toEqual([dead]);
+    });
+
+    it('queued and retrying are the pending ones, not tried yet and tried', async () => {
+      const { app, a, b } = await setup();
+      const [queued, retrying, running, done, dead] = await write(app.db, null, [
+        { status: 'pending', attempts: 0 },
+        { status: 'pending', attempts: 3 },
+        { status: 'running', attempts: 1 },
+        { status: 'done', attempts: 1 },
+        { status: 'dead', attempts: 0 },
+      ]);
+      const ids = async (status: string) =>
+        (await get(a, `?status=${status}`)).items.map((j) => j.id);
+      expect(await ids('queued')).toEqual([queued]);
+      expect(await ids('retrying')).toEqual([retrying]);
+      expect(await ids('pending')).toEqual([retrying, queued]);
+      expect(await ids('running')).toEqual([running]);
+      expect(await ids('done')).toEqual([done]);
+      expect(await ids('dead')).toEqual([dead]);
+      // Still the reader's own only, by each status.
+      for (const status of ['queued', 'retrying', 'pending', 'running', 'done', 'dead']) {
+        expect((await get(b, `?status=${status}`)).items, status).toEqual([]);
+      }
+    });
+  });
+
   it('retry revives a dead job (admin only) and the runner then completes it', async () => {
     const { app, a, b } = await boot();
     let fail = true;

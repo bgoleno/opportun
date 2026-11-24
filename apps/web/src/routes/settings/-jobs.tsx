@@ -3,10 +3,11 @@
 // more) had no page, so "is something stuck" meant reading server logs. Read-only by design:
 // a retry/cancel/purge control is a different review, about what either does to a job that
 // already half-ran, not this one.
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { Badge, type badgeVariants } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Table,
@@ -38,13 +39,26 @@ export interface JobView {
  * a server that may already be struggling. */
 const POLL_MS = 5000;
 
-const jobsQuery = {
-  queryKey: ['admin', 'jobs'] as const,
-  queryFn: () => api<{ items: JobView[] }>('/jobs?limit=200'),
-};
+/** The most jobs listed at once (the server's own limit); the counts are of all of them (#982). */
+const LISTED = 200;
 
-export function useJobs() {
-  return useQuery({ ...jobsQuery, refetchInterval: POLL_MS });
+export interface JobsAnswer {
+  items: JobView[];
+  counts: Record<DisplayStatus, number>;
+}
+
+/** The jobs of one status, or of every one, and how many there are of each. */
+function useJobs(filter: DisplayStatus | null) {
+  return useQuery({
+    queryKey: ['admin', 'jobs', filter] as const,
+    queryFn: () =>
+      api<JobsAnswer>(`/jobs?limit=${LISTED}${filter === null ? '' : `&status=${filter}`}`),
+    refetchInterval: POLL_MS,
+    // The counts stay while another status is asked for.
+    placeholderData: keepPreviousData,
+    // A status left is forgotten: asked for again, it is read again, not shown as it was then.
+    gcTime: 0,
+  });
 }
 
 /**
@@ -70,6 +84,9 @@ const STATUS_LABEL: Readonly<Record<DisplayStatus, string>> = {
   done: 'Done',
 };
 
+// eslint-disable-next-line security/detect-object-injection -- a typed display status
+const labelOf = (s: DisplayStatus) => STATUS_LABEL[s];
+
 const STATUS_VARIANT: Readonly<
   Record<DisplayStatus, VariantProps<typeof badgeVariants>['variant']>
 > = {
@@ -80,9 +97,24 @@ const STATUS_VARIANT: Readonly<
   done: 'success',
 };
 
+/** Which of the jobs are listed, and how many there are beyond them. */
+function shownText(shown: number, counted: number, filter: DisplayStatus | null): string {
+  const kind = filter === null ? '' : `${labelOf(filter).toLowerCase()} `;
+  // The server reads the list and the counts one after the other: a job added between them is in
+  // one only, so the list can be the longer.
+  const beyond = counted - shown;
+  if (beyond > 0) {
+    const more = `${beyond.toLocaleString()} more ${beyond === 1 ? 'is' : 'are'} not.`;
+    return `The ${shown} most recently changed ${kind}jobs are shown, newest first. ${more}`;
+  }
+  return shown === 1
+    ? `The one ${kind}job is shown.`
+    : `All ${shown} ${kind}jobs are shown, most recently changed first.`;
+}
+
 export function JobsCard() {
-  const jobs = useJobs();
   const [filter, setFilter] = useState<DisplayStatus | null>(null);
+  const jobs = useJobs(filter);
   const now = Date.now();
 
   if (jobs.isError) {
@@ -91,17 +123,24 @@ export function JobsCard() {
         <CardHeader>
           <CardTitle>Jobs</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="grid justify-items-start gap-4">
           <FormError message={errorMessage(jobs.error)} />
+          {/* The tiles, which would clear it, are not here. */}
+          {filter === null ? null : (
+            <Button variant="outline" size="sm" onClick={() => setFilter(null)}>
+              Show all jobs
+            </Button>
+          )}
         </CardContent>
       </Card>
     );
   }
 
-  const items = jobs.data?.items ?? [];
-  const counts = new Map<DisplayStatus, number>();
-  for (const j of items) counts.set(displayStatus(j), (counts.get(displayStatus(j)) ?? 0) + 1);
-  const shown = filter === null ? items : items.filter((j) => displayStatus(j) === filter);
+  const { items, counts } = jobs.data ?? { items: [], counts: null };
+  // eslint-disable-next-line security/detect-object-injection -- a typed display status
+  const countOf = (s: DisplayStatus) => counts?.[s] ?? 0;
+  const counted =
+    filter === null ? STATUS_ORDER.reduce((sum, s) => sum + countOf(s), 0) : countOf(filter);
 
   return (
     <Card>
@@ -109,8 +148,8 @@ export function JobsCard() {
         <CardTitle>Jobs</CardTitle>
         <CardDescription>
           Every background job (Gmail sync, classification, backups, the attachment sweep, discovery
-          runs, and the rest) shares this one queue. The most recently changed 200 are shown, newest
-          first, and the list refreshes itself every few seconds.
+          runs, and the rest) shares this one queue. The counts are of all of them, and the page
+          refreshes itself every few seconds.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
@@ -120,7 +159,6 @@ export function JobsCard() {
           <>
             <ul aria-label="Jobs by status" className="grid grid-cols-2 gap-3 sm:grid-cols-5">
               {STATUS_ORDER.map((s) => {
-                const n = counts.get(s) ?? 0;
                 const active = filter === s;
                 return (
                   <li key={s}>
@@ -134,83 +172,90 @@ export function JobsCard() {
                       )}
                     >
                       <span className="text-xs font-medium text-muted-foreground">
-                        {/* eslint-disable-next-line security/detect-object-injection -- a status from the STATUS_ORDER constant list */}
-                        {STATUS_LABEL[s]}
+                        {labelOf(s)}
                       </span>
-                      <span className="text-2xl font-semibold tabular-nums">{n}</span>
+                      <span className="text-2xl font-semibold tabular-nums">
+                        {countOf(s).toLocaleString()}
+                      </span>
                     </button>
                   </li>
                 );
               })}
             </ul>
-            {items.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No jobs yet.</p>
-            ) : shown.length === 0 ? (
+            {jobs.isPlaceholderData ? (
+              // The list is still the last status's.
+              <p className="text-sm text-muted-foreground">Loading...</p>
+            ) : items.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No {STATUS_LABEL[filter as DisplayStatus].toLowerCase()} jobs.
+                {filter === null ? 'No jobs yet.' : `No ${labelOf(filter).toLowerCase()} jobs.`}
               </p>
             ) : (
-              <div className="overflow-x-auto rounded-md border">
-                <Table aria-label="Jobs">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Kind</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Attempts</TableHead>
-                      <TableHead>Due</TableHead>
-                      <TableHead>Updated</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {shown.map((j) => {
-                      const status = displayStatus(j);
-                      // A pending job already due is one a worker should have claimed by now:
-                      // the signal that something is actually stuck, not just waiting its turn.
-                      const overdue = j.status === 'pending' && j.runAt <= now;
-                      return (
-                        <TableRow key={j.id}>
-                          <TableCell>
-                            <div className="grid gap-0.5">
-                              <span className="font-mono text-xs">{j.kind}</span>
-                              {j.userId === null ? null : (
-                                <span className="text-xs text-muted-foreground">
-                                  user {j.userId}
-                                </span>
+              <>
+                <p className="text-sm text-muted-foreground">
+                  {shownText(items.length, counted, filter)}
+                </p>
+                <div className="overflow-x-auto rounded-md border">
+                  <Table aria-label="Jobs">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Kind</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Attempts</TableHead>
+                        <TableHead>Due</TableHead>
+                        <TableHead>Updated</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {items.map((j) => {
+                        const status = displayStatus(j);
+                        // A pending job already due is one a worker should have claimed by now:
+                        // the signal that something is actually stuck, not just waiting its turn.
+                        const overdue = j.status === 'pending' && j.runAt <= now;
+                        return (
+                          <TableRow key={j.id}>
+                            <TableCell>
+                              <div className="grid gap-0.5">
+                                <span className="font-mono text-xs">{j.kind}</span>
+                                {j.userId === null ? null : (
+                                  <span className="text-xs text-muted-foreground">
+                                    user {j.userId}
+                                  </span>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="grid gap-0.5">
+                                {/* eslint-disable-next-line security/detect-object-injection -- a typed display status */}
+                                <Badge variant={STATUS_VARIANT[status]}>{labelOf(status)}</Badge>
+                                {j.lastError === null ? null : (
+                                  <span className="max-w-64 truncate text-xs text-destructive">
+                                    {j.lastError}
+                                  </span>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-muted-foreground tabular-nums">
+                              {j.attempts} / {j.maxAttempts}
+                            </TableCell>
+                            <TableCell
+                              className={cn(
+                                'whitespace-nowrap',
+                                overdue ? 'font-medium text-destructive' : 'text-muted-foreground',
                               )}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="grid gap-0.5">
-                              {/* eslint-disable-next-line security/detect-object-injection -- a typed display status */}
-                              <Badge variant={STATUS_VARIANT[status]}>{STATUS_LABEL[status]}</Badge>
-                              {j.lastError === null ? null : (
-                                <span className="max-w-64 truncate text-xs text-destructive">
-                                  {j.lastError}
-                                </span>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-muted-foreground tabular-nums">
-                            {j.attempts} / {j.maxAttempts}
-                          </TableCell>
-                          <TableCell
-                            className={cn(
-                              'whitespace-nowrap',
-                              overdue ? 'font-medium text-destructive' : 'text-muted-foreground',
-                            )}
-                          >
-                            {formatDateTime(j.runAt)}
-                            {overdue ? ' (overdue)' : ''}
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap text-muted-foreground">
-                            {formatDateTime(j.updatedAt)}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
+                            >
+                              {formatDateTime(j.runAt)}
+                              {overdue ? ' (overdue)' : ''}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap text-muted-foreground">
+                              {formatDateTime(j.updatedAt)}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
             )}
           </>
         )}
