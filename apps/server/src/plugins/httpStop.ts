@@ -1,13 +1,17 @@
 // The end of the HTTP server's part of a stop (https://github.com/bgoleno/opportun/issues/1004). Node's
-// close waits for every connection, and ends those that are idle as it begins and no others: one whose
-// answer was still to come is kept afterwards for Fastify's keep-alive time (72 s), as is one that
-// never asked for anything. So, from the moment the server is told to stop:
-// - an answer that is still to be sent says `connection: close`, and one whose headers have gone (a
-//   chat's stream, a download) has its connection closed when all of it has been sent;
-// - a connection that never sent anything is closed;
+// close waits for every connection, and ends those that are idle as it begins and no others. One whose
+// answer was still to come is kept afterwards for Fastify's keep-alive time (72 s), as is one that never
+// asked for anything; and one whose answer has been handed over and is still being read counts as idle,
+// and is cut. So, from the moment the server is told to stop:
+// - a connection with nothing to answer is closed, one that never asked included (one in the middle of
+//   asking is not);
+// - the last answer of any other says `connection: close`, and the connection is closed when all of it
+//   has been sent (its headers may have gone before the stop: a chat's stream, a download);
 // - whatever is still open after HTTP_STOP_MS is closed as it is.
 // A request that comes meanwhile is Fastify's own 503. Nothing changes while the server is not stopping.
-import type { ServerResponse } from 'node:http';
+// Nothing here waits: Fastify gives a hook 10 s, and then fails the close (sec on
+// https://github.com/bgoleno/opportun/pull/1012).
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Socket } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
@@ -25,41 +29,54 @@ export interface HttpStopOptions {
 }
 
 async function httpStop(app: FastifyInstance, opts: HttpStopOptions): Promise<void> {
-  const sockets = new Set<Socket>();
-  const answers = new Set<ServerResponse>();
+  const { server } = app;
+  /** Each connection, and its requests whose answer has not all been sent (a client can ask ahead). */
+  const pending = new Map<Socket, number>();
   let stopping = false;
 
-  app.server.on('connection', (socket: Socket) => {
-    sockets.add(socket);
-    socket.once('close', () => sockets.delete(socket));
+  server.on('connection', (socket: Socket) => {
+    pending.set(socket, 0);
+    socket.once('close', () => pending.delete(socket));
   });
-  app.addHook('onRequest', (_req, reply, done) => {
-    const answer = reply.raw;
-    answers.add(answer);
-    answer.once('finish', () => answers.delete(answer));
-    answer.once('close', () => answers.delete(answer));
+  // Before Fastify's own listener, so that a request is counted by the time it is answered.
+  server.prependListener('request', ({ socket }: IncomingMessage, answer: ServerResponse) => {
+    const before = pending.get(socket);
+    if (before === undefined) return;
+    pending.set(socket, before + 1);
+    answer.once('finish', () => {
+      const now = pending.get(socket);
+      if (now === undefined) return; // it has gone
+      pending.set(socket, now - 1);
+      if (stopping && now === 1) socket.destroySoon();
+    });
+  });
+  // What node's close() calls, and nothing else does. Node knows which connection is in the middle of
+  // asking, and takes an answer for done once it has been handed all of it: one that is still being sent
+  // is kept from it here. If a node's close() ever stops calling it, httpStop.test.ts's slow readers fail.
+  const closeIdle = server.closeIdleConnections.bind(server);
+  server.closeIdleConnections = () => {
+    const answering = [...pending].filter(([, n]) => n > 0).map(([socket]) => socket);
+    for (const socket of answering) socket.destroy = () => socket;
+    try {
+      closeIdle();
+    } finally {
+      for (const socket of answering) Reflect.deleteProperty(socket, 'destroy');
+    }
+    for (const socket of pending.keys()) if (socket.bytesRead === 0) socket.destroy();
+  };
+  app.addHook('onSend', (req, reply, _payload, done) => {
+    // Not while another answer is behind it on the connection, which this would lose.
+    const behind = (pending.get(req.raw.socket) ?? 1) > 1;
+    if (stopping && !behind) reply.header('connection', 'close');
     done();
   });
-  app.addHook('onSend', (_req, reply, _payload, done) => {
-    if (stopping) reply.header('connection', 'close');
-    done();
-  });
-  app.addHook('onResponse', (req, _reply, done) => {
-    // Once all of the answer is written: what its headers said is no matter now.
-    if (stopping) req.raw.socket.destroySoon();
-    done();
-  });
-  app.addHook('preClose', async () => {
+  app.addHook('preClose', (done) => {
     stopping = true;
     // Unref'd: while anything is open the process is there for it to fire, and nothing else needs it.
-    const cut = setTimeout(() => app.server.closeAllConnections(), opts.boundMs ?? HTTP_STOP_MS);
+    const cut = setTimeout(() => server.closeAllConnections(), opts.boundMs ?? HTTP_STOP_MS);
     cut.unref();
-    app.server.once('close', () => clearTimeout(cut));
-    // Node counts an answer as ended once it has been given all of it, and its close would cut one that
-    // its client is still reading.
-    const unread = [...answers].filter((a) => a.writableEnded && !a.writableFinished);
-    await Promise.all(unread.map((a) => new Promise((sent) => a.once('close', sent))));
-    for (const socket of sockets) if (socket.bytesRead === 0) socket.destroy();
+    server.once('close', () => clearTimeout(cut));
+    done();
   });
 }
 
