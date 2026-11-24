@@ -73,6 +73,10 @@ export function Toaster() {
           onOpenChange={(open) => {
             if (!open) dismiss(t.id);
           }}
+          // The toast takes the pointer from its first drawing on (#1014). Radix keeps the viewport's
+          // wrapper at pointer-events: none until it has counted a toast, which it does a task after
+          // the toast is drawn: with the main thread busy, a click on it went to the page under it.
+          style={{ pointerEvents: 'auto' }}
           className={cn(
             'relative flex w-full items-start gap-3 rounded-lg p-4 pr-10 shadow-lg',
             variantClass[t.variant ?? 'default'],
