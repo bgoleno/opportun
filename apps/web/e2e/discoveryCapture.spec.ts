@@ -97,15 +97,19 @@ for (const { site, width } of [
 test('W1, case 3: a page left alone asks for nothing more', async () => {
   await atDesk(async (desk) => {
     await desk.alert('linkedin', [{ posting: posting('linkedin', 'Quiet Role'), location: PLACE }]);
+    await desk.page.clock.install();
     await desk.discovery();
     await expect(desk.row('Quiet Role')).toBeVisible();
-    // The first read's own window is over only after a return or an opened posting: neither here.
-    await desk.page.waitForTimeout(1_000);
+    await desk.page.waitForLoadState('networkidle');
     let asked = 0;
     desk.page.on('request', (r) => {
       if (isDiscovery(r)) asked += 1;
     });
-    await desk.page.waitForTimeout(8_000);
+    // Neither a return nor an opened posting: nothing to ask for, however long.
+    for (let t = 0; t < 60_000; t += 3_000) {
+      await desk.page.clock.runFor(3_000);
+      await desk.page.waitForTimeout(10);
+    }
     expect(asked).toBe(0);
   });
 });
@@ -217,6 +221,7 @@ for (const site of SITES) {
 test('W7, case 37: a return by focus, by visibility, or both, is one read of the list', async () => {
   await atDesk(async (desk) => {
     await desk.alert('linkedin', [{ posting: posting('linkedin', 'Stay Role'), location: PLACE }]);
+    await desk.page.clock.install();
     await desk.discovery();
     await expect(desk.row('Stay Role')).toBeVisible();
     for (const events of [
@@ -224,14 +229,18 @@ test('W7, case 37: a return by focus, by visibility, or both, is one read of the
       ['visibilitychange'],
       ['visibilitychange', 'focus'],
     ] as const) {
-      await desk.page.waitForTimeout(1_500);
+      await desk.page.clock.runFor(1_500);
+      await desk.page.waitForTimeout(200);
       let reads = 0;
       const count = (r: Request) => {
         if (isList(r)) reads += 1;
       };
       desk.page.on('request', count);
       await desk.back([...events]);
-      await desk.page.waitForTimeout(1_200);
+      await expect.poll(() => reads, events.join(' + ')).toBe(1);
+      // Not a second one, and short of the next question.
+      await desk.page.clock.runFor(1_200);
+      await desk.page.waitForTimeout(200);
       desk.page.off('request', count);
       expect(reads, events.join(' + ')).toBe(1);
     }
@@ -252,9 +261,9 @@ test('W7, case 38: the asking ends 60 s after a return, and 10 minutes after a p
     const during = async (ms: number): Promise<number> => {
       asked = 0;
       // Steps, so a timer that arms the next one is followed, and each answer can land.
-      for (let t = 0; t < ms; t += 1_000) {
-        await desk.page.clock.runFor(1_000);
-        await desk.page.waitForTimeout(10);
+      for (let t = 0; t < ms; t += 2_500) {
+        await desk.page.clock.runFor(2_500);
+        await desk.page.waitForTimeout(20);
       }
       await desk.page.waitForTimeout(300);
       return asked;
