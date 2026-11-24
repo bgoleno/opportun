@@ -351,8 +351,11 @@ test('W7, case 40: "select all matching" loses only the captured one', async () 
     await desk.page.getByLabel('Sort by').selectOption({ label: 'Date discovered' });
     await read;
     await expect(desk.cards.first()).toHaveAccessibleName(/Bulk Role/);
-    await desk.page.getByRole('button', { name: 'Select all 210 matching' }).click();
-    await expect(desk.page.getByText('210 selected')).toBeVisible();
+    // It pages by score, and ranking still moves rows between its pages: pressed again until it has all.
+    await expect(async () => {
+      await desk.page.getByRole('button', { name: 'Select all 210 matching' }).click();
+      await expect(desk.page.getByText('210 selected')).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 60_000 });
     const first = await desk.cards.first().getAttribute('aria-label');
     const gone = list.find((p) => `${p.title} at ${COMPANY}` === first) as MockPosting;
     expect(await desk.capture(gone)).toContain(ADDED);
