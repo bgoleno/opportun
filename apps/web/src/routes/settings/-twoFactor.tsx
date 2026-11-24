@@ -46,6 +46,10 @@ export function formatRecoveryCode(code: string): string {
   return `${code.slice(0, 5)}-${code.slice(5)}`;
 }
 
+/** At setup there is no recovery code yet, so none is suggested (#896). */
+const INVALID_SETUP_CODE =
+  "That code is not valid. Check that your device's clock is right, then enter the code the app shows now.";
+
 function codeError(err: unknown): string {
   return err instanceof ApiError && err.code === 'invalid_code'
     ? INVALID_CODE_TEXT
@@ -269,7 +273,9 @@ function EnrollDialog(props: {
       setError(
         err instanceof ApiError && err.code === 'invalid_password'
           ? passwordError(err)
-          : codeError(err),
+          : err instanceof ApiError && err.code === 'invalid_code'
+            ? INVALID_SETUP_CODE
+            : errorMessage(err),
       );
     } finally {
       setBusy(false);

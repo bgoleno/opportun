@@ -335,7 +335,15 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
   ): Promise<string> {
     if (!providerAvailable(provider)) throw new HttpError(409, 'provider_unavailable');
     const creds = await readProviderCreds(db, provider);
-    if (creds === undefined) throw new HttpError(409, 'provider_not_configured');
+    if (creds === undefined) {
+      throw new HttpError(
+        409,
+        'provider_not_configured',
+        'This sign-in provider is no longer set up on this server. Use another one, or ask its administrator.',
+        undefined,
+        { userFacing: true },
+      );
+    }
     const binding = newBinding();
     const { state, nonce } = signOAuthState(app.config.masterKey, {
       provider,
@@ -360,8 +368,18 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
   api.get(
     '/auth/oauth/:provider/start',
     { preHandler: ipLimit, schema: { params: ProviderParams, querystring: StartQuery } },
-    async (req, reply) =>
-      reply.redirect(await authorize(req, reply, req.params.provider, 'login', '')),
+    async (req, reply) => {
+      try {
+        return reply.redirect(await authorize(req, reply, req.params.provider, 'login', ''));
+      } catch (err) {
+        // The browser navigates here, so a refusal is not JSON on its screen (#896): the login page
+        // was open while an admin removed the provider.
+        if (err instanceof HttpError && err.code === 'provider_not_configured') {
+          return reply.redirect(`${LOGIN_PAGE}?oauth=not_configured`);
+        }
+        throw err;
+      }
+    },
   );
 
   // M-1: an account created by OAuth sign-in confirms with a linked provider before it may
@@ -805,7 +823,15 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
         .from(oauthAccounts)
         .where(and(eq(oauthAccounts.userId, ctx.userId), eq(oauthAccounts.provider, provider)))
         .get();
-      if (row === undefined) throw new HttpError(404, 'not_linked');
+      if (row === undefined) {
+        throw new HttpError(
+          404,
+          'not_linked',
+          'This provider is already unlinked from your account. There is nothing more to do.',
+          undefined,
+          { userFacing: true },
+        );
+      }
       const user = await passwordHashRow(db, ctx.userId);
       if (user === undefined) throw new HttpError(401, 'unauthorized');
       if (hasUsablePassword(user.hash)) {

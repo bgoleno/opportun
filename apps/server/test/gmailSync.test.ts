@@ -354,7 +354,10 @@ describe('gmail sync', () => {
     const gmailA = google.gmail;
     const none = await b.request({ method: 'POST', url: '/api/v1/integrations/gmail/sync' });
     expect(none.statusCode).toBe(409);
-    expect(none.json().error.code).toBe('gmail_not_connected');
+    expect(none.json().error).toEqual({
+      code: 'gmail_not_connected',
+      message: 'Gmail is not connected. Connect it in Settings > Integrations, then sync again.',
+    });
     const docsOnly = await boot();
     await connectGoogle(docsOnly.a);
     const refused = await docsOnly.a.request({

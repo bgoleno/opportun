@@ -1208,7 +1208,10 @@ describe('POST /discovery/results/:id/unsuppress (#11)', () => {
       payload: {},
     });
     expect(second.statusCode).toBe(409);
-    expect(second.json().error.code).toBe('not_suppressing');
+    expect(second.json().error).toEqual({
+      code: 'not_suppressing',
+      message: 'This result is already unsuppressed. There is nothing more to do.',
+    });
   });
 
   it('an accepted result tied to a still-active opportunity cannot be unsuppressed', async () => {
@@ -1226,7 +1229,11 @@ describe('POST /discovery/results/:id/unsuppress (#11)', () => {
       payload: {},
     });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.code).toBe('opportunity_still_active');
+    expect(res.json().error).toEqual({
+      code: 'opportunity_still_active',
+      message:
+        "This job's opportunity is still in your pipeline. Dismiss the opportunity first, then unsuppress this result.",
+    });
   });
 
   it('an accepted result can be unsuppressed once its opportunity is dismissed from the pipeline', async () => {

@@ -34,6 +34,7 @@ import {
   type OperatorBaseUrls,
   type ResolveHost,
 } from './aiProviderFetch';
+import { usableAiKey } from './aiKeyValue';
 import { getSecretValue } from './secretBox';
 import { processLogger } from '../obs/log';
 import { aiLoopbackHttpAllowed, operatorEnv } from '../config';
@@ -111,7 +112,11 @@ export async function readBudget(db: Db, ctx: UserCtx): Promise<{ perTaskDailyUs
 async function getProviderKey(db: Db, ctx: UserCtx, provider: string): Promise<string> {
   const row = await providerKeyRow(db, ctx, provider);
   if (row === undefined) throw new AiUnavailableError('no_key');
-  return getSecretValue(db, ctx, row.id);
+  // One that cannot be sent is as none (#896): every caller then says to add a key, and adding one
+  // starts the work again.
+  const key = usableAiKey(await getSecretValue(db, ctx, row.id));
+  if (key === undefined) throw new AiUnavailableError('no_key');
+  return key;
 }
 
 /** The newest ai_api_key row for a provider (the one AI calls use). */

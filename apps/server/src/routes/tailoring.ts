@@ -291,7 +291,15 @@ export async function tailoringRoutes(app: FastifyInstance): Promise<void> {
       const ctx = requireUser(req);
       const sessionId = req.params.id;
       const session = await getSession(db, ctx, sessionId);
-      if (session.acceptedAt !== null) throw new HttpError(409, 'session_closed');
+      if (session.acceptedAt !== null) {
+        throw new HttpError(
+          409,
+          'session_closed',
+          'This tailoring session was finished, so your message was not sent. Send it again in the new session.',
+          undefined,
+          { userFacing: true },
+        );
+      }
       if (streaming.has(sessionId)) throw new HttpError(409, 'reply_in_progress');
       streaming.add(sessionId);
       // On a demo server this handler holds the reset's gate while it runs (plugins/demoResetHold.ts),
