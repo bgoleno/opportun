@@ -186,6 +186,8 @@ describe('URL helpers', () => {
       'https://linkedin.com.evil.example/in/dana/',
       'https://evil-linkedin.com/in/dana/',
       'https://user:pw@www.linkedin.com/in/dana/',
+      'https://www.linkedin.com./in/dana/',
+      'https://www.linkedin.com./jobs/view/123/',
       'not a url',
     ]) {
       expect(linkedInPathOf(url), url).toBeNull();
@@ -200,6 +202,8 @@ describe('URL helpers', () => {
       'dana-testworth-0a1b2c',
     );
     expect(profileSlugOf('https://example.com/in/dana')).toBeNull();
+    // A host is compared as the URL writes it: a trailing dot is not dropped here (#769).
+    expect(profileSlugOf('https://www.linkedin.com./in/dana')).toBeNull();
     expect(profileSlugOf(null)).toBeNull();
   });
 });

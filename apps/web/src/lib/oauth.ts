@@ -41,6 +41,11 @@ const LOGIN_FLASH = new Map<string, string>([
     'This email already has an account here. To use this provider, sign in with your password, then link it under Settings > Security.',
   ],
   ['denied', 'Sign-in was cancelled at the provider.'],
+  // The administrator removed the provider while this page was open (#896).
+  [
+    'not_configured',
+    'That sign-in provider is no longer set up here. Sign in another way, or ask the administrator.',
+  ],
   ['session', 'Your session ended before linking finished. Sign in and try again.'],
   // A callback whose state did not verify (#662): the server sends it here when no one is signed in.
   [

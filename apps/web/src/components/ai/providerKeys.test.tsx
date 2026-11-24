@@ -310,6 +310,24 @@ describe('ProviderKeysCard', () => {
     expect(r.getByText('console name')).toBeInTheDocument();
   });
 
+  it('a key the server refuses is said in its words, and no message echoes the key (#896)', async () => {
+    const user = userEvent.setup();
+    const SENTENCE =
+      'That key cannot be used. Copy the key again from the provider and save it on its own.';
+    mockApi({
+      'GET /ai/keys': { items: [] },
+      'POST /secrets': () => ({
+        status: 400,
+        body: { error: { code: 'invalid_ai_key', message: SENTENCE } },
+      }),
+    });
+    renderWithProviders(<ProviderKeysCard now={NOW} />);
+    await user.type(await screen.findByLabelText('API key'), 'zq-madeup-alpha-0123');
+    await user.click(screen.getByRole('button', { name: 'Add key' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(SENTENCE);
+    expect(document.body).not.toHaveTextContent('madeup');
+  });
+
   it('shows the workspace key note for Anthropic and not for OpenAI', async () => {
     const user = userEvent.setup();
     mockApi({ 'GET /ai/keys': { items: [] } });

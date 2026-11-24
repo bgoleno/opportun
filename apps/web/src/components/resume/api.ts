@@ -600,18 +600,21 @@ export async function streamMessage(
   });
   if (!res.ok || res.body === null) {
     let code = `http_${res.status}`;
+    let sentence: string | undefined;
     let details: Record<string, unknown> = {};
     try {
       const body = (await res.json()) as { error?: { code?: string } & Record<string, unknown> };
       if (typeof body.error?.code === 'string') {
-        const { code: c, ...rest } = body.error;
+        const { code: c, message, ...rest } = body.error;
         code = c as string;
+        // The server's own sentence, as api() keeps it (#896).
+        if (typeof message === 'string') sentence = message;
         details = rest;
       }
     } catch {
       // Not JSON: keep the status code.
     }
-    throw new ApiError(res.status, code, undefined, undefined, details);
+    throw new ApiError(res.status, code, sentence, undefined, details);
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

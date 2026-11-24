@@ -77,6 +77,13 @@ const JobResponse = z.object({
   /** Added fields: an old build ignores them, a current one reports what happened. */
   opportunityId: z.string(),
   stage: z.enum(OPPORTUNITY_STAGES).nullable(),
+  /** Whether this capture made the opportunity, and the stage it is at now (#967). */
+  created: z.boolean().optional(),
+  currentStage: z.enum(OPPORTUNITY_STAGES).optional(),
+  /** Whether the captured description was added to an opportunity that was there, or its own kept. */
+  description: z.enum(['added', 'kept']).optional(),
+  /** How many other postings on the card it completed were linked with it, when any were. */
+  linked: z.number().int().positive().optional(),
   /** Sent only when the capture is saved and what the opportunity lacked is not (#914). */
   filled: z.literal(false).optional(),
 });
@@ -119,6 +126,14 @@ const REFINE_PROMPTS: ReadonlyMap<string, RefineTask> = new Map<string, RefineTa
   ['indeed', 'capture.job'],
 ]);
 
+/**
+ * How long the refine may take, or the instance's own limit when that is shorter. The popup gives up
+ * at 30 s (packages/extension/src/popupController.ts), and the save after this can wait too: without a
+ * limit a slow provider made the capture look lost when it was saved. Past it the page is stored as
+ * its recognizer read it.
+ */
+const REFINE_LIMIT_MS = 15_000;
+
 type Refinement =
   { task: 'capture.linkedin'; out: Refined } | { task: 'capture.job'; out: JobRefined };
 
@@ -150,7 +165,11 @@ async function refine(
     promptId: prompt.id,
   };
   try {
-    const deps = await buildAiDeps(db, ctx);
+    const built = await buildAiDeps(db, ctx);
+    const deps = {
+      ...built,
+      callTimeLimitMs: Math.min(REFINE_LIMIT_MS, built.callTimeLimitMs ?? REFINE_LIMIT_MS),
+    };
     if (task === 'capture.job') {
       const out = await runStructured(deps, task, { ...request, schema: JobCaptureOutputSchema });
       return { task, out };
@@ -288,6 +307,10 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
           refined: refinement !== null,
           opportunityId: resolved.opportunityId,
           stage: resolved.stageMovedTo,
+          created: resolved.createdOpportunity,
+          currentStage: resolved.currentStage,
+          ...(resolved.description === undefined ? {} : { description: resolved.description }),
+          ...(resolved.linked === 0 ? {} : { linked: resolved.linked }),
           ...(resolved.filled ? {} : { filled: false as const }),
         });
       });

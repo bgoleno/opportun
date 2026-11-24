@@ -45,6 +45,21 @@ export function hostMatchesRule(host: string, rule: HostRule): boolean {
   return 'exact' in rule ? h === normalizeHost(rule.exact) : rule.pattern.test(h);
 }
 
+/** A link's path segments, empty ones dropped. */
+export function segmentsOf(url: SiteUrl): string[] {
+  return url.pathname.split('/').filter((s) => s.length > 0);
+}
+
+/**
+ * Whether a link is on one of `rules`' hosts, its host compared as the link writes it (lowercased,
+ * a trailing dot kept): how links were read before #769. safeFetch's matching, which also drops
+ * trailing dots, is `hostMatchesRule`.
+ */
+export function linkOnHost(url: SiteUrl, rules: readonly HostRule[]): boolean {
+  const host = url.hostname.toLowerCase();
+  return rules.some((r) => ('exact' in r ? host === r.exact : r.pattern.test(host)));
+}
+
 /** How a site is reached. */
 export type RouteName = 'api' | 'mcp' | 'capture' | 'alertEmail';
 
@@ -98,8 +113,15 @@ export interface SiteIdentity {
   readonly fetchHosts: readonly HostRule[];
   /** Hosts a link or a page can name: read and captured, never fetched by the server. */
   readonly pageHosts: readonly HostRule[];
-  /** The job a link to the site names, or null. */
+  /** The job a link to the site names, or null: for a capture site, what a captured tab shows. */
   jobFromUrl(url: SiteUrl): JobRef | null;
+  /**
+   * Capture sites: the job a link a lead holds names, or null. `jobFromUrl`, and the addresses a tab
+   * only passes through or that hold the id beside a list (redirects, split views), whose page is
+   * not read there. More forms of the same id, nothing else
+   * (https://github.com/bgoleno/opportun/issues/967).
+   */
+  storedJobFromUrl?(url: SiteUrl): JobRef | null;
   /** A job of this site named by a link on another host (Greenhouse's gh_jid), or null. */
   embeddedJobFromUrl?(url: SiteUrl): JobRef | null;
   isJobId(id: string): boolean;

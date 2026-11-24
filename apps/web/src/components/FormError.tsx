@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -5,7 +6,7 @@ import { cn } from '@/lib/utils';
  * message can hold something the user named, such as one long unbroken filename, and that must not
  * widen a phone-width page (qa on https://github.com/bgoleno/opportun/pull/281).
  */
-export function FormError({ message, className }: { message: string | null; className?: string }) {
+export function FormError({ message, className }: { message: ReactNode; className?: string }) {
   if (message === null) return null;
   return (
     <p

@@ -156,6 +156,26 @@ describe('tailoring sessions', () => {
     expect(again.json()).toMatchObject({ id: sessionId, messages: [], acceptedAt: null });
   });
 
+  it('a message to a finished session is refused in plain words, and the next one opens (#896)', async () => {
+    const { a } = await boot();
+    const { resume, sessionId } = await setup(a);
+    const done = await a.request({
+      method: 'POST',
+      url: `/api/v1/tailoring/${sessionId}/complete`,
+    });
+    expect(done.statusCode, done.body).toBe(200);
+    const res = await send(a, sessionId, 'One more change');
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toEqual({
+      code: 'session_closed',
+      message:
+        'This tailoring session was finished, so your message was not sent. Send it again in the new session.',
+    });
+    const next = await a.request({ method: 'POST', url: `/api/v1/resumes/${resume.id}/tailoring` });
+    expect(next.json().id).not.toBe(sessionId);
+    expect(next.json().messages).toEqual([]);
+  });
+
   it('puts every active resume rule, fetched live, into the system prompt', async () => {
     const { a } = await boot();
     const { sessionId } = await setup(a);

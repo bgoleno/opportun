@@ -8,7 +8,9 @@ import { enqueueClassifyBackfill } from '../jobs/classifyBackfill';
 import { resumeAfterKeyChange } from '../jobs/discoveryRankWaiting';
 import { sweepTitleVariantsFor } from '../jobs/titleVariants';
 import { withTransaction } from '../db/client';
+import { usableAiKey } from '../lib/aiKeyValue';
 import { audit } from '../lib/audit';
+import { HttpError } from '../lib/errors';
 import {
   deleteKeyValidation,
   KeyValidationSchema,
@@ -77,7 +79,17 @@ export async function secretRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: CreateBody, response: { 201: CreatedSchema } } },
     async (req, reply) => {
       const ctx = requireUser(req);
-      const { kind, label, value } = req.body;
+      const { kind, label } = req.body;
+      const value = kind === 'ai_api_key' ? usableAiKey(req.body.value) : req.body.value;
+      if (value === undefined) {
+        throw new HttpError(
+          400,
+          'invalid_ai_key',
+          'That key cannot be used. Copy the key again from the provider and save it on its own.',
+          undefined,
+          { userFacing: true },
+        );
+      }
       const displayName = emptyToNull(req.body.displayName);
       // The secret and its audit row commit together (#802): a failed write stores nothing.
       const meta = await withTransaction(db, async (tx) => {

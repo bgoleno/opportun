@@ -637,6 +637,7 @@ event and error records as logs, so in practice they stay in the instance.
 | `opportun.count.invalid`                | whole number             | yes      |
 | `opportun.count.suppressed`             | whole number             | yes      |
 | `opportun.count.filtered`               | whole number             | yes      |
+| `opportun.count.linked`                 | whole number             | yes      |
 | `opportun.communication.id`             | row id                   | no       |
 | `opportun.company.id`                   | row id                   | no       |
 | `opportun.source.id`                    | row id                   | no       |

@@ -45,7 +45,7 @@ const A_EMAIL = DEMO_USERS[1]!.email;
 async function readyOpportunity(app: FastifyInstance, c: TestClient): Promise<string> {
   const opp = await createOpportunity(app.db, ctxOf(c), {
     companyName: 'Example Corp',
-    title: `Senior Platform Engineer ${newId().slice(-6)}`,
+    title: `Senior Platform Engineer ${newId()}`,
     sourceKind: 'manual',
   });
   await app.db

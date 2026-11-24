@@ -19,9 +19,10 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { z } from 'zod';
 import type { PromptVersion } from '@/components/ai/api';
 import { toast } from '@/components/ui/toast';
-import { api, errorMessage } from '@/lib/api';
+import { api, ApiError, errorMessage } from '@/lib/api';
 import { qk, type Page } from '@/lib/opportunities';
 import { costFiguresKey } from './costFigures';
+import { decidedOf } from './queueDecided';
 
 export interface DiscoveryResult {
   id: string;
@@ -124,7 +125,12 @@ export type DecidedTab = (typeof DECIDED_TABS)[number];
  */
 export const DECIDED_PREFIX = ['discovery', 'results', 'decided'] as const;
 
+/** The key of every mutation that decides results, or undoes that, single and bulk. */
+export const QUEUE_DECISION = ['discovery', 'decision'] as const;
+
 export const discoveryKeys = {
+  /** The prefix of the queue and of both decided tabs. */
+  results: ['discovery', 'results'] as const,
   queue: ['discovery', 'results', 'pending'] as const,
   decided: (tab: DecidedTab) => ['discovery', 'results', 'decided', tab] as const,
   sources: ['discovery', 'sources'] as const,
@@ -303,18 +309,33 @@ export function useReviewQueue(sort = '-ai_score') {
   });
 }
 
+/**
+ * Which result was accepted last, and how many have been: a value that differs when one more is.
+ * Not a query: it is asked for its difference only (useQueueWatch.ts), and one under
+ * discoveryKeys.results would be asked again by the very read it leads to.
+ */
+export async function fetchLatestAccepted(): Promise<string> {
+  const page = await api<Page<DiscoveryResult>>(
+    '/discovery/results?disposition=accepted&sort=-updatedAt&limit=1',
+  );
+  const [last] = page.items;
+  return [page.total, last?.id ?? '', last?.updatedAt ?? ''].join(' ');
+}
+
 export interface AcceptVars {
   id: string;
   attachTo?: string;
   force?: boolean;
 }
 
-/** Optimistically drops a result from the queue; the caller's onError decides what to show. */
+/** Optimistically drops a result from the queue; the caller's onError decides what to show. One
+ *  decided somewhere else stays dropped: it is not in the queue (#968). */
 function useQueueMutation<TVars extends { id: string }>(
   mutationFn: (vars: TVars) => Promise<DiscoveryResult>,
 ) {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: QUEUE_DECISION,
     mutationFn,
     onMutate: async (vars: TVars) => {
       await qc.cancelQueries({ queryKey: discoveryKeys.queue });
@@ -331,7 +352,8 @@ function useQueueMutation<TVars extends { id: string }>(
       );
       return { previous };
     },
-    onError: (_err, _vars, context) => {
+    onError: (err, _vars, context) => {
+      if (decidedOf(err) !== null) return;
       for (const [key, data] of context?.previous ?? []) qc.setQueryData(key, data);
     },
     onSettled: async () => {
@@ -382,6 +404,7 @@ export function useDismissResult() {
 /** Mirrors apps/server/src/routes/discovery.ts's BULK_OUTCOMES. */
 export const BULK_OUTCOMES = [
   'accepted',
+  'attached',
   'dismissed',
   'restored',
   'already_decided',
@@ -442,6 +465,7 @@ async function bulkRequest(
 function useBulkMutation<TVars>(mutationFn: (vars: TVars) => Promise<BulkItemResult[]>) {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey: QUEUE_DECISION,
     mutationFn,
     onSettled: async () => {
       await Promise.all([
@@ -547,6 +571,12 @@ export function useUnsuppressResult() {
         );
       }
     },
+    // A refusal means the row on screen may be out of date: unsuppressed elsewhere, say (#896).
+    onError: async () => {
+      await Promise.all(
+        DECIDED_TABS.map((tab) => qc.invalidateQueries({ queryKey: discoveryKeys.decided(tab) })),
+      );
+    },
   });
 }
 
@@ -566,6 +596,12 @@ export function useCapture() {
   return useMutation({
     mutationFn: (body: CaptureVars) => api<CaptureResponse>('/capture', { method: 'POST', body }),
     onSuccess: () => qc.invalidateQueries({ queryKey: discoveryKeys.queue }),
+    // The lead was completed or decided somewhere else, so the list on screen is out of date (#968).
+    onError: async (err) => {
+      if (err instanceof ApiError && err.code === 'not_capturable') {
+        await qc.invalidateQueries({ queryKey: discoveryKeys.queue });
+      }
+    },
   });
 }
 

@@ -26,6 +26,7 @@
 // C-1: the URL is provenance metadata only. Nothing here or downstream ever fetches it.
 //
 // Pure functions only (no IO), exported for tests.
+import { indeed } from '@opportun/core';
 import { siteOfUrl } from './captureSites';
 import { linesOf, MAX_DESCRIPTION, MAX_JOB_FIELD, type Recognition } from './linkedinCapture';
 
@@ -45,11 +46,10 @@ const WALL_TEXT = [
 
 /** The job key of a canonical single-posting URL, or null. */
 function jobKeyOf(raw: string): string | null {
-  const site = siteOfUrl(raw);
-  if (site === null || site.id !== 'indeed') return null;
+  if (siteOfUrl(raw) !== indeed) return null;
   const url = new URL(raw);
   if (url.username !== '' || url.password !== '') return null;
-  return site.jobIdFromUrl(url);
+  return indeed.jobFromUrl(url)?.id ?? null;
 }
 
 function looksLikeWall(lines: string[]): boolean {
@@ -125,7 +125,7 @@ export function recognizeIndeedPage(input: {
     kind: 'job',
     jobId: jk,
     // The alert parser stores this exact form, so a capture and an alert lead share a URL.
-    jobUrl: `https://www.indeed.com/viewjob?jk=${jk}`,
+    jobUrl: indeed.jobPageUrl({ site: indeed.id, board: null, id: jk }),
     title: job.title,
     company: job.company,
     descriptionMd: job.descriptionMd,

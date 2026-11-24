@@ -104,10 +104,8 @@ export function dedupeKey(company: string, title: string, location?: string | nu
 /**
  * `dedupeKey`'s company+title segments, with the location segment dropped: the same role
  * advertised in several locations (issue #191) shares this key even though each location's
- * full dedupeKey differs. Used wherever several discovery results for one role need to be
- * recognized as the same group -- the review queue's display grouping and bulk-accept's
- * chain-to-one-opportunity handling (issue #209) both call this rather than each re-deriving
- * the split, so the two can never quietly disagree about what counts as a group.
+ * full dedupeKey differs. It strips level words, so it is wider than one card of the review
+ * queue: what counts as a card is `cardKey`.
  *
  * `normalize()` only narrows to `[a-z0-9 ]`, so `|` never appears in the company or title
  * segments: splitting on `|` and keeping the first two segments is a safe way to drop only
@@ -115,6 +113,48 @@ export function dedupeKey(company: string, title: string, location?: string | nu
  */
 export function dedupeGroupKey(key: string): string {
   return key.split('|').slice(0, 2).join('|');
+}
+
+/** Levels written short, as the word the other postings of a role use. */
+const SPELLED_OUT: ReadonlyMap<string, string> = new Map([
+  ['sr', 'senior'],
+  ['jr', 'junior'],
+]);
+
+/**
+ * What one card of the review queue is: the postings of one role at one company, whatever their
+ * location (https://github.com/bgoleno/opportun/issues/968). The stored key's company and title, as
+ * dedupeGroupKey reads them, and the posting's own whole title. Only with the second: dedupeKey
+ * strips the level at either end, which made one card, and one opportunity, of "Senior X" and
+ * "Principal X", two different jobs. Used wherever a card is recognized (the page's grouping, bulk
+ * accept, and the chain to an earlier accept), so they cannot disagree about what one is. Compared
+ * only, never stored.
+ */
+export function cardKey(storedKey: string, company: string, title: string): string {
+  return [
+    dedupeGroupKey(storedKey),
+    orFallback(normalize(company), company),
+    wholeTitle(title),
+  ].join('|');
+}
+
+/** A title as cardKey compares it: normalized, levels spelled out, none stripped. */
+function wholeTitle(title: string): string {
+  const whole = normalize(title)
+    .split(' ')
+    .map((word) => SPELLED_OUT.get(word) ?? word)
+    .join(' ');
+  return orFallback(whole, title);
+}
+
+/**
+ * Whether two titles are one, level and all, as cardKey reads them. A stored key strips the level at
+ * either end, so by key alone "Senior X" and "Principal X" would be one job: they are two (the owner,
+ * on https://github.com/bgoleno/opportun/issues/967). The titles only: a company renamed since does
+ * not make it another job.
+ */
+export function sameTitle(a: string, b: string): boolean {
+  return wholeTitle(a) === wholeTitle(b);
 }
 
 /**

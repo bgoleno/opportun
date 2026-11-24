@@ -1,9 +1,10 @@
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { setUnauthorizedHandler } from '@/lib/api';
 import { formatDateTime } from '@/lib/opportunities';
+import { pressEscapeOn } from '@/test/dialog';
 import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import type { CommunicationView } from './api';
 import { Inbox } from './Inbox';
@@ -1232,10 +1233,9 @@ describe('Inbox bulk Reject: a reload behind the confirmation (#841)', () => {
     await waitFor(() =>
       expect(within(dialog).getByRole('button', { name: 'Reject 1' })).toBeDisabled(),
     );
-    // jsdom has no native <dialog> behaviour: as a browser does, focus is inside the dialog, and
-    // Escape closes it (its close event).
+    // jsdom has no native <dialog> behaviour: as a browser does, focus is inside the dialog.
     within(dialog).getByRole('button', { name: 'Cancel' }).focus();
-    fireEvent(dialog, new Event('close'));
+    pressEscapeOn(dialog);
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     const opener = screen.getByRole('button', { name: /^Reject 1/ });
     expect(opener).toHaveFocus();

@@ -39,8 +39,8 @@ const optionalUrl = z
   .transform((s) => (s === '' ? null : s));
 
 const FormSchema = z.object({
-  companyName: z.string().trim().min(1, 'Enter the company').max(200),
-  title: z.string().trim().min(1, 'Enter the title').max(300),
+  companyName: z.string().trim().min(1, 'Enter the company').max(200, 'Use at most 200 characters'),
+  title: z.string().trim().min(1, 'Enter the title').max(300, 'Use at most 300 characters'),
   postingUrl: optionalUrl,
   location: optionalString(200),
   descriptionMd: optionalString(100_000),

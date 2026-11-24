@@ -33,7 +33,7 @@ import { spawn } from 'node:child_process';
 import Database from 'better-sqlite3';
 import pg from 'pg';
 import type { PostgresConfig } from '../config';
-import { libpqEnvFor, pgPoolConfig, type LibpqEnv } from '../db/client';
+import { libpqEnvFor, pgPoolConfig, watchConnections, type LibpqEnv } from '../db/client';
 import { DATABASE_FILE_NAMES, type Storage } from './storage';
 
 /** Refused before anything was touched: nothing was written. */
@@ -240,7 +240,9 @@ function run(command: string, args: string[], env: LibpqEnv): Promise<void> {
 
 /** True if any connection other than this check's own is open against cfg's database. */
 async function postgresInUse(cfg: PostgresConfig): Promise<boolean> {
-  const pool = new pg.Pool({ ...pgPoolConfig(cfg), max: 1, application_name: 'opportun-restore' });
+  const pool = watchConnections(
+    new pg.Pool({ ...pgPoolConfig(cfg), max: 1, application_name: 'opportun-restore' }),
+  );
   try {
     const res = await pool.query(
       'SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()',

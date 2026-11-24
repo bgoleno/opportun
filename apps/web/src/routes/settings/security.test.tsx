@@ -184,7 +184,10 @@ describe('TwoFactorCard', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Set up two-factor sign-in' });
     await user.type(within(dialog).getByLabelText('Code from the app'), '000000');
     await user.click(within(dialog).getByRole('button', { name: 'Turn on' }));
-    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/not valid/i);
+    // No recovery code exists yet, so none is suggested (#896).
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      "That code is not valid. Check that your device's clock is right, then enter the code the app shows now.",
+    );
     expect(screen.queryByRole('list', { name: 'Recovery codes' })).toBeNull();
   });
 

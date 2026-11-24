@@ -96,7 +96,15 @@ export async function integrationsMailRoutes(app: FastifyInstance): Promise<void
     { schema: { response: { 202: z.object({ jobId: z.string() }) } } },
     async (req, reply) => {
       const ctx = requireUser(req);
-      if (!(await gmailGranted(ctx))) throw new HttpError(409, 'gmail_not_connected');
+      if (!(await gmailGranted(ctx))) {
+        throw new HttpError(
+          409,
+          'gmail_not_connected',
+          'Gmail is not connected. Connect it in Settings > Integrations, then sync again.',
+          undefined,
+          { userFacing: true },
+        );
+      }
       const jobId = await enqueueGmailSync(db, ctx.userId);
       return reply.code(202).send({ jobId });
     },

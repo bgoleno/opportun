@@ -1,7 +1,7 @@
 // One line of feedback for the popup per Outcome. Pure, unit-tested. Takes no settings, so
 // it can never echo the token.
+import { CAPTURE_SITES, type CaptureSiteId } from '@opportun/core/captureSites';
 import type { Outcome } from './api';
-import type { CaptureSiteId } from './canonical';
 
 export interface Rendered {
   tone: 'success' | 'info' | 'warning' | 'error';
@@ -11,7 +11,8 @@ export interface Rendered {
 const NOT_LOADED =
   'the page had not finished loading. Wait for it (scroll the profile or job description into view) and try again.';
 
-const siteLabel = (site: CaptureSiteId): string => (site === 'indeed' ? 'Indeed' : 'LinkedIn');
+const siteLabel = (site: CaptureSiteId): string =>
+  CAPTURE_SITES.find((s) => s.id === site)?.label ?? site;
 
 /**
  * A job whose title is longer than the server can store as a posting (300 characters, its
@@ -77,10 +78,64 @@ function minutes(sec: number): string {
   return m === 1 ? 'about 1 minute' : `about ${m} minutes`;
 }
 
-/** A stage id as the app writes it, e.g. `in_process` becomes "In process". */
+/** A stage id as the app writes it: `in_process` is "In process", and `discovered` is "New". */
 function stageLabel(stage: string): string {
-  const words = stage.replace(/_/g, ' ');
+  if (stage === 'discovered') return 'New';
+  const words = bounded(stage).replace(/_/g, ' ');
   return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+type Job = Extract<Outcome, { kind: 'job' }>;
+
+/** Stages a capture moves to Interested (the server's ADVANCES_FROM): still there, it could not. */
+const MOVED_FROM: ReadonlySet<string> = new Set(['discovered', 'dismissed']);
+
+/** What a job capture did, or an older server's two sentences when it does not say. */
+function jobSentences(job: Job): string[] {
+  const stage = job.stage ?? null;
+  // Saved, with what it would have filled in left out (#914). Not "capture it again": that would be
+  // recorded as a second capture.
+  const details =
+    job.filled === false
+      ? ["Its details could not be added just now. Add them on the opportunity's page."]
+      : [];
+  if (job.created === undefined || job.currentStage === undefined) {
+    return [
+      stage === null
+        ? 'Added to an opportunity you already track.'
+        : `Added to your pipeline as ${stageLabel(stage)}.`,
+      ...details,
+    ];
+  }
+  const at = stageLabel(job.currentStage);
+  const out: string[] = [];
+  let timelineSaid = false;
+  if (job.created) {
+    out.push(`Added to your pipeline as ${at}.`);
+  } else if (stage !== null) {
+    out.push(`Already in your pipeline: moved to ${stageLabel(stage)}.`);
+  } else if (MOVED_FROM.has(job.currentStage)) {
+    out.push(
+      `Already in your pipeline, at ${at}. It could not be moved to Interested just now: move it on its page.`,
+    );
+  } else {
+    out.push(`Already in your pipeline, at ${at}. This page was added to its timeline.`);
+    timelineSaid = true;
+  }
+  if (job.description === 'added') out.push('Its description was added.');
+  if (job.description === 'kept') {
+    out.push(
+      timelineSaid
+        ? 'Its own description was kept.'
+        : 'Its own description was kept; this page is on its timeline.',
+    );
+  }
+  out.push(...details);
+  if (job.linked === 1) out.push('The other posting on its card was linked to it.');
+  else if (job.linked !== undefined) {
+    out.push(`The ${job.linked} other postings on its card were linked to it.`);
+  }
+  return out;
 }
 
 /** `site` is the site of the tab captured (LinkedIn when the outcome is not about a tab). */
@@ -100,19 +155,7 @@ export function renderOutcome(outcome: Outcome, site: CaptureSiteId = 'linkedin'
       if (outcome.opportunityId === undefined) {
         return { tone: 'success', text: 'Captured to Opportun.' };
       }
-      return {
-        tone: 'success',
-        text: [
-          outcome.stage == null
-            ? 'Added to an opportunity you already track.'
-            : `Added to your pipeline as ${stageLabel(outcome.stage)}.`,
-          // Saved, with what it would have filled in left out (#914). Not "capture it again": that
-          // would be recorded as a second capture.
-          ...(outcome.filled === false
-            ? ["Its details could not be added just now. Add them on the opportunity's page."]
-            : []),
-        ].join(' '),
-      };
+      return { tone: 'success', text: jobSentences(outcome).join(' ') };
     case 'connected':
       return { tone: 'success', text: 'Connected: the server accepted the token.' };
     case 'refused':
@@ -152,7 +195,9 @@ export function renderOutcome(outcome: Outcome, site: CaptureSiteId = 'linkedin'
     case 'busy':
       return {
         tone: 'error',
-        text: `Opportun is still saving another capture of yours. Try again in ${
+        // Not "another capture": the wait can be for anything of theirs. Nor "nothing was saved": the
+        // wait for the timeline entry can end after the opportunity is there (#956).
+        text: `Opportun is busy saving something else of yours, so this capture is not finished. Try again in ${
           outcome.retryAfterSec === null || outcome.retryAfterSec <= 60
             ? 'a few seconds'
             : minutes(outcome.retryAfterSec)
@@ -181,6 +226,11 @@ export function renderOutcome(outcome: Outcome, site: CaptureSiteId = 'linkedin'
       return {
         tone: 'error',
         text: 'Open a LinkedIn profile or job page, or an Indeed job, then click Capture.',
+      };
+    case 'other_address':
+      return {
+        tone: 'error',
+        text: `Opportun does not read this address. Open the job on ${outcome.host}, then click Capture.`,
       };
     case 'not_a_posting':
       return {

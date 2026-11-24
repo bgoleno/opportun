@@ -3,7 +3,7 @@
 // job's tracking link (which carries the job key `jk`). Only links on the alert sender's own
 // domain count; others are dropped. The link is kept as metadata only. Values are raw; the
 // discovery engine sanitizes them. The body is capped before parsing.
-import type { NormalizedPosting } from '@opportun/core';
+import { indeed, INDEED_JOB_KEY, type NormalizedPosting } from '@opportun/core';
 import { MAX_ALERT_LEADS, MAX_DIGEST_CHARS, onDomain } from './linkedin';
 
 /** The Indeed job alert sender (a mail address; the board domain is derived from it). */
@@ -18,12 +18,6 @@ function isPayLine(line: string): boolean {
     / (?:a|an|per) (?:year|hour|month|week|day)\b/i.test(line)
   );
 }
-/**
- * An Indeed job key (`jk`): hex, 8 to 32 characters. The one rule for what a job key is, shared
- * with the Indeed capture site (lib/captureSites.ts), so an alert lead and a capture of the same
- * posting always agree on whether there is a job key at all.
- */
-export const INDEED_JOB_KEY = /^[0-9a-f]{8,32}$/i;
 
 function jobLink(line: string): { url: string; key: string } | null {
   if (!/^https:\/\/\S{1,4000}$/i.test(line)) return null;
@@ -37,7 +31,7 @@ function jobLink(line: string): { url: string; key: string } | null {
   const key = url.searchParams.get('jk');
   if (key === null || !INDEED_JOB_KEY.test(key)) return null;
   const jk = key.toLowerCase();
-  return { url: `https://www.${BOARD_DOMAIN}/viewjob?jk=${jk}`, key: jk };
+  return { url: indeed.jobPageUrl({ site: indeed.id, board: null, id: jk }), key: jk };
 }
 
 /** "Company - City, ST" -> company and location (split at the last " - "). */

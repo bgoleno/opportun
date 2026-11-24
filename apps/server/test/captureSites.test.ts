@@ -2,19 +2,12 @@
 // different ways, so matching them on a dedupe key built from company, title and location
 // fails whenever the AI refine step did not run (no key, budget spent, provider error): the
 // capture then carries no location at all. Identity is exact and needs no AI.
-import type { NormalizedPosting } from '@opportun/core';
+import { CAPTURE_SITES, indeed, INDEED_JOB_KEY, type NormalizedPosting } from '@opportun/core';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { INDEED_JOB_KEY, parseIndeedAlert } from '../src/lib/alertParsers/indeed';
-import {
-  CAPTURE_SITES,
-  postingIdentity,
-  siteLabel,
-  siteOfLabel,
-  siteOfUrl,
-  type CaptureSite,
-} from '../src/lib/captureSites';
+import { parseIndeedAlert } from '../src/lib/alertParsers/indeed';
+import { postingIdentity, siteLabel, siteOfLabel, siteOfUrl } from '../src/lib/captureSites';
 
 const posting = (over: Partial<NormalizedPosting>): NormalizedPosting => ({
   company: 'Initech',
@@ -80,6 +73,21 @@ describe('postingIdentity', () => {
     ).toBeNull();
   });
 
+  // #769: the host rules differ on purpose, so moving them to the site registry keeps each.
+  it('reads a host with one trailing dot, and not with two', () => {
+    for (const [href, id] of [
+      ['https://www.linkedin.com./jobs/view/1/', 'linkedin:1'],
+      ['https://www.indeed.com./viewjob?jk=0000000000000a01', 'indeed:0000000000000a01'],
+    ] as const) {
+      // An id beside it that the URL's own id must win over.
+      const posted = posting({ externalId: '0000000000000b02', postingUrl: href });
+      expect(postingIdentity(posted), href).toBe(id);
+      const twoDots = href.replace('.com.', '.com..');
+      expect(postingIdentity({ ...posted, postingUrl: twoDots }), twoDots).toBeNull();
+      expect(siteOfUrl(twoDots), twoDots).toBeNull();
+    }
+  });
+
   it('refuses a job id that is not one', () => {
     expect(
       postingIdentity(posting({ postingUrl: 'https://www.linkedin.com/jobs/view/not-an-id/' })),
@@ -136,8 +144,6 @@ describe('siteOfLabel', () => {
 
 // https://github.com/bgoleno/opportun/issues/73. Job keys here are obviously fake hex.
 describe('postingIdentity: Indeed', () => {
-  const indeed = CAPTURE_SITES.find((s) => s.id === 'indeed') as CaptureSite;
-
   it('gives every lead the Indeed alert parser makes an identity of indeed:<jk>', async () => {
     const text = await readFile(join(__dirname, 'fixtures/alerts/indeed-alert.txt'), 'utf8');
     const leads = parseIndeedAlert(text);
@@ -159,11 +165,11 @@ describe('postingIdentity: Indeed', () => {
     const url = (jk: string) => new URL(`https://www.indeed.com/viewjob?jk=${jk}`);
     for (const jk of ['0000000a', '0000000000000a01', '0'.repeat(32), '00000000000000AF']) {
       expect(INDEED_JOB_KEY.test(jk), jk).toBe(true);
-      expect(indeed.jobIdFromUrl(url(jk)), jk).toBe(jk.toLowerCase());
+      expect(indeed.jobFromUrl(url(jk))?.id, jk).toBe(jk.toLowerCase());
     }
     for (const jk of ['000000a', '0'.repeat(33), '000000000000000g', '']) {
       expect(INDEED_JOB_KEY.test(jk), jk).toBe(false);
-      expect(indeed.jobIdFromUrl(url(jk)), jk).toBeNull();
+      expect(indeed.jobFromUrl(url(jk)), jk).toBeNull();
     }
   });
 
@@ -175,7 +181,7 @@ describe('postingIdentity: Indeed', () => {
       'https://www.indeed.com/cmp/Example-Corp',
       'https://www.indeed.com/viewjob',
     ]) {
-      expect(indeed.jobIdFromUrl(new URL(href)), href).toBeNull();
+      expect(indeed.jobFromUrl(new URL(href)), href).toBeNull();
     }
   });
 
@@ -230,5 +236,79 @@ describe('postingIdentity: Indeed', () => {
         }),
       ),
     ).toBeNull();
+  });
+});
+
+// The addresses one posting goes by (https://github.com/bgoleno/opportun/issues/967; tl's W5 ruling,
+// https://github.com/bgoleno/opportun/issues/967#issuecomment-7120119028). A tab is captured at fewer
+// of them than a stored link may hold: a redirect is an address a tab passes through.
+describe('the addresses of one posting', () => {
+  const LI = '1000000001';
+  const JK = '0000000000000a01';
+  const tab = (href: string) => {
+    const site = siteOfUrl(href);
+    const job = site?.jobFromUrl(new URL(href)) ?? null;
+    return job === null ? null : `${job.site}:${job.id}`;
+  };
+  const stored = (href: string) =>
+    postingIdentity(posting({ postingUrl: href, externalId: 'opaque-1' }));
+
+  it.each([
+    [`https://www.linkedin.com/jobs/view/${LI}/`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs/view/staff-engineer-at-initech-${LI}/`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs/view/staff-engineer-at-initech-${LI}?trk=x`, `linkedin:${LI}`],
+    [`https://de.linkedin.com/jobs/view/ing%C3%A9nieur-${LI}`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/comm/jobs/view/${LI}/?trackingId=x`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/comm/jobs/view/staff-engineer-${LI}`, `linkedin:${LI}`],
+    ['https://www.linkedin.com/jobs/view/engineer-123456', 'linkedin:123456'],
+    [`https://www.indeed.com/viewjob?jk=${JK}&from=serp`, `indeed:${JK}`],
+  ])('a tab and a stored link at %s are %s', (href, identity) => {
+    expect(tab(href)).toBe(identity);
+    expect(stored(href)).toBe(identity);
+  });
+
+  it.each([
+    [`https://www.linkedin.com/jobs/search/?currentJobId=${LI}&keywords=x`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs/search-results/?currentJobId=${LI}`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs/?currentJobId=${LI}`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs?currentJobId=${LI}`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs/collections/recommended/?currentJobId=${LI}`, `linkedin:${LI}`],
+    [`https://www.indeed.com/m/viewjob?jk=${JK}`, `indeed:${JK}`],
+    [`https://www.indeed.com/rc/clk?jk=${JK.toUpperCase()}&bb=x`, `indeed:${JK}`],
+    [`https://indeed.com/pagead/clk?mo=r&jk=${JK}`, `indeed:${JK}`],
+    [`https://www.indeed.com/jobs?q=x&vjk=${JK}`, `indeed:${JK}`],
+    [`https://www.indeed.com/?vjk=${JK}`, `indeed:${JK}`],
+  ])('a stored link at %s is %s, and no tab is', (href, identity) => {
+    expect(stored(href)).toBe(identity);
+    expect(tab(href)).toBeNull();
+  });
+
+  it.each([
+    // No id, and not enough digits for one: a year is not an id.
+    'https://www.linkedin.com/jobs/view/staff-engineer-at-initech/',
+    'https://www.linkedin.com/jobs/view/staff-engineer-2024/',
+    'https://www.linkedin.com/jobs/view/staff-engineer-12345',
+    'https://www.linkedin.com/jobs/view/staff-engineer-1000000001x',
+    'https://www.linkedin.com/jobs/view/-1000000001',
+    `https://www.linkedin.com/jobs/view/a-${'1'.repeat(21)}`,
+    'https://www.linkedin.com/jobs/view/a-1000000001/apply',
+    'https://www.linkedin.com/x/jobs/view/1000000001',
+    'https://www.linkedin.com/jobs/search/?currentJobId=not-an-id',
+    'https://www.linkedin.com/feed/?currentJobId=1000000001',
+    'https://m.linkedin.com/jobs/view/1000000001',
+    'https://www.indeed.com/pagead/clk?mo=r',
+    'https://www.indeed.com/rc/clk?vjk=0000000000000a01',
+    'https://www.indeed.com/jobs?jk=0000000000000a01',
+    'https://www.indeed.com/cmp/Example?jk=0000000000000a01',
+    'https://uk.indeed.com/viewjob?jk=0000000000000a01',
+  ])('names no posting: %s', (href) => {
+    expect(tab(href)).toBeNull();
+    expect(postingIdentity(posting({ postingUrl: href, externalId: 'opaque-1' }))).toBeNull();
+  });
+
+  it('the id in the path wins over one in the query', () => {
+    const href = `https://www.linkedin.com/jobs/view/${LI}/?currentJobId=2000000002`;
+    expect(stored(href)).toBe(`linkedin:${LI}`);
+    expect(tab(href)).toBe(`linkedin:${LI}`);
   });
 });

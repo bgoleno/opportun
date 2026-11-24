@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openDatabase, SqliteDirConflict } from '../src/db/client';
+import { DatabaseRefused, openDatabase, SqliteDirConflict } from '../src/db/client';
 import { sqliteOnly } from './db';
 
 const temps: string[] = [];
@@ -25,6 +25,20 @@ async function tempDir(): Promise<string> {
 afterEach(async () => {
   await Promise.all(temps.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
+
+/** Which refusal opening them is: what the server's start-failure line is chosen by (#887). */
+function refusalOf(dataDir: string, sqliteDir: string, migrationLockTimeoutMs?: number) {
+  try {
+    openDatabase(
+      dataDir,
+      sqliteDir,
+      migrationLockTimeoutMs === undefined ? {} : { migrationLockTimeoutMs },
+    ).sqlite.close();
+  } catch (err) {
+    return err instanceof DatabaseRefused ? err.refusal : err;
+  }
+  return 'opened';
+}
 
 describe.runIf(sqliteOnly)('sqlite-dir migration', () => {
   it('fresh install: creates the database only at sqliteDir, nothing at dataDir', async () => {
@@ -125,6 +139,7 @@ describe.runIf(sqliteOnly)('sqlite-dir migration', () => {
     const sqliteDirBefore = await readdir(sqliteDir);
 
     expect(() => openDatabase(dataDir, sqliteDir)).toThrow(SqliteDirConflict);
+    expect(refusalOf(dataDir, sqliteDir)).toBe('two_databases');
 
     expect(await readdir(dataDir)).toEqual(dataDirBefore);
     expect(await readdir(sqliteDir)).toEqual(sqliteDirBefore);
@@ -141,6 +156,7 @@ describe.runIf(sqliteOnly)('sqlite-dir migration', () => {
 
       const sqliteDir = await tempDir();
       expect(() => openDatabase(dataDir, sqliteDir)).toThrow(/already exists/);
+      expect(refusalOf(dataDir, sqliteDir)).toBe('database_move_interrupted');
       expect(await readdir(sqliteDir)).toEqual([]);
     },
   );
@@ -168,6 +184,7 @@ describe.runIf(sqliteOnly)('sqlite-dir migration', () => {
         expect(() => openDatabase(dataDir, sqliteDir, { migrationLockTimeoutMs: 50 })).toThrow(
           SqliteDirConflict,
         );
+        expect(refusalOf(dataDir, sqliteDir, 50)).toBe('database_being_moved');
 
         expect(await readdir(dataDir)).toEqual(dataDirBefore);
         expect(await readdir(sqliteDir)).toEqual(sqliteDirBefore);

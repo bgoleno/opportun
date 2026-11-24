@@ -110,6 +110,9 @@ async function click(el: HTMLElement, done: () => boolean) {
   await vi.waitFor(() => expect(done()).toBe(true));
 }
 
+/** What the popup says while it captures: a popup closed before the request leaves sends nothing (#967). */
+const WORKING = 'Capturing… Keep this window open until it says what happened.';
+
 describe('popup settings', () => {
   it('saves the server and token, asking for the server origin only', async () => {
     const { doc, data, deps, $ } = setup();
@@ -273,6 +276,33 @@ describe('popup settings', () => {
     // the settings are written before the prompt now, so a decline rolls them back (#49).
     expect(data).toEqual({ serverUrl: '', token: '' });
   });
+});
+
+describe('a tab on an address of a capture site that is not read (#967)', () => {
+  it.each([
+    ['https://m.linkedin.com/jobs/view/1/', 'www.linkedin.com'],
+    ['https://uk.indeed.com/viewjob?jk=0000000000000a01', 'www.indeed.com'],
+    ['https://m.indeed.com/viewjob?jk=0000000000000a01', 'www.indeed.com'],
+  ])('%s: says where to open it, and nothing is read or sent', async (tabUrl, host) => {
+    const { doc, deps, fetch, $ } = setup({ stored: SAVED, tabUrl });
+    await mountPopup(doc, deps);
+    await click($('capture'), () => status(doc).textContent !== '');
+    expect(deps.runExtract).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(status(doc).textContent).toBe(
+      `Opportun does not read this address. Open the job on ${host}, then click Capture.`,
+    );
+  });
+
+  it.each(['https://linkedin.com.evil.example/jobs', 'https://notindeed.com/viewjob'])(
+    '%s is no site of theirs',
+    async (tabUrl) => {
+      const { doc, deps, $ } = setup({ stored: SAVED, tabUrl });
+      await mountPopup(doc, deps);
+      await click($('capture'), () => status(doc).textContent !== '');
+      expect(status(doc).textContent).toMatch(/^Open a LinkedIn profile or job page/);
+    },
+  );
 });
 
 describe('popup capture', () => {
@@ -476,8 +506,11 @@ describe('popup capture on Indeed', () => {
       await click($('capture'), () => status(doc).textContent !== '');
       expect(deps.runExtract).not.toHaveBeenCalled();
       expect(fetch).not.toHaveBeenCalled();
+      // The country site is told where to open the job (#967); the look-alike is nothing of Indeed's.
       expect(status(doc).textContent).toMatch(
-        /Open a LinkedIn profile or job page, or an Indeed job/,
+        tabUrl.includes('notindeed')
+          ? /Open a LinkedIn profile or job page, or an Indeed job/
+          : /Open the job on www\.indeed\.com/,
       );
     }
   });
@@ -785,7 +818,7 @@ describe('popup actions that wait on the server (#648)', () => {
   });
 
   it.each([
-    ['capture', 'Capturing…', /It may still have saved this: check Opportun before you try again/],
+    ['capture', WORKING, /It may still have saved this: check Opportun before you try again/],
     ['test', 'Testing the connection…', /Check that it is running and reachable/],
   ] as const)(
     'the %s button says it is working at once, and a server that never answers ends in an error',
@@ -819,7 +852,7 @@ describe('popup actions that wait on the server (#648)', () => {
   );
 
   it.each([
-    ['capture', 'Capturing…'],
+    ['capture', WORKING],
     ['test', 'Testing the connection…'],
   ] as const)(
     'the %s status says only the timeout once the server is cut off, nothing in between (#783)',
@@ -881,7 +914,7 @@ describe('popup actions that wait on the server (#648)', () => {
     await mountPopup(doc, deps);
     const button = $<HTMLButtonElement>('capture');
     button.focus();
-    await click(button, () => !button.disabled && status(doc).textContent !== 'Capturing…');
+    await click(button, () => !button.disabled && status(doc).textContent !== WORKING);
     await vi.waitFor(() => expect(button.disabled).toBe(false));
     expect(doc.activeElement).toBe(button);
   });

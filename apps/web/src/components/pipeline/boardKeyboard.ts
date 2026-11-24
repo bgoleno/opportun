@@ -23,6 +23,10 @@ import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
  *  column, and well inside a rail. */
 const CENTRE_DROP = 40;
 
+/** The space between the board's columns, as its class and in pixels: they go together. */
+export const BOARD_GAP_CLASS = 'gap-3';
+const BOARD_GAP_PX = 12;
+
 /** Marks the board's scrolling area: the chain's columns, beside the pinned terminal ones. */
 export const BOARD_SCROLLER_ATTR = 'data-board-scroller';
 
@@ -173,16 +177,77 @@ function holdingCentre(
   return holding.sort((a, b) => a.data.value - b.data.value);
 }
 
+/** Every droppable's visible part (visibleRect); one with none has no rectangle here. */
+function visibleRects({
+  droppableContainers,
+  droppableRects,
+}: Parameters<CollisionDetection>[0]): Map<UniqueIdentifier, ClientRect> {
+  const seen = new Map<UniqueIdentifier, ClientRect>();
+  for (const { id, node } of droppableContainers) {
+    const measured = droppableRects.get(id);
+    const visible = measured === undefined ? null : visibleRect(measured, node.current);
+    if (visible !== null) seen.set(id, visible);
+  }
+  return seen;
+}
+
+type Point = NonNullable<Parameters<CollisionDetection>[0]['pointerCoordinates']>;
+
+/** What is under `point` on screen, as dnd-kit orders it: a card before the column it is in. */
+function pointerOver(
+  args: Parameters<CollisionDetection>[0],
+  seen: ReadonlyMap<UniqueIdentifier, ClientRect>,
+  point: Point,
+) {
+  return pointerWithin({ ...args, pointerCoordinates: point }).filter(({ id }) => {
+    const rect = seen.get(id);
+    return rect !== undefined && point.x >= rect.left && point.x <= rect.right;
+  });
+}
+
+/**
+ * For a point in a gap beside a column on screen, at its height: the point at the same height on the
+ * nearest such column's centre line (the left one's, half way), so a card there keeps its place.
+ * Null for a point that is in no gap. A card is inside its column, so never the nearest itself.
+ */
+function besideGap(seen: ReadonlyMap<UniqueIdentifier, ClientRect>, point: Point): Point | null {
+  let nearest: { rect: ClientRect; away: number } | null = null;
+  for (const rect of seen.values()) {
+    if (point.y < rect.top || point.y > rect.bottom) continue;
+    const onLeft = point.x > rect.right;
+    const away = onLeft ? point.x - rect.right : rect.left - point.x;
+    if (away < 0 || away > BOARD_GAP_PX) continue;
+    if (nearest === null || away < nearest.away || (away === nearest.away && onLeft)) {
+      nearest = { rect, away };
+    }
+  }
+  if (nearest === null) return null;
+  return { x: (nearest.rect.left + nearest.rect.right) / 2, y: point.y };
+}
+
 /**
  * The pointer's column first (a pointer drag, as before); then every droppable whose rectangle
  * holds the dragged card's centre, smallest first, so a rail wins against the card overlapping
  * its neighbour too, and a card wins against the column it sits in; then rectangle overlap.
+ *
+ * For a pointer, all three are of what is on screen (#960): a chain column scrolled behind a pinned
+ * one is under the pointer too, and a drop there moved the card to a stage nobody saw. So a card
+ * that touches no column on screen is over nothing. And a pointer in a gap is in the column beside
+ * it: the card's centre, a hand's width away, could be over a rail, and while the board scrolls
+ * itself every gap passes under the pointer. With no pointer the steps are as they were: a keyboard
+ * drag has its own way to what it is over (`keyboardFirst`).
  */
 export const boardCollision: CollisionDetection = (args) => {
-  const pointer = pointerWithin(args);
-  if (pointer.length > 0) return pointer;
+  const { pointerCoordinates: pointer } = args;
+  const seen = pointer === null ? args.droppableRects : visibleRects(args);
+  if (pointer !== null) {
+    const under = pointerOver(args, seen, pointer);
+    if (under.length > 0) return under;
+    const beside = besideGap(seen, pointer);
+    if (beside !== null) return pointerOver(args, seen, beside);
+  }
   // Only what is on screen can be under the card (#833): see visibleRect.
   const holding = holdingCentre(args, args.droppableContainers, visibleRect);
   if (holding.length > 0) return holding;
-  return rectIntersection(args);
+  return rectIntersection({ ...args, droppableRects: seen });
 };

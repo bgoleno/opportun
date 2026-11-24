@@ -83,6 +83,8 @@ export const RANK_SKIP_REASONS = [
   'filtered',
   // Waiting for the next ranking batch, or in one (#441): not in line for the live drain.
   'batch_waiting',
+  // Another posting of a job already in the pipeline: ingest linked it, so nothing ranks it (#971).
+  'linked',
 ] as const;
 export type RankSkipReason = (typeof RANK_SKIP_REASONS)[number];
 

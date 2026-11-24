@@ -1,9 +1,10 @@
-// One pending discovery result, or (issue #191) a group of results sharing a company+title
-// dedupeKey prefix that differ only by location. The posting is third-party data: every field
+// One pending discovery result, or (issue #191) a group of results of one role (@opportun/core
+// cardKey) that differ only by location. The posting is third-party data: every field
 // is rendered as a React text node (never markdown, never HTML), and a posting link is offered
 // only for http(s).
 import type { RankSkipReason, Resolution } from '@opportun/core';
 import { Check, ExternalLink, X } from 'lucide-react';
+import { useLayoutEffect, useRef } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { FormError } from '@/components/FormError';
 import { Button } from '@/components/ui/button';
@@ -161,6 +162,23 @@ export function ResolutionChip({ resolution }: { resolution: Resolution }) {
   );
 }
 
+/** Says when a card goes while the keyboard is on it or inside it (#968). A layout effect's cleanup
+ *  runs before React takes the node out of the page, so the focus is still there to be seen. */
+function useGoneWithFocus(onGone: (() => void) | undefined) {
+  const card = useRef<HTMLLIElement>(null);
+  const latest = useRef(onGone);
+  useLayoutEffect(() => {
+    latest.current = onGone;
+  });
+  useLayoutEffect(() => {
+    const node = card.current;
+    return () => {
+      if (node?.contains(document.activeElement)) latest.current?.();
+    };
+  }, []);
+  return card;
+}
+
 export function QueueRow(props: {
   result: DiscoveryResult;
   selected: boolean;
@@ -176,14 +194,19 @@ export function QueueRow(props: {
   /** Fires on a checkbox click, with whether Shift was held (range-select against the last
    *  checkbox clicked), not on activation via keyboard. */
   onToggleChecked: (shiftKey: boolean) => void;
+  onGoneWithFocus?: () => void;
+  /** The posting is being opened, in a new tab or window (#968). */
+  onOpenPosting?: () => void;
 }) {
   const { result: r, selected } = props;
+  const card = useGoneWithFocus(props.onGoneWithFocus);
   const p = r.posting;
   const href = safeHttpUrl(p.postingUrl);
   const description = excerpt(p.descriptionMd);
   const label = resultLabel(r);
   return (
     <li
+      ref={card}
       data-result-id={r.id}
       tabIndex={0}
       aria-label={label}
@@ -257,6 +280,8 @@ export function QueueRow(props: {
               href={href}
               target="_blank"
               rel="noopener noreferrer nofollow"
+              onClick={props.onOpenPosting}
+              onAuxClick={props.onOpenPosting}
               aria-label={`Open posting for ${label}`}
             >
               <ExternalLink aria-hidden="true" />
@@ -270,7 +295,7 @@ export function QueueRow(props: {
 }
 
 /**
- * A group of pending results that share a company+title dedupeKey prefix and differ only by
+ * A group of pending results of one role (@opportun/core cardKey) that differ only by
  * location (issue #191): the title and company render once, every member's location is listed
  * (linked when that member has its own posting url), and Accept/Dismiss act on the whole group
  * in one triage decision rather than requiring one per location. The underlying rows stay
@@ -285,8 +310,12 @@ export function QueueGroupRow(props: {
   onAcceptAll: () => void;
   onDismissAll: () => void;
   onOpen: () => void;
+  onGoneWithFocus?: () => void;
+  /** The posting is being opened, in a new tab or window (#968). */
+  onOpenPosting?: () => void;
 }) {
   const { group, selected } = props;
+  const card = useGoneWithFocus(props.onGoneWithFocus);
   const primary = group.members[0]!;
   const p = primary.posting;
   const label = resultLabel(primary);
@@ -298,6 +327,7 @@ export function QueueGroupRow(props: {
   ).length;
   return (
     <li
+      ref={card}
       data-result-id={rowKey(group)}
       tabIndex={0}
       aria-label={`${label}, ${n} locations`}
@@ -347,6 +377,8 @@ export function QueueGroupRow(props: {
                   href={href}
                   target="_blank"
                   rel="noopener noreferrer nofollow"
+                  onClick={props.onOpenPosting}
+                  onAuxClick={props.onOpenPosting}
                   className="underline-offset-2 hover:underline"
                 >
                   {loc}

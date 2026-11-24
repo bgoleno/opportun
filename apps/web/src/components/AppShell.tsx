@@ -264,6 +264,9 @@ function Shell({ user, children }: { user: User; children: ReactNode }) {
           data-collapsed={collapsed}
           className={cn(
             'hidden bg-sidebar transition-[width] md:block md:shrink-0 md:border-r',
+            // As tall as the page and first in it, so the browser's scroll anchoring would keep this
+            // in place, not what the user is reading: a card gone from above moved the list (#968).
+            '[overflow-anchor:none]',
             collapsed ? 'md:w-14' : 'md:w-56',
           )}
         >

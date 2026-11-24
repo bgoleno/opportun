@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '@/lib/api';
+import { pressEscapeOn } from '@/test/dialog';
 import { renderWithProviders } from '@/test/render';
 import { ConfirmDialog } from './ConfirmDialog';
 
@@ -58,25 +59,26 @@ describe('ConfirmDialog', () => {
   // flight, Cancel, Escape and a backdrop click closed the dialog and its failure was shown
   // nowhere. It stays closable (a request has no time limit, so a dialog that could not be left
   // could trap the user), and a failure that lands after it was left is reported in a toast.
-  it('can always be left, even in flight, and a failure that lands afterwards is still reported', async () => {
-    const user = userEvent.setup();
-    let fail!: (err: Error) => void;
-    const pending = new Promise<void>((_, reject) => {
-      fail = reject;
-    });
-    renderWithProviders(<Harness onConfirm={() => pending} />);
-    await user.click(await screen.findByRole('button', { name: 'Delete' }));
-    const cancel = screen.getByRole('button', { name: 'Cancel' });
-    expect(cancel).toBeEnabled();
-    const escape = new Event('cancel', { cancelable: true });
-    screen.getByRole('dialog').dispatchEvent(escape);
-    expect(escape.defaultPrevented).toBe(false);
-    await user.click(cancel);
-    await waitFor(() => expect(screen.queryByText('Delete this thing?')).not.toBeInTheDocument());
-    fail(new ApiError(500, 'internal'));
-    expect(await screen.findByText('Delete failed')).toBeInTheDocument();
-    expect(screen.getByText('Request failed (internal).')).toBeInTheDocument();
-  });
+  it.each(['Cancel', 'Escape'])(
+    'can always be left, even in flight (%s), and a failure that lands afterwards is still reported',
+    async (how) => {
+      const user = userEvent.setup();
+      let fail!: (err: Error) => void;
+      const pending = new Promise<void>((_, reject) => {
+        fail = reject;
+      });
+      renderWithProviders(<Harness onConfirm={() => pending} />);
+      await user.click(await screen.findByRole('button', { name: 'Delete' }));
+      const cancel = screen.getByRole('button', { name: 'Cancel' });
+      expect(cancel).toBeEnabled();
+      if (how === 'Escape') pressEscapeOn(screen.getByRole('dialog'));
+      else await user.click(cancel);
+      await waitFor(() => expect(screen.queryByText('Delete this thing?')).not.toBeInTheDocument());
+      fail(new ApiError(500, 'internal'));
+      expect(await screen.findByText('Delete failed')).toBeInTheDocument();
+      expect(screen.getByText('Request failed (internal).')).toBeInTheDocument();
+    },
+  );
 
   it('a failure while it is still open stays in it, with no toast', async () => {
     const user = userEvent.setup();
@@ -91,9 +93,9 @@ describe('ConfirmDialog', () => {
   it('closes on Escape when nothing is in flight', async () => {
     renderWithProviders(<Harness onConfirm={() => Promise.resolve()} />);
     const dialog = await screen.findByRole('dialog');
-    const escape = new Event('cancel', { cancelable: true });
-    dialog.dispatchEvent(escape);
-    expect(escape.defaultPrevented).toBe(false);
+    pressEscapeOn(dialog);
+    expect(screen.queryByText('Delete this thing?')).toBeNull();
+    expect(dialog).not.toHaveAttribute('open');
   });
 
   // tl on #712: a dialog whose parent unmounts mid-request (the bulk bar going as its rows leave)

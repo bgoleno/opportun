@@ -304,6 +304,7 @@ export const ATTRIBUTES = {
   'opportun.count.invalid': int,
   'opportun.count.suppressed': int,
   'opportun.count.filtered': int,
+  'opportun.count.linked': int,
   'opportun.communication.id': { kind: 'id' },
   'opportun.company.id': { kind: 'id' },
   'opportun.source.id': { kind: 'id' },
@@ -768,6 +769,7 @@ const SYSTEM_EVENTS = {
       'opportun.count.invalid',
       'opportun.count.suppressed',
       'opportun.count.filtered',
+      'opportun.count.linked',
     ],
   },
 } as const satisfies Record<string, EventDef>;
@@ -794,6 +796,56 @@ export function isEventName(name: string): name is EventName {
 }
 
 /**
+ * Why a start failed, as the line it logs says it (startFailure.ts, #887): the cause and what to
+ * check, each a fixed sentence. A setting is named and never quoted, and no error's text is used,
+ * since a driver's can hold the connection string.
+ */
+export const START_FAILURES = {
+  // db/client.ts's own refusals (DatabaseRefused), without the paths those name.
+  newer_database:
+    'server failed to start: This database was migrated by a newer release of Opportun; refusing to start an older release against it. Upgrade the image, or restore a backup taken before the upgrade.',
+  two_databases:
+    'server failed to start: there is an opportun.db in both DATA_DIR and SQLITE_DIR, and Opportun will not guess which one is current. Move or remove whichever one is stale, then restart.',
+  database_being_moved:
+    'server failed to start: another process appears to be moving opportun.db from DATA_DIR to SQLITE_DIR right now. Wait for it to finish, then restart if the move is still needed.',
+  database_move_interrupted:
+    "server failed to start: an earlier move of opportun.db from DATA_DIR to SQLITE_DIR may have been interrupted, as DATA_DIR already has a file named opportun.db.pre-volume-migration (or that name with -wal or -shm). Check it by hand (sqlite3 and 'PRAGMA integrity_check;') before removing it, then restart.",
+  database_move_failed:
+    'server failed to start: the copy of opportun.db made in SQLITE_DIR failed its integrity check and was removed. The original is preserved in DATA_DIR as opportun.db.pre-volume-migration: check it, and the disk.',
+  sqlite_damaged:
+    'server failed to start: opportun.db (in SQLITE_DIR or DATA_DIR) is damaged or is not a SQLite database. Check the disk, and restore a backup (docs/install.md section 6).',
+  sqlite_unopenable:
+    'server failed to start: opportun.db (in SQLITE_DIR or DATA_DIR) could not be opened for writing. Check that it and its directory are writable by the user the server runs as.',
+  sqlite_busy:
+    'server failed to start: another process is holding opportun.db. Check that no second copy of the server, and no command-line tool, is using it.',
+  disk_full:
+    'server failed to start: there is no space left for the database. Free some on the disk that holds DATA_DIR and SQLITE_DIR.',
+  data_dir:
+    'server failed to start: a data directory could not be used. Check that DATA_DIR and SQLITE_DIR name directories that the user the server runs as can write to.',
+  postgres_unreachable:
+    'server failed to start: Postgres could not be reached. Check that it is running, and the host and port in DATABASE_URL (or DATABASE_URL_FILE).',
+  postgres_sign_in:
+    'server failed to start: Postgres refused the sign-in. Check the user and password in DATABASE_URL (or DATABASE_URL_FILE), and that Postgres lets this server connect.',
+  postgres_no_database:
+    'server failed to start: Postgres has no database of the name in DATABASE_URL (or DATABASE_URL_FILE). Check the name, or create the database (docs/install.md section 15).',
+  postgres_permission:
+    'server failed to start: the Postgres user in DATABASE_URL (or DATABASE_URL_FILE) lacks a permission the server needs. Check that it owns the database (docs/install.md section 15).',
+  postgres_not_ready:
+    'server failed to start: Postgres is not taking connections right now: it is starting, stopping or out of connections. Wait, then restart; check its connection limit if it goes on.',
+  postgres_tls:
+    'server failed to start: a secure connection to Postgres could not be made. Check DB_SSL, and NODE_EXTRA_CA_CERTS for a certificate authority of your own.',
+  postgres_url:
+    'server failed to start: DATABASE_URL (or DATABASE_URL_FILE) could not be read as a URL. Check its form, postgres://user:password@host:5432/database, and that special characters in the user and password are percent-encoded.',
+  port_in_use:
+    'server failed to start: the port is already in use. Stop the other program using it, or set PORT to another.',
+  port_not_allowed:
+    'server failed to start: the server may not listen on this port. Set PORT to one of 1024 or above, or give the server the right to use it.',
+  listen_address:
+    'server failed to start: the address to listen on is not one of this machine. Check OPPORTUN_HOST.',
+} as const satisfies Record<string, string>;
+export type StartFailureReason = keyof typeof START_FAILURES;
+
+/**
  * Every message Opportun's own log calls write, with the keys each may carry (14.8, 14.9). The log
  * destination (obs/log.ts) keeps a message only when it is listed here or is an event's name, and
  * then only these keys; a library's message is replaced by a fixed marker. A log call's message is
@@ -803,6 +855,9 @@ export function isEventName(name: string): name is EventName {
 const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   // Process and boot (index.ts, app.ts)
   'server failed to start': [],
+  ...Object.fromEntries(
+    Object.values(START_FAILURES).map((line): [string, AttrKey[]] => [line, ['server.port']]),
+  ),
   'shutting down': ['opportun.process.signal'],
   'error during shutdown': [],
   'TEST MOCKS ENABLED: external provider calls are fake': ['opportun.mocks.count'],
@@ -814,7 +869,7 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'listening on localhost only: this instance cannot be reached from another device until OPPORTUN_HOST names a reachable address (docs/install.md, "Reaching it from another device")':
     ['server.port'],
   // Database
-  'postgres idle connection error': [],
+  'postgres connection ended': [],
   'database collation does not match SQLite ordering: create the database with LOCALE_PROVIDER libc and C collation (docs/install.md)':
     [],
   'database directory is on a filesystem whose locking SQLite cannot depend on (docs/install.md)': [
@@ -831,6 +886,7 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'job runner': [],
   'no handler registered for this job kind': ['opportun.job.id', 'opportun.job.kind'],
   'invalid stored payload; job marked dead': ['opportun.job.id', 'opportun.job.kind'],
+  "a job's row could not be written; trying again": ['opportun.job.id', 'opportun.job.kind'],
   'a dead job was not settled by its handler': ['opportun.job.id', 'opportun.job.kind'],
   'job exhausted its retries; marked dead': [
     'opportun.job.id',

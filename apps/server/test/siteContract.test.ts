@@ -6,7 +6,7 @@
 // is a prohibited one, and a slug or id cannot move a built URL's host or path.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { hostMatchesRule, SITES, type HostRule } from '@opportun/core';
+import { CAPTURE_SITES, hostMatchesRule, SITES, type HostRule } from '@opportun/core';
 import { describe, expect, it } from 'vitest';
 import { sanitizePosting } from '../src/lib/postingSanitize';
 import {
@@ -18,6 +18,8 @@ import {
 } from '../src/lib/safeFetch';
 import type { SourceContext } from '../src/adapters/discoverySource';
 import { SITE_MODULES, type SiteModule } from '../src/sites';
+import { INDEED_JOB } from './fixtures/capture/indeedPages';
+import { JOB as LINKEDIN_JOB, type CapturedPage } from './fixtures/capture/pages';
 
 const fixture = (name: string): unknown =>
   JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures/ats', name), 'utf8'));
@@ -26,6 +28,20 @@ const fixture = (name: string): unknown =>
 const API_FIXTURES: Record<string, () => unknown[]> = {
   greenhouse: () => (fixture('greenhouse.json') as { jobs: unknown[] }).jobs,
 };
+
+/** Each site's job page as the extension sends it. A site with `capture` needs one. */
+const CAPTURE_FIXTURES: Record<string, CapturedPage> = {
+  linkedin: LINKEDIN_JOB,
+  indeed: INDEED_JOB,
+};
+
+/** Each site's alert mail, as text. A site with `alertEmail` needs one. */
+const ALERT_FIXTURES: Record<string, string> = {
+  linkedin: 'linkedin-alert.txt',
+  indeed: 'indeed-alert.txt',
+};
+const alertText = (name: string): string =>
+  readFileSync(join(import.meta.dirname, 'fixtures/alerts', name), 'utf8');
 
 /** A host the rule names: the exact host, or the pattern's example. */
 const hostOf = (rule: HostRule): string => ('exact' in rule ? rule.exact : rule.example);
@@ -57,6 +73,11 @@ describe('the site registry (#769)', () => {
     const ids = SITE_MODULES.map((m) => m.identity.id);
     expect(new Set(ids).size).toBe(ids.length);
     expect(SITE_MODULES.map((m) => m.identity)).toEqual([...SITES]);
+  });
+
+  it('lists the capture sites, in order, as the extension reads them', () => {
+    expect(CAPTURE_SITES.map((s) => s.id)).toEqual(['linkedin', 'indeed']);
+    expect([...CAPTURE_SITES]).toEqual(SITES.filter((s) => s.routes.capture !== undefined));
   });
 
   it('normalizes a host (case, spaces, trailing dots) in one pass, however long', () => {
@@ -172,6 +193,27 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
       }
     });
 
+    it('builds no job page link for an id that is not one (sec, #769 point 5)', () => {
+      const job = site.jobFromUrl(new URL(site.samples.jobUrls[0]!))!;
+      for (const bad of HOSTILE) {
+        expect(site.isJobId(bad), JSON.stringify(bad)).toBe(false);
+        expect(() => site.jobPageUrl({ ...job, id: bad }), JSON.stringify(bad)).toThrow();
+      }
+    });
+
+    it('reads no job from a look-alike host', () => {
+      for (const link of site.samples.jobUrls) {
+        for (const rule of site.pageHosts) {
+          for (const fake of lookAlikes(rule)) {
+            const url = new URL(link);
+            url.hostname = fake;
+            expect(site.jobFromUrl(url), url.href).toBeNull();
+            expect(site.storedJobFromUrl?.(url) ?? null, url.href).toBeNull();
+          }
+        }
+      }
+    });
+
     it('matches each host rule exactly, and none of its look-alikes (sec, #769 point 3)', () => {
       for (const rule of [...site.fetchHosts, ...site.pageHosts]) {
         expect(hostMatchesRule(hostOf(rule), rule)).toBe(true);
@@ -245,6 +287,43 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
       }
       expect(requested.length).toBeGreaterThan(0);
       for (const h of requested) expect(matchesAny(h, site.fetchHosts), h).toBe(true);
+    });
+
+    it('recognizes its capture page as a job its own links name, and reads its description back', () => {
+      if (mod.capture === undefined) return;
+      const page = CAPTURE_FIXTURES[site.id];
+      expect(page, `a capture page for ${site.id}`).toBeDefined();
+      const read = mod.capture.recognize(page!);
+      if (read.kind !== 'job') throw new Error(`read as ${read.kind}`);
+      expect(site.isJobId(read.jobId)).toBe(true);
+      const link = new URL(read.jobUrl);
+      expect(matchesAny(link.hostname, site.pageHosts), link.href).toBe(true);
+      expect(site.jobFromUrl(link)).toEqual({ site: site.id, board: null, id: read.jobId });
+      expect(mod.capture.storedDescriptionOf(page!.text)).toBe(read.descriptionMd);
+    });
+
+    it('parses its alert mail into leads on its own pages, named by its own job ids', () => {
+      if (mod.alertEmail === undefined) return;
+      const name = ALERT_FIXTURES[site.id];
+      expect(name, `an alert mail for ${site.id}`).toBeDefined();
+      expect(mod.alertEmail.senders.length).toBeGreaterThan(0);
+      for (const sender of mod.alertEmail.senders) {
+        expect(sender).toBe(sender.trim().toLowerCase());
+        expect(sender).toMatch(/^[^@\s]+@[^@\s]+$/);
+      }
+      const leads = mod.alertEmail.parse(alertText(name!));
+      expect(leads.length).toBeGreaterThan(0);
+      for (const raw of leads) {
+        const lead = sanitizePosting(raw);
+        expect(lead.title.trim()).not.toBe('');
+        const id = lead.externalId ?? '';
+        expect(site.isJobId(id), id).toBe(true);
+        expect(lead.postingUrl).toBe(site.jobPageUrl({ site: site.id, board: null, id }));
+      }
+      // No other site's mail is read as this site's.
+      for (const [other, file] of Object.entries(ALERT_FIXTURES)) {
+        if (other !== site.id) expect(mod.alertEmail.parse(alertText(file)), other).toEqual([]);
+      }
     });
 
     it('maps its recorded API answer to postings the sanitizer accepts', () => {

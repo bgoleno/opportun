@@ -19,7 +19,7 @@
 //
 // That is LinkedIn's extraction. Since Indeed became a capture site, the stored text is read with
 // the extraction of the site the capture came from (https://github.com/bgoleno/opportun/issues/93):
-// each recognizer in lib/captureRecognizers.ts says how (`storedDescriptionOf`, where LinkedIn's
+// each site module's capture (apps/server/src/sites) says how (`storedDescriptionOf`, where LinkedIn's
 // pre-cut now lives), and the capture's own "Captured from <site>" title names the site. A capture
 // from a site with no recognizer finds no description and changes nothing.
 //
@@ -140,7 +140,7 @@ export async function rederivePosting(
 
   // The capture's own site's extraction (https://github.com/bgoleno/opportun/issues/93). For a
   // LinkedIn capture that still cuts the recommended rail before reading, as issue #264 requires:
-  // see linkedInStoredDescriptionOf in lib/captureRecognizers.ts.
+  // see storedDescriptionOf in sites/linkedin.ts.
   const derived = storedDescriptionOf(capture.siteId, capture.text);
   if (derived === null) return { kind: 'no_description_found' };
 

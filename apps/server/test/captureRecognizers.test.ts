@@ -3,7 +3,9 @@
 // This is a seam, not a behavior change: lib/linkedinCapture.test.ts is the specification for
 // what the LinkedIn recognizer does, and it passes unchanged.
 import { describe, expect, it } from 'vitest';
-import { CAPTURE_RECOGNIZERS, recognizeCapturedPage } from '../src/lib/captureRecognizers';
+import { CAPTURE_SITES } from '@opportun/core';
+import { recognizeCapturedPage } from '../src/lib/captureRecognizers';
+import { SITE_MODULES } from '../src/sites';
 import { JOB, PROFILE } from './fixtures/capture/pages';
 
 // The same fixtures the LinkedIn recognizer's own tests use, so this file tests the routing
@@ -33,10 +35,10 @@ describe('recognizeCapturedPage', () => {
     expect(recognizeCapturedPage(PROFILE)).toMatchObject({ kind: 'profile', siteId: 'linkedin' });
   });
 
-  it('ships a recognizer for LinkedIn and Indeed, and every one names a known site', async () => {
-    const { CAPTURE_SITES } = await import('../src/lib/captureSites');
+  it('ships a recognizer for LinkedIn and Indeed, and every one names a known site', () => {
     const siteIds = CAPTURE_SITES.map((s) => s.id);
-    expect(CAPTURE_RECOGNIZERS.map((r) => r.siteId)).toEqual(['linkedin', 'indeed']);
-    for (const r of CAPTURE_RECOGNIZERS) expect(siteIds).toContain(r.siteId);
+    const recognizers = SITE_MODULES.filter((m) => m.capture !== undefined);
+    expect(recognizers.map((m) => m.identity.id)).toEqual(['linkedin', 'indeed']);
+    for (const m of recognizers) expect(siteIds).toContain(m.identity.id);
   });
 });

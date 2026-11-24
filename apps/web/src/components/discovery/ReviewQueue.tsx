@@ -1,12 +1,14 @@
 // The discovery review queue (FR-U6): pending results best AI score first, with the pipeline's
 // keyboard triage (j/k select, i accept, x dismiss, p opens the posting in a new tab, Enter
 // opens the in-app detail dialog). Accept and dismiss leave the queue at once and come back if
-// the server refuses; a 409 duplicate on accept asks whether to attach the result to the
-// existing opportunity or create one anyway. "Capture posting" adds a posting by link or pasted
-// text; a needs_capture lead is completed the same way.
+// the server refuses, unless the result was decided somewhere else (queueDecided.ts, #968); a 409
+// duplicate on accept asks whether to attach the result to the existing opportunity or create one
+// anyway. "Capture posting" adds a posting by link or pasted text; a needs_capture lead is
+// completed the same way. useQueueWatch keeps the list true while postings are captured with the
+// extension.
 //
 // Issue #191: one role advertised in several locations produces one result per location, so
-// results are grouped for display by their dedupeKey's company+title (groupResults.ts) before
+// results of one role (@opportun/core cardKey) are grouped for display (groupResults.ts) before
 // rendering -- an ordinary result is a singleton group and behaves exactly as before. j/k, i and
 // x act on a group as the selectable unit; accepting a multi-location group accepts its primary
 // (best-scoring) member normally, then links every other location to the resulting opportunity
@@ -15,7 +17,8 @@
 // deliberately acts on just the one result it was opened for, not its whole group, so a member
 // that turns out not to belong can always be split off and triaged on its own.
 import type { DismissReason } from '@opportun/core';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from '@tanstack/react-router';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { NewOpportunityDialog } from '@/components/pipeline/NewOpportunityDialog';
 import { Button } from '@/components/ui/button';
@@ -41,6 +44,13 @@ import {
 import { CaptureDialog } from './CaptureDialog';
 import { rowKey, type ResultGroup } from './groupResults';
 import {
+  countParts,
+  decidedCounts,
+  decidedOf,
+  decidedSentence,
+  type Decided,
+} from './queueDecided';
+import {
   arrangeQueue,
   DEFAULT_QUEUE_SORT,
   isStale,
@@ -57,6 +67,20 @@ import {
   type DuplicateState,
 } from './QueueDialogs';
 import { QueueGroupRow, QueueRow, resultLabel } from './QueueRow';
+import { selectionAfterRead } from './queueSelection';
+import { useQueueWatch } from './useQueueWatch';
+
+/** What became of one accept, attach or create anyway. */
+type AcceptOutcome =
+  | { kind: 'accepted'; opportunityId: string | null }
+  /** Decided somewhere else; nothing was written. */
+  | { kind: 'decided'; decided: Decided }
+  /** Pending, and it matches another opportunity: the duplicate dialog is asking. */
+  | { kind: 'asked' }
+  /** The opportunity to attach to is not there any more. */
+  | { kind: 'gone' }
+  /** Anything else; a toast has said so. */
+  | { kind: 'failed' };
 
 /** One line summarizing a bulk request's per-item outcomes (design principle 6: report only
  *  what actually happened, never just "done"). `headline` is the outcome this action is meant
@@ -69,6 +93,7 @@ function summarize(
   for (const r of results) counts.set(r.outcome, (counts.get(r.outcome) ?? 0) + 1);
   const n = (outcome: string) => counts.get(outcome) ?? 0;
   const parts = [`${n(headline)} ${headline}`];
+  if (n('attached') > 0) parts.push(`${n('attached')} linked to an opportunity`);
   if (n('duplicate') > 0) parts.push(`${n('duplicate')} already tracked`);
   if (n('already_decided') > 0) parts.push(`${n('already_decided')} already decided`);
   if (n('not_found') > 0) parts.push(`${n('not_found')} not found`);
@@ -79,7 +104,9 @@ function summarize(
 /** `now` dates the stale mark; tests pass a fixed time instead of reading the clock. */
 export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
   const [sort, setSort] = useState<QueueSort>(DEFAULT_QUEUE_SORT);
-  const { data, error, isPending } = useReviewQueue(queueSort(sort).param);
+  const { data, error, isPending, isPlaceholderData } = useReviewQueue(queueSort(sort).param);
+  const postingOpened = useQueueWatch();
+  const navigate = useNavigate();
   const acceptM = useAcceptResult();
   const dismissM = useDismissResult();
   const bulkAcceptM = useBulkAccept();
@@ -89,11 +116,6 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
   const [dismissing, setDismissing] = useState<ResultGroup | null>(null);
   const [detail, setDetail] = useState<DiscoveryResult | null>(null);
   const [duplicate, setDuplicate] = useState<DuplicateState | null>(null);
-  /** The other locations waiting to attach once a group's primary member's accept resolves,
-   *  whether immediately or after a 409 is resolved through DuplicateAcceptDialog. */
-  const [groupContinuation, setGroupContinuation] = useState<readonly DiscoveryResult[] | null>(
-    null,
-  );
   /** Open capture dialog: lead null for a new posting, or the needs_capture lead to complete. */
   const [capture, setCapture] = useState<{ lead: DiscoveryResult | null } | null>(null);
   const [manualEntry, setManualEntry] = useState(false);
@@ -107,7 +129,13 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
    *  requests and once a request finishes. */
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const container = useRef<HTMLUListElement>(null);
-  const lastToggledIndex = useRef<number | null>(null);
+  /** The checkbox a Shift range starts from: an id, since a read can move every row (#968). */
+  const lastToggledId = useRef<string | null>(null);
+  /** The card that has just gone with the keyboard on it, until the read that took it is applied. */
+  const goneWithFocus = useRef<string | null>(null);
+  /** The list as last read, to see what a read took away. */
+  const lastRead = useRef<{ sort: QueueSort; groups: ResultGroup[] } | null>(null);
+  const lastLoadedIds = useRef<ReadonlySet<string>>(new Set());
   const items = data?.items;
   const groups = useMemo(() => arrangeQueue(items ?? [], sort), [items, sort]);
   /** Ids we can prove belong to a multi-location group (issue #209): every member of a group
@@ -155,24 +183,66 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
     [groupedMemberIds],
   );
 
-  // A result that left the queue (accepted, dismissed, unsuppressed elsewhere) is pruned from
-  // the checked set rather than left dangling: a stale id in checkedIds would otherwise be
-  // silently resent in the next bulk request for a row the user can no longer even see.
+  // A result that left the list is pruned from the checked set rather than left dangling: a stale
+  // id in checkedIds would otherwise be silently resent in the next bulk request for a row the user
+  // can no longer even see. Only one that was in the list before: "Select all N matching" checks
+  // results this page has never loaded, and a read says nothing about those (#968). One pushed out
+  // of the page by newer results goes too, so fewer are acted on and the count says so. The detail
+  // dialog of a result that left closes with it: it holds nothing the user typed.
   useEffect(() => {
     if (items === undefined) return;
     const present = new Set(items.map((r) => r.id));
+    const before = lastLoadedIds.current;
+    lastLoadedIds.current = present;
+    const left = (id: string): boolean => before.has(id) && !present.has(id);
     setCheckedIds((prev) => {
-      const next = new Set([...prev].filter((id) => present.has(id)));
+      const next = new Set([...prev].filter((id) => !left(id)));
       return next.size === prev.size ? prev : next;
     });
+    setDetail((d) => (d !== null && left(d.id) ? null : d));
   }, [items, setCheckedIds]);
+
+  // Nothing left to act on: a bulk dialog that was open has nothing to ask about.
+  useEffect(() => {
+    if (checkedIds.size > 0) return;
+    setBulkAccepting(false);
+    setBulkDismissing(false);
+  }, [checkedIds.size]);
+
+  // The selected row gone from the list just read: the nearest one takes its place, and the
+  // keyboard with it when it was there. Only between two reads of one order: another order's page
+  // is another list.
+  useLayoutEffect(() => {
+    const gone = goneWithFocus.current;
+    goneWithFocus.current = null;
+    if (items === undefined || isPlaceholderData) {
+      lastRead.current = null;
+      return;
+    }
+    const before = lastRead.current;
+    lastRead.current = { sort, groups };
+    if (before === null || before.sort !== sort || selectedKey === null) return;
+    const next = selectionAfterRead(before.groups, groups, selectedKey);
+    if (next === selectedKey) return;
+    setSelectedKey(next);
+    if (gone !== selectedKey || next === null) return;
+    rowNodes()
+      .find((n) => n.dataset.resultId === next)
+      ?.focus({ preventScroll: true });
+  }, [items, groups, sort, isPlaceholderData, selectedKey]);
+
+  /** The rows on the page, in order. */
+  function rowNodes(): HTMLElement[] {
+    const root = container.current;
+    return root === null ? [] : Array.from(root.querySelectorAll<HTMLElement>('[data-result-id]'));
+  }
 
   function toggleChecked(id: string, shiftKey: boolean) {
     const index = (items ?? []).findIndex((r) => r.id === id);
+    const from = (items ?? []).findIndex((r) => r.id === lastToggledId.current);
     setCheckedIds((prev) => {
       const next = new Set(prev);
-      const from = lastToggledIndex.current;
-      if (shiftKey && from !== null && items !== undefined) {
+      if (shiftKey && from !== -1 && items !== undefined) {
         const [lo, hi] = from < index ? [from, index] : [index, from];
         for (let i = lo; i <= hi; i++) {
           // eslint-disable-next-line security/detect-object-injection -- a numeric index, not a property name
@@ -186,12 +256,12 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       }
       return next;
     });
-    lastToggledIndex.current = index;
+    lastToggledId.current = id;
   }
 
   function clearChecked() {
     setCheckedIds(new Set());
-    lastToggledIndex.current = null;
+    lastToggledId.current = null;
   }
 
   async function bulkAccept() {
@@ -279,15 +349,50 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
     setSelectedKey(next === undefined ? null : rowKey(next));
   }
 
+  /** The toast's way to an opportunity, for a result that turned out to be in one. */
+  function viewAction(opportunityId: string | null) {
+    return opportunityId === null
+      ? {}
+      : {
+          action: {
+            label: 'View opportunity',
+            onClick: () =>
+              void navigate({ to: '/opportunities/$id', params: { id: opportunityId } }),
+          },
+        };
+  }
+
+  /** Nothing was created or changed, and nothing failed: says where the result is. */
+  function sayDecided(pressed: 'accept' | 'dismiss', d: Decided, label: string) {
+    toast({
+      title: decidedSentence(pressed, d),
+      description: label,
+      ...viewAction(d.existingId),
+    });
+  }
+
   async function acceptOne(
     r: DiscoveryResult,
     extra: Omit<AcceptVars, 'id'> = {},
-  ): Promise<DiscoveryResult | undefined> {
+    /** The card's other locations, for the dialog that may have to ask about this one. */
+    rest: readonly DiscoveryResult[] = [],
+  ): Promise<AcceptOutcome> {
+    /** Only this result's own dialog: another card may be asking meanwhile. */
+    const closeDialog = () => setDuplicate((d) => (d?.result.id === r.id ? null : d));
     try {
       const accepted = await acceptM.mutateAsync({ id: r.id, ...extra });
-      setDuplicate(null);
-      return accepted;
+      closeDialog();
+      return { kind: 'accepted', opportunityId: accepted.opportunityId };
     } catch (err) {
+      const decided = decidedOf(err);
+      if (decided !== null) {
+        closeDialog();
+        return { kind: 'decided', decided };
+      }
+      if (err instanceof ApiError && err.code === 'opportunity_not_found') {
+        closeDialog();
+        return { kind: 'gone' };
+      }
       const existingId = err instanceof ApiError ? err.details.existingId : undefined;
       if (
         err instanceof ApiError &&
@@ -296,29 +401,30 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
         extra.attachTo === undefined &&
         extra.force !== true
       ) {
-        setDuplicate({ result: r, existingId });
-        return undefined;
+        setDuplicate({ result: r, existingId, rest });
+        return { kind: 'asked' };
       }
       toast({ title: 'Not accepted', description: errorMessage(err), variant: 'destructive' });
-      return undefined;
+      return { kind: 'failed' };
     }
   }
 
-  /** Links every other location in a group to the opportunity its primary member just created
-   *  or was attached to. Called after acceptGroup's own primary accept, or after a 409 on the
-   *  primary is resolved through DuplicateAcceptDialog (resolveDuplicate). */
+  /** Links every other location in a group to the opportunity its primary member is in: one it
+   *  has just created or been attached to, or, with `already`, one it was accepted into somewhere
+   *  else. Called after acceptGroup's own primary accept, or after a 409 on the primary is
+   *  resolved through DuplicateAcceptDialog (resolveDuplicate). */
   async function finishGroupContinuation(
-    primaryAccepted: DiscoveryResult,
+    primary: DiscoveryResult,
+    opportunityId: string | null,
     rest: readonly DiscoveryResult[],
+    already = false,
   ) {
-    setGroupContinuation(null);
-    const opportunityId = primaryAccepted.opportunityId;
     if (opportunityId === null) {
       // Never actually null after an accept, but never assumed: report what happened rather
       // than silently dropping the rest of the group (design principle 6).
       toast({
         title: 'Added to pipeline',
-        description: `${resultLabel(primaryAccepted)} (could not link its other ${
+        description: `${resultLabel(primary)} (could not link its other ${
           rest.length === 1 ? 'location' : `${rest.length} locations`
         }: no opportunity id came back)`,
         variant: 'destructive',
@@ -326,21 +432,59 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       return;
     }
     const settled = await Promise.all(rest.map((m) => acceptOne(m, { attachTo: opportunityId })));
-    const attached = settled.filter((r) => r !== undefined).length;
+    const linked = settled.filter((o) => o.kind === 'accepted').length;
+    const decided = settled.flatMap((o) => (o.kind === 'decided' ? [o.decided] : []));
+    const failed = rest.length - linked - decided.length;
     const total = rest.length + 1;
-    if (attached === rest.length) {
+    const description = resultLabel(primary);
+    if (!already && linked === rest.length) {
+      toast({ title: `Added to pipeline (${total} locations)`, description, variant: 'success' });
+      return;
+    }
+    if (!already && decided.length === 0) {
       toast({
-        title: `Added to pipeline (${total} locations)`,
-        description: resultLabel(primaryAccepted),
-        variant: 'success',
-      });
-    } else {
-      toast({
-        title: `Added to pipeline, but only ${attached + 1} of ${total} locations linked`,
-        description: resultLabel(primaryAccepted),
+        title: `Added to pipeline, but only ${linked + 1} of ${total} locations linked`,
+        description,
         variant: 'destructive',
       });
+      return;
     }
+    // Some were decided somewhere else: each kind counted, and the way to the opportunity.
+    const locations = linked === 1 ? 'location linked' : 'locations linked';
+    toast({
+      title: countParts([
+        [already ? 0 : 1, 'added to pipeline'],
+        [linked, already ? `other ${locations}` : locations],
+        ...decidedCounts(
+          already ? [{ disposition: 'accepted', existingId: opportunityId }, ...decided] : decided,
+        ),
+        [failed, 'not linked'],
+      ]),
+      description,
+      ...(failed > 0 ? { variant: 'destructive' as const } : {}),
+      ...viewAction(opportunityId),
+    });
+  }
+
+  /** The primary member of a group turned out to be decided somewhere else. In an opportunity, it
+   *  takes the rest of the group there, as if it had just been accepted; otherwise there is nothing
+   *  to link the rest to, and they stay to be decided. */
+  async function primaryDecided(
+    primary: DiscoveryResult,
+    decided: Decided,
+    rest: readonly DiscoveryResult[],
+  ) {
+    if (rest.length > 0 && decided.existingId !== null) {
+      await finishGroupContinuation(primary, decided.existingId, rest, true);
+      return;
+    }
+    sayDecided(
+      'accept',
+      decided,
+      rest.length === 0
+        ? resultLabel(primary)
+        : `${resultLabel(primary)}. Its other ${rest.length === 1 ? 'location is' : 'locations are'} still here.`,
+    );
   }
 
   /** Accepts a whole location group in one decision (issue #191). A singleton group (every
@@ -349,23 +493,37 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
     const [primary, ...rest] = g.members;
     if (primary === undefined) return;
     selectNeighbourGroup(rowKey(g));
-    if (rest.length > 0) setGroupContinuation(rest);
-    const accepted = await acceptOne(primary);
-    if (accepted === undefined) return;
+    const outcome = await acceptOne(primary, {}, rest);
+    if (outcome.kind === 'decided') {
+      await primaryDecided(primary, outcome.decided, rest);
+      return;
+    }
+    if (outcome.kind !== 'accepted') return;
     if (rest.length === 0) {
       toast({ title: 'Added to pipeline', description: resultLabel(primary), variant: 'success' });
       return;
     }
-    await finishGroupContinuation(accepted, rest);
+    await finishGroupContinuation(primary, outcome.opportunityId, rest);
   }
 
   /** Resolves a 409 duplicate through the dialog's Attach/Create-anyway choice, then continues
    *  a pending group chain if this accept was a group's primary member. */
   async function resolveDuplicate(s: DuplicateState, extra: Omit<AcceptVars, 'id'>) {
-    const accepted = await acceptOne(s.result, extra);
-    if (accepted === undefined) return;
-    if (groupContinuation !== null) {
-      await finishGroupContinuation(accepted, groupContinuation);
+    const outcome = await acceptOne(s.result, extra);
+    if (outcome.kind === 'decided') {
+      await primaryDecided(s.result, outcome.decided, s.rest);
+      return;
+    }
+    if (outcome.kind === 'gone') {
+      toast({
+        title: 'Not attached: that opportunity has since been deleted.',
+        description: `${resultLabel(s.result)} is still here to review.`,
+      });
+      return;
+    }
+    if (outcome.kind !== 'accepted') return;
+    if (s.rest.length > 0) {
+      await finishGroupContinuation(s.result, outcome.opportunityId, s.rest);
       return;
     }
     toast({
@@ -387,26 +545,43 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       g.members.map((m) => dismissM.mutateAsync({ id: m.id, ...v })),
     );
     const ok = settled.filter((r) => r.status === 'fulfilled').length;
-    if (ok === g.members.length) {
+    const decided = settled
+      .map((r) => (r.status === 'rejected' ? decidedOf(r.reason) : null))
+      .filter((d) => d !== null);
+    const failed = g.members.length - ok - decided.length;
+    const [first] = decided;
+    if (g.members.length === 1 && first !== undefined) {
+      sayDecided('dismiss', first, resultLabel(primary));
+    } else if (ok === g.members.length) {
       toast({
         title: g.members.length === 1 ? 'Dismissed' : `Dismissed (${g.members.length} locations)`,
         description: resultLabel(primary),
       });
-    } else {
+    } else if (decided.length === 0) {
       toast({
         title: `Only ${ok} of ${g.members.length} locations dismissed`,
         description: resultLabel(primary),
         variant: 'destructive',
+      });
+    } else {
+      const ids = new Set(decided.map((d) => d.existingId).filter((id) => id !== null));
+      const [only] = ids;
+      toast({
+        title: countParts([
+          [ok, 'dismissed'],
+          ...decidedCounts(decided),
+          [failed, 'not dismissed'],
+        ]),
+        description: resultLabel(primary),
+        ...(failed > 0 ? { variant: 'destructive' as const } : {}),
+        ...viewAction(ids.size === 1 ? (only ?? null) : null),
       });
     }
   }
 
   /** The selected group, but only when it is actually one of the currently rendered rows. */
   function currentGroup(): ResultGroup | undefined {
-    const root = container.current;
-    if (root === null) return undefined;
-    const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-result-id]'));
-    return nodes.some((n) => n.dataset.resultId === selectedKey)
+    return rowNodes().some((n) => n.dataset.resultId === selectedKey)
       ? groups.find((g) => rowKey(g) === selectedKey)
       : undefined;
   }
@@ -422,9 +597,7 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
   /** Moves the selection by one row. Returns whether it actually moved, so j/k only claim the
    *  keystroke (and preventDefault) when there was somewhere to move to. */
   function move(delta: 1 | -1): boolean {
-    const root = container.current;
-    if (root === null) return false;
-    const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-result-id]'));
+    const nodes = rowNodes();
     if (nodes.length === 0) return false;
     const index = nodes.findIndex((n) => n.dataset.resultId === selectedKey);
     const next = index === -1 ? 0 : Math.min(Math.max(index + delta, 0), nodes.length - 1);
@@ -447,19 +620,17 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
 
   /** Shift+J/Shift+K (#184): moves the cursor like j/k, and also checks every row the cursor
    *  crosses on the way, anchored at wherever the cursor started extending from (the same
-   *  `lastToggledIndex` a shift-click range uses), so repeated presses keep growing one range
-   *  instead of restarting it from the cursor's current row each time. `lastToggledIndex` and
-   *  the range below both stay in `items`' own flat-index space (matching `toggleChecked`'s
-   *  usage), never the grouped navigable-unit space `move`/`currentGroup` use. Moving onto a
+   *  `lastToggledId` a shift-click range uses), so repeated presses keep growing one range
+   *  instead of restarting it from the cursor's current row each time. That id's place and the
+   *  range below both stay in `items`' own flat-index space (matching `toggleChecked`'s usage),
+   *  never the grouped navigable-unit space `move`/`currentGroup` use. Moving onto a
    *  multi-location group (no single id of its own) still advances the cursor and still
    *  establishes the anchor if none exists yet, so a later press resumes the range from where
    *  extension actually started rather than losing it the moment it passes a group; the range
    *  this fills may include a group's members by flat index, same as a shift-click range can,
    *  and `setCheckedIds` (the model itself, #209) is what actually keeps them out. */
   function moveAndExtend(delta: 1 | -1): boolean {
-    const root = container.current;
-    if (root === null) return false;
-    const nodes = Array.from(root.querySelectorAll<HTMLElement>('[data-result-id]'));
+    const nodes = rowNodes();
     if (nodes.length === 0) return false;
     const cursorIndex = nodes.findIndex((n) => n.dataset.resultId === selectedKey);
     const nextCursor = Math.min(Math.max(cursorIndex + delta, 0), nodes.length - 1);
@@ -469,12 +640,13 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
     node.focus();
     const next = itemIndexAt(nextCursor);
     const start = itemIndexAt(cursorIndex);
-    if (lastToggledIndex.current === null) {
-      const candidate = start === -1 ? next : start;
-      if (candidate !== -1) lastToggledIndex.current = candidate;
+    // -1 too when the row it started from has left the list: the range starts again from here.
+    let anchor = (items ?? []).findIndex((r) => r.id === lastToggledId.current);
+    if (anchor === -1) {
+      anchor = start === -1 ? next : start;
+      lastToggledId.current = anchor === -1 ? null : (items?.at(anchor)?.id ?? null);
     }
-    if (next === -1 || lastToggledIndex.current === null) return true;
-    const anchor = lastToggledIndex.current;
+    if (next === -1 || anchor === -1) return true;
     setCheckedIds((prev) => {
       const result = new Set(prev);
       const [lo, hi] = anchor < next ? [anchor, next] : [next, anchor];
@@ -544,6 +716,7 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       if (href === null) return;
       e.preventDefault();
       window.open(href, '_blank', 'noopener,noreferrer');
+      postingOpened();
     },
     Enter: (e) => {
       const current = currentGroup();
@@ -672,6 +845,10 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
               }}
               checked={checkedIds.has(g.members[0]!.id)}
               onToggleChecked={(shiftKey) => toggleChecked(g.members[0]!.id, shiftKey)}
+              onOpenPosting={postingOpened}
+              onGoneWithFocus={() => {
+                goneWithFocus.current = rowKey(g);
+              }}
             />
           ) : (
             // No checked/onToggleChecked: a location group is not selectable for bulk triage
@@ -690,6 +867,10 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
                 setSelectedKey(rowKey(g));
                 setDetail(g.members[0]!);
               }}
+              onOpenPosting={postingOpened}
+              onGoneWithFocus={() => {
+                goneWithFocus.current = rowKey(g);
+              }}
             />
           ),
         )}
@@ -698,6 +879,7 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       <ResultDetailDialog
         result={detail}
         onClose={() => setDetail(null)}
+        onOpenPosting={postingOpened}
         onAccept={(r) => {
           setDetail(null);
           // Deliberately just this one result, not its whole group (see file header): the
@@ -735,10 +917,7 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       <DuplicateAcceptDialog
         state={duplicate}
         busy={acceptM.isPending}
-        onCancel={() => {
-          setDuplicate(null);
-          setGroupContinuation(null);
-        }}
+        onCancel={() => setDuplicate(null)}
         onAttach={(s) => void resolveDuplicate(s, { attachTo: s.existingId })}
         onForce={(s) => void resolveDuplicate(s, { force: true })}
       />

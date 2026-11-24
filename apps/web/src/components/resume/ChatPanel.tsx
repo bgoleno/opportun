@@ -17,7 +17,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
-import { errorMessage } from '@/lib/api';
+import { ApiError, errorMessage } from '@/lib/api';
 import {
   aiReason,
   resumeErrorMessage,
@@ -161,7 +161,11 @@ export function ChatPanel({ resumeId }: { resumeId: string }) {
         controller.signal,
       );
     } catch (err) {
-      if (!controller.signal.aborted) setError(resumeErrorMessage(err) ?? errorMessage(err));
+      if (!controller.signal.aborted) {
+        setError(resumeErrorMessage(err) ?? errorMessage(err));
+        // Not sent, and the session read below is a new one (#896): kept, to be sent in that.
+        if (err instanceof ApiError && err.code === 'session_closed') setDraft(content);
+      }
     } finally {
       if (!controller.signal.aborted) {
         // The server holds the transcript (user turn first, then the reply): show its copy.

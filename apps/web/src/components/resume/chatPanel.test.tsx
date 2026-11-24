@@ -252,4 +252,59 @@ describe('ChatPanel conversation scrolling (issue #35)', () => {
     expect(await screen.findByText('Hi')).toBeInTheDocument();
     expect(screen.getByRole('list', { name: 'Conversation' })).toHaveAttribute('tabindex', '0');
   });
+
+  it('a message to a session finished elsewhere says so, is kept to send again, and goes to the new one (#896)', async () => {
+    const user = userEvent.setup();
+    const SENTENCE =
+      'This tailoring session was finished, so your message was not sent. Send it again in the new session.';
+    const userTurn: ChatMessage = {
+      role: 'user',
+      content: 'One more change',
+      at: NOW + 1,
+      edits: [],
+      incomplete: false,
+    };
+    const old = session([
+      { role: 'user', content: 'From the old session', at: NOW, edits: [], incomplete: false },
+    ]);
+    let current: TailoringSession = old;
+    const sent: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const path = new URL(String(input), 'http://localhost').pathname.replace(/^\/api\/v1/, '');
+        if (path === '/tailoring/s1/messages') {
+          sent.push('s1');
+          current = { ...session([]), id: 's2' };
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: { code: 'session_closed', message: SENTENCE } }), {
+              status: 409,
+            }),
+          );
+        }
+        if (path === '/tailoring/s2/messages') {
+          sent.push('s2');
+          current = { ...session([userTurn]), id: 's2' };
+          return Promise.resolve(
+            new Response(ev({ type: 'start', message: userTurn }), {
+              headers: { 'content-type': 'text/event-stream' },
+            }),
+          );
+        }
+        return Promise.resolve(new Response(JSON.stringify(current)));
+      }),
+    );
+    renderWithProviders(<ChatPanel resumeId="r1" />);
+    expect(await screen.findByText('From the old session')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Message'), 'One more change');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(SENTENCE);
+    await waitFor(() => expect(screen.queryByText('From the old session')).toBeNull());
+    expect(screen.getByLabelText('Message')).toHaveValue('One more change');
+
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(sent).toEqual(['s1', 's2']));
+    await waitFor(() => expect(screen.getByLabelText('Message')).toHaveValue(''));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });

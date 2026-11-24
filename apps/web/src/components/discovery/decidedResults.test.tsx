@@ -6,7 +6,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import type { DiscoveryResult } from './api';
 import { DecidedResults } from './DecidedResults';
 
@@ -84,6 +84,40 @@ describe('DecidedResults', () => {
     expect(await within(panel).findByText('Accepted Role')).toBeInTheDocument();
     expect(calls.some((c) => c.search.includes('disposition=accepted'))).toBe(true);
     expect(calls.some((c) => c.search.includes('disposition=dismissed'))).toBe(true);
+  });
+
+  it('says a result was linked to an opportunity already there, and leads to it (#971)', async () => {
+    const user = userEvent.setup();
+    const linked = result({
+      id: 'l1',
+      disposition: 'accepted',
+      opportunityId: 'opp-1',
+      aiScore: null,
+      rankSkipReason: 'linked',
+      posting: { company: 'Globex', title: 'Linked Role', location: 'Boston, MA' },
+    });
+    const accepted = result({
+      id: 'a1',
+      disposition: 'accepted',
+      opportunityId: 'opp-2',
+      posting: { company: 'Globex', title: 'Accepted Role' },
+    });
+    mockApi({ 'GET /discovery/results': queueHandler({ accepted: [linked, accepted] }) });
+    renderWithProviders(<DecidedResults />);
+    await user.click(await screen.findByRole('tab', { name: /^Accepted/ }));
+
+    const row = await screen.findByRole('listitem', { name: 'Linked Role at Globex' });
+    expect(row).toHaveTextContent('Linked to an opportunity already there');
+    // Nobody accepted it.
+    expect(row).toHaveTextContent(/Linked [A-Z][a-z]{2} \d/);
+    expect(row).not.toHaveTextContent('Accepted');
+    expect(within(row).getByRole('link', { name: 'View opportunity' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1',
+    );
+    const other = screen.getByRole('listitem', { name: 'Accepted Role at Globex' });
+    expect(other).not.toHaveTextContent('Linked');
+    expect(other).toHaveTextContent('Accepted');
   });
 
   it('shows why a result was dismissed, naming the denied company for a denylist suppression (issue #199)', async () => {
@@ -189,6 +223,8 @@ describe('DecidedResults', () => {
   });
 
   it('a 409 from an accepted result whose opportunity is still active leaves the button in place', async () => {
+    const SENTENCE =
+      "This job's opportunity is still in your pipeline. Dismiss the opportunity first, then unsuppress this result.";
     const r = result({
       id: 'a1',
       disposition: 'accepted',
@@ -197,10 +233,11 @@ describe('DecidedResults', () => {
     });
     mockApi({
       'GET /discovery/results': queueHandler({ accepted: [r] }),
-      'POST /discovery/results/a1/unsuppress': {
+      // A handler: a plain object here would be answered as a 200 body.
+      'POST /discovery/results/a1/unsuppress': () => ({
         status: 409,
-        body: { error: { code: 'opportunity_still_active' } },
-      },
+        body: { error: { code: 'opportunity_still_active', message: SENTENCE } },
+      }),
     });
     const user = userEvent.setup();
     renderWithProviders(<DecidedResults />);
@@ -209,12 +246,34 @@ describe('DecidedResults', () => {
     const row = await screen.findByRole('listitem', { name: 'Accepted Role at Globex' });
     await user.click(within(row).getByRole('button', { name: /unsuppress/i }));
 
+    expect(await toastRegion().findByText(SENTENCE)).toBeInTheDocument();
     // The refusal is reported, not hidden behind an assumed success: the row keeps the active
     // button rather than flipping to the Unsuppressed badge it has not actually earned.
     await waitFor(() =>
       expect(within(row).getByRole('button', { name: /unsuppress/i })).toBeEnabled(),
     );
     expect(within(row).queryByText('Unsuppressed')).toBeNull();
+  });
+
+  it('a result unsuppressed elsewhere says so in plain words, and its row is read again (#896)', async () => {
+    const SENTENCE = 'This result is already unsuppressed. There is nothing more to do.';
+    const r = result({ id: 'd1', posting: { company: 'Initech', title: 'Reopened Elsewhere' } });
+    let released = false;
+    mockApi({
+      'GET /discovery/results': (call: ApiCall) =>
+        queueHandler({ dismissed: [released ? { ...r, dedupeKey: null } : r] })(call),
+      'POST /discovery/results/d1/unsuppress': () => {
+        released = true;
+        return { status: 409, body: { error: { code: 'not_suppressing', message: SENTENCE } } };
+      },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<DecidedResults />);
+    const row = await screen.findByRole('listitem', { name: 'Reopened Elsewhere at Initech' });
+    await user.click(within(row).getByRole('button', { name: /unsuppress/i }));
+    expect(await toastRegion().findByText(SENTENCE)).toBeInTheDocument();
+    expect(await within(row).findByText('Unsuppressed')).toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: /unsuppress/i })).toBeNull();
   });
 
   it('keyboard: j/k move the selection between rows (issue #155)', async () => {

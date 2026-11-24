@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { companyMatchKey, dedupeGroupKey, dedupeKey, matchText, titleMatchKey } from './dedupe';
+import {
+  cardKey,
+  sameTitle,
+  companyMatchKey,
+  dedupeGroupKey,
+  dedupeKey,
+  matchText,
+  titleMatchKey,
+} from './dedupe';
 
 describe('dedupeKey', () => {
   it('ignores case, punctuation, and extra whitespace', () => {
@@ -78,6 +86,57 @@ describe('dedupeGroupKey', () => {
   it('is the identity for a key with no location segment (two-part legacy keys included)', () => {
     expect(dedupeGroupKey('initech|pm')).toBe('initech|pm');
     expect(dedupeGroupKey(dedupeKey('Initech', 'PM'))).toBe('initech|pm');
+  });
+});
+
+describe('cardKey: what one card of the review queue is (#968)', () => {
+  const key = (company: string, title: string, location: string | null = null) =>
+    cardKey(dedupeKey(company, title, location), company, title);
+
+  it('is one for a role in several locations', () => {
+    expect(key('Initech', 'Staff Engineer', 'Austin, TX')).toBe(
+      key('INITECH ', 'staff  engineer', 'Remote'),
+    );
+  });
+
+  it.each([
+    ['Senior Engineer', 'Principal Engineer'],
+    ['Staff Engineer', 'Engineer'],
+    ['Engineer, Lead', 'Engineer'],
+    ['Junior Engineer', 'Senior Engineer'],
+  ])('is another at another level: %s, %s', (a, b) => {
+    expect(dedupeGroupKey(dedupeKey('Initech', a))).toBe(dedupeGroupKey(dedupeKey('Initech', b)));
+    expect(key('Initech', a)).not.toBe(key('Initech', b));
+  });
+
+  it.each([
+    ['Sr. Engineer', 'Senior Engineer'],
+    ['Engineer, Sr', 'Engineer Senior'],
+    ['Jr Engineer', 'Junior Engineer'],
+  ])('reads a level written short as the same one: %s, %s', (a, b) => {
+    expect(key('Initech', a)).toBe(key('Initech', b));
+  });
+
+  it('is another for another company, or another title', () => {
+    expect(key('Initech', 'Engineer')).not.toBe(key('Globex', 'Engineer'));
+    expect(key('Initech', 'Engineer')).not.toBe(key('Initech', 'Analyst'));
+  });
+
+  it('keeps titles and companies with no Latin letters apart', () => {
+    expect(key('Initech', 'プロダクトマネージャー')).not.toBe(key('Initech', 'エンジニア'));
+    expect(key('株式会社サンプル', 'PM')).not.toBe(key('株式会社テスト', 'PM'));
+  });
+
+  it('holds only within the stored key: a posting renamed since is not joined by its new title', () => {
+    expect(cardKey('initech|engineer|austin tx', 'Initech', 'Engineer')).not.toBe(
+      cardKey('initech|analyst|austin tx', 'Initech', 'Engineer'),
+    );
+  });
+
+  it("takes the posting's own company and title, whatever its stored key", () => {
+    const of = (company: string, title: string) => cardKey('initech|engineer|', company, title);
+    expect(of('Initech', 'Engineer')).not.toBe(of('Globex', 'Engineer'));
+    expect(of('Initech', 'プロダクトマネージャー')).not.toBe(of('Initech', 'エンジニア'));
   });
 });
 
@@ -200,5 +259,35 @@ describe('titleMatchKey and matchText', () => {
     expect(matchText('Your application: Senior Example Engineer at Example Corp.')).toContain(
       titleMatchKey('Sr. Example Engineer'),
     );
+  });
+});
+
+describe('sameTitle', () => {
+  it.each([
+    ['Senior Engineer', 'senior  engineer'],
+    ['Sr. Engineer', 'Senior Engineer'],
+    ['Engineer, Jr', 'Engineer Junior'],
+    ['Développeur', 'Developpeur'],
+    ['エンジニア', ' エンジニア '],
+  ])('%s is %s', (a, b) => {
+    expect(sameTitle(a, b)).toBe(true);
+  });
+
+  it.each([
+    ['Senior Engineer', 'Principal Engineer'],
+    ['Engineer', 'Senior Engineer'],
+    ['Lead Engineer', 'Engineer, Lead'],
+    ['プロダクトマネージャー', 'エンジニア'],
+  ])('%s is not %s', (a, b) => {
+    expect(sameTitle(a, b)).toBe(false);
+  });
+
+  it('agrees with cardKey on every pair', () => {
+    const titles = ['Engineer', 'Sr Engineer', 'Senior Engineer', 'Engineer, Staff', 'エンジニア'];
+    for (const a of titles) {
+      for (const b of titles) {
+        expect(sameTitle(a, b)).toBe(cardKey('k', 'c', a) === cardKey('k', 'c', b));
+      }
+    }
   });
 });

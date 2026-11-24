@@ -590,8 +590,10 @@ describe('oauth start', () => {
       method: 'GET',
       url: '/api/v1/auth/oauth/google/start?mode=login',
     });
-    expect(none.statusCode).toBe(409);
-    expect(none.json().error.code).toBe('provider_not_configured');
+    // A page navigation: back to the login page with a reason, never raw JSON (#896).
+    expect(none.statusCode).toBe(302);
+    expect(none.headers.location).toBe('/login?oauth=not_configured');
+    expect(cookieOf(none, OAUTH_COOKIE)).toBeUndefined();
     await configure(a, 'github');
     // Linking is never a plain navigation: it is a password-confirmed POST.
     const byGet = await app.inject({
@@ -1202,6 +1204,51 @@ describe('oauth link and unlink', () => {
       payload: { password: PASSWORD },
     });
     expect(gone.statusCode).toBe(404);
+  });
+
+  it('a start is limited by address, the one sent back to the login page too', async () => {
+    const { app } = await boot();
+    const start = (remoteAddress: string) =>
+      app.inject({
+        method: 'GET',
+        url: '/api/v1/auth/oauth/github/start?mode=login',
+        remoteAddress,
+      });
+    for (let i = 0; i < 30; i++) {
+      const res = await start('203.0.113.9');
+      expect(res.statusCode).toBe(302);
+      expect(res.headers.location).toBe('/login?oauth=not_configured');
+    }
+    const over = await start('203.0.113.9');
+    expect(over.statusCode).toBe(429);
+    expect(over.headers.location).toBeUndefined();
+    // Another address has its own count.
+    expect((await start('203.0.113.10')).statusCode).toBe(302);
+  });
+
+  it('unlinking one already unlinked, and linking one no longer set up, say so (#896)', async () => {
+    const { a } = await boot();
+    const gone = await a.request({
+      method: 'DELETE',
+      url: '/api/v1/auth/oauth/github',
+      payload: { password: ADMIN_PASSWORD },
+    });
+    expect(gone.statusCode, gone.body).toBe(404);
+    expect(gone.json().error).toEqual({
+      code: 'not_linked',
+      message: 'This provider is already unlinked from your account. There is nothing more to do.',
+    });
+    const link = await a.request({
+      method: 'POST',
+      url: '/api/v1/auth/oauth/github/link',
+      payload: { password: ADMIN_PASSWORD },
+    });
+    expect(link.statusCode, link.body).toBe(409);
+    expect(link.json().error).toEqual({
+      code: 'provider_not_configured',
+      message:
+        'This sign-in provider is no longer set up on this server. Use another one, or ask its administrator.',
+    });
   });
 
   it('an account with no usable password can neither unlink its last method nor link', async () => {

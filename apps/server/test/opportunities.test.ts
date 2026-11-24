@@ -1,8 +1,9 @@
 import { COMPANY_DOMAIN_RESOLVE_KIND } from '../src/lib/companyDomainQueue';
+import { newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { jobs } from '../src/db/schema';
+import { jobs, opportunities } from '../src/db/schema';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
 import { queryAll, queryOne } from './db';
@@ -856,6 +857,104 @@ describe('manual order (issue #240)', () => {
         url: '/api/v1/opportunities?sort=sortOrder&limit=200',
       });
       expect(list.json().items.map((o: { id: string }) => o.id)).toEqual([...ids.slice(1), ids[0]]);
+    });
+
+    /** `n` cards of the user's, all at 0 and last changed at 1. */
+    async function column(app: FastifyInstance, c: TestClient, n: number): Promise<string[]> {
+      const first = (await createOpp(c)).json<{ id: string }>();
+      const row = await app.db
+        .select()
+        .from(opportunities)
+        .where(eq(opportunities.id, first.id))
+        .get();
+      const ids = [first.id, ...Array.from({ length: n - 1 }, () => newId())];
+      for (let i = 1; i < n; i += 100) {
+        const more = ids.slice(i, i + 100);
+        await app.db
+          .insert(opportunities)
+          .values(more.map((id) => ({ ...row!, id, dedupeKey: null })))
+          .run();
+      }
+      await app.db.update(opportunities).set({ updatedAt: 1 }).run();
+      return ids;
+    }
+    const cards = async (app: FastifyInstance) =>
+      new Map(
+        (
+          await app.db
+            .select({
+              id: opportunities.id,
+              sortOrder: opportunities.sortOrder,
+              updatedAt: opportunities.updatedAt,
+            })
+            .from(opportunities)
+            .all()
+        ).map((o) => [o.id, o]),
+      );
+    const reorder = (c: TestClient, changes: { id: string; sortOrder: number }[]) =>
+      c.request({ method: 'POST', url: '/api/v1/opportunities/reorder', payload: { changes } });
+
+    // In statements of 500 (#944): one under, at and one over the edge of one, and the most there can be.
+    it.each([499, 500, 501, 1999, 2000])('%i cards end in the order asked for', async (n) => {
+      const { app, a } = await boot();
+      const [left, ...ids] = await column(app, a, n + 1);
+      const changes = ids.reverse().map((id, i) => ({ id, sortOrder: i - 1000 }));
+      expect(changes).toHaveLength(n);
+      const res = await reorder(a, changes);
+      expect(res.statusCode, res.body).toBe(204);
+      const after = await cards(app);
+      expect(changes.map((c) => after.get(c.id)?.sortOrder)).toEqual(
+        changes.map((c) => c.sortOrder),
+      );
+      // One request, one time, in every statement of it; and the one not asked for is as it was.
+      const times = new Set(changes.map((c) => after.get(c.id)?.updatedAt));
+      expect(times.size).toBe(1);
+      expect(times.has(1)).toBe(false);
+      expect(after.get(left!)).toMatchObject({ sortOrder: 0, updatedAt: 1 });
+    });
+
+    // In one statement, and in two.
+    it.each([3, 700])('a card named twice in one of %i takes its last place', async (n) => {
+      const { app, a } = await boot();
+      const ids = await column(app, a, n);
+      const changes = ids.map((id, i) => ({ id, sortOrder: i }));
+      const res = await reorder(a, [
+        { id: ids[n - 1]!, sortOrder: -5 },
+        ...changes,
+        { id: ids[0]!, sortOrder: 9000 },
+      ]);
+      expect(res.statusCode, res.body).toBe(204);
+      const after = await cards(app);
+      expect(after.get(ids[n - 1]!)?.sortOrder).toBe(n - 1);
+      expect(after.get(ids[0]!)?.sortOrder).toBe(9000);
+      expect(after.get(ids[1]!)?.sortOrder).toBe(1);
+    });
+
+    it('an id of another user, and one of none, between others of a long one change nothing', async () => {
+      const { app, a, b } = await boot();
+      const mine = (await createOpp(a)).json<{ id: string }>();
+      const last = (await createOpp(a, { title: 'Last' })).json<{ id: string }>();
+      const theirs = (await createOpp(b)).json<{ id: string }>();
+      const none = Array.from({ length: 600 }, (_, i) => ({ id: newId(), sortOrder: i }));
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/opportunities/reorder',
+        payload: {
+          changes: [
+            { id: mine.id, sortOrder: 7 },
+            ...none,
+            { id: theirs.id, sortOrder: 8 },
+            { id: last.id, sortOrder: 9 },
+          ],
+        },
+      });
+      expect(res.statusCode, res.body).toBe(204);
+      const after = await app.db
+        .select({ id: opportunities.id, sortOrder: opportunities.sortOrder })
+        .from(opportunities)
+        .all();
+      const byId = new Map(after.map((o) => [o.id, o.sortOrder]));
+      expect([byId.get(mine.id), byId.get(theirs.id), byId.get(last.id)]).toEqual([7, 0, 9]);
     });
 
     it('scopes every row to the caller: another user id in the batch is silently skipped', async () => {
