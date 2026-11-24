@@ -39,6 +39,7 @@ import {
   RESULT_SORTS,
   RUN_SORTS,
   setDisposition,
+  undoDismissal,
   SOURCE_SORTS,
   unsuppressResult,
   updateSource,
@@ -181,7 +182,8 @@ const BulkItemResultSchema = z.object({
   id: z.string(),
   outcome: z.enum(BULK_OUTCOMES),
   /** Present only for `duplicate`, `attached` and `already_decided`: the opportunity this id
-   *  already matches, was linked to, or was accepted into (when there still is one). */
+   *  already matches, was linked to, or was accepted into (when there still is one; a `duplicate` of
+   *  an undo with none is of another result in the queue). */
   existingId: z.string().optional(),
   /** Present only for `error`: why, for the one item that failed. */
   message: z.string().optional(),
@@ -706,7 +708,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
    * re-dismissed, accepted after the fact) is left alone and reported, not forced back. Also
    * removes the dismissal_feedback rows the dismiss wrote, so an undone decision leaves no
    * trace in refineDiscoveryPrompt's evidence: the user said "that didn't happen", not "that
-   * happened but for a reason I'm hiding."
+   * happened but for a reason I'm hiding." One unsuppressed meanwhile takes its key back, or, where its
+   * job is in the pipeline or the queue by then, stays dismissed and answers `duplicate` (#1020:
+   * undoDismissal), with the opportunity when it is one.
    */
   api.post(
     '/discovery/results/bulk-undo-dismiss',
@@ -731,14 +735,13 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
             if (result.disposition !== 'dismissed')
               return { id, outcome: 'already_decided' as const };
             await racePoint('discovery.undo.locked');
-            await tx
-              .delete(dismissalFeedback)
-              .where(
-                and(eq(dismissalFeedback.userId, ctx.userId), eq(dismissalFeedback.resultId, id)),
-              )
-              .run();
-            await setDisposition(tx, ctx, id, 'pending');
-            return { id, outcome: 'restored' as const };
+            const undone = await undoDismissal(tx, ctx, result, req.body.ids);
+            if (undone.restored) return { id, outcome: 'restored' as const };
+            return {
+              id,
+              outcome: 'duplicate' as const,
+              ...(undone.opportunityId === null ? {} : { existingId: undone.opportunityId }),
+            };
           }),
         );
       }
