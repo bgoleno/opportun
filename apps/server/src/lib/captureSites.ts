@@ -70,7 +70,8 @@ export function postingIdentity(posting: NormalizedPosting): string | null {
   // parser (a user-mapped MCP connector, say) can store its own opaque id beside a site URL, and
   // reading that as the site's id would make it contradict a capture of the very same posting
   // (https://github.com/bgoleno/opportun/issues/73).
-  const fromUrl = site.jobFromUrl(new URL(posting.postingUrl as string));
+  const link = new URL(posting.postingUrl as string);
+  const fromUrl = (site.storedJobFromUrl ?? site.jobFromUrl)(link);
   if (fromUrl !== null) return `${site.id}:${fromUrl.id.toLowerCase()}`;
   // Otherwise a bare externalId is the site's own id only when it has that id's shape.
   return externalId !== '' && site.isJobId(externalId)

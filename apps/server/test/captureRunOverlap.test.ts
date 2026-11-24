@@ -19,7 +19,7 @@ import { resolveCapture } from '../src/lib/captureResolve';
 import type { UserCtx } from '../src/repos/base';
 import { createCompany } from '../src/repos/companies';
 import { createSource, getResult, setRankDeferred } from '../src/repos/discovery';
-import { getOpportunity } from '../src/repos/opportunities';
+import { createOpportunity, getOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
 import { sqliteOnly } from './db';
 import type { TestClient } from './isolation';
@@ -182,14 +182,22 @@ describe('a capture and a board run on one posting', () => {
     expect(await opportunitiesOf(app, a)).toHaveLength(1);
   });
 
+  // One tracked already, at New: a created one is moved with its creation (#956).
   it('two captures both past the look move the stage once, and neither fails', async () => {
     const { app, a } = await boot();
+    const tracked = await createOpportunity(app.db, ctxOf(a), {
+      companyName: JOB.company,
+      title: JOB.title,
+      location: JOB.location,
+      sourceKind: 'manual',
+    });
     const [first, second] = await heldApart(
       app,
       'captureResolve.advance.locked',
       () => capture(app, a),
       () => capture(app, a),
     );
+    expect([first.opportunityId, second.opportunityId]).toEqual([tracked.id, tracked.id]);
     expect(first.stageMovedTo).toBe('interested');
     expect(second.stageMovedTo).toBeNull();
     expect((await getOpportunity(app.db, ctxOf(a), first.opportunityId)).stage).toBe('interested');

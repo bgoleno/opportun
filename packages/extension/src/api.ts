@@ -10,6 +10,8 @@ export interface FetchInit {
   body: string;
   credentials: 'omit';
   redirect: 'error';
+  /** The request is finished though the popup that sent it is closed. */
+  keepalive?: true;
   /** Ends the request at the action's time limit (#648). */
   signal?: AbortSignal;
 }
@@ -36,6 +38,14 @@ export type Outcome =
       opportunityId?: string;
       /** The stage the capture moved it to, null when the stage was left alone. */
       stage?: string | null;
+      /** Whether this capture made the opportunity, and the stage it is at (#967). All four below are
+       *  absent from an older server. */
+      created?: boolean;
+      currentStage?: string;
+      /** The captured description: added to an opportunity that was there, or its own kept. */
+      description?: 'added' | 'kept';
+      /** How many other postings on the card it completed went with it. */
+      linked?: number;
       /** Sent only when what the opportunity lacked was not added (#914); absent otherwise. */
       filled?: false;
     }
@@ -55,6 +65,8 @@ export type Outcome =
   | { kind: 'no_settings' }
   /** The tab is not on a capture site: it was not read. */
   | { kind: 'unsupported_tab' }
+  /** An address of a capture site that is not read: `host` is the one that is. Not read, not sent. */
+  | { kind: 'other_address'; host: string }
   /** An Indeed tab that shows no single posting (no valid job key): not read, nothing sent. */
   | { kind: 'not_a_posting' }
   /** The Indeed job's markup was not recognized: refused in the tab, nothing sent. */
@@ -142,6 +154,12 @@ function success(status: number, body: unknown): Outcome {
         refined: body.refined,
         ...(typeof body.opportunityId === 'string' ? { opportunityId: body.opportunityId } : {}),
         ...(typeof body.stage === 'string' || body.stage === null ? { stage: body.stage } : {}),
+        ...(typeof body.created === 'boolean' ? { created: body.created } : {}),
+        ...(typeof body.currentStage === 'string' ? { currentStage: body.currentStage } : {}),
+        ...(body.description === 'added' || body.description === 'kept'
+          ? { description: body.description }
+          : {}),
+        ...(isCount(body.linked, 1_000_000) ? { linked: body.linked } : {}),
         ...(body.filled === false ? { filled: false as const } : {}),
       };
     }
@@ -179,7 +197,21 @@ async function classify(res: FetchResponse): Promise<Outcome> {
   return { kind: 'server_error', status };
 }
 
-async function send(fetch: FetchLike, settings: Settings, payload: CapturePayload) {
+/**
+ * The largest body sent with `keepalive`. Browsers refuse more than 64 KiB of such bodies in flight,
+ * and a refused request would look like a server that cannot be reached.
+ */
+const KEEPALIVE_MAX_BYTES = 60_000;
+
+async function send(
+  fetch: FetchLike,
+  settings: Settings,
+  payload: CapturePayload,
+  opts: { keepalive?: boolean } = {},
+) {
+  const body = JSON.stringify(payload);
+  const keepalive =
+    opts.keepalive === true && new TextEncoder().encode(body).length <= KEEPALIVE_MAX_BYTES;
   try {
     return await fetch(captureEndpoint(settings.serverUrl), {
       method: 'POST',
@@ -187,7 +219,9 @@ async function send(fetch: FetchLike, settings: Settings, payload: CapturePayloa
         authorization: `Bearer ${settings.token}`,
         'content-type': 'application/json',
       },
-      body: JSON.stringify(payload),
+      body,
+      // A popup the user closes ends its requests; one already started is then finished.
+      ...(keepalive ? { keepalive: true as const } : {}),
       // Bearer only: never send this browser's cookies for the server, and never let a
       // redirect carry the request (and its token) somewhere else.
       credentials: 'omit',
@@ -203,7 +237,7 @@ export async function postCapture(
   settings: Settings,
   payload: CapturePayload,
 ): Promise<Outcome> {
-  const res = await send(fetch, settings, payload);
+  const res = await send(fetch, settings, payload, { keepalive: true });
   return res === null ? { kind: 'network' } : classify(res);
 }
 

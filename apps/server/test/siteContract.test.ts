@@ -208,6 +208,7 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
             const url = new URL(link);
             url.hostname = fake;
             expect(site.jobFromUrl(url), url.href).toBeNull();
+            expect(site.storedJobFromUrl?.(url) ?? null, url.href).toBeNull();
           }
         }
       }
