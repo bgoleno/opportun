@@ -25,11 +25,11 @@ async function createToken(page: Page): Promise<string> {
 
 /** A LinkedIn job alert: the tracked role at another place, and another level of it. */
 function alertEmail() {
-  const job = (title: string, id: string) =>
+  const job = (title: string, place: string, id: string) =>
     [
       title,
       COMPANY,
-      'Boston, MA',
+      place,
       `View job: https://www.linkedin.com/comm/jobs/view/${id}/?trackingId=x`,
       '---------------------------------------------------------',
     ].join('\n');
@@ -40,7 +40,7 @@ function alertEmail() {
     to: ['me@example.com'],
     subject: 'Your job alert for platform',
     snippet: 'New jobs match your preferences.',
-    bodyText: `Your job alert for platform in Boston\n\n${job(ROLE, '3900000001')}\n\n${job(OTHER, '3900000002')}\n`,
+    bodyText: `Your job alert for platform in Boston\n\n${job(ROLE, 'Boston, MA', '3900000001')}\n\n${job(OTHER, 'Denver, CO', '3900000002')}\n`,
     sentAt: Date.now() - 60_000,
   };
 }
