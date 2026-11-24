@@ -106,8 +106,15 @@ export class Desk {
     for (const p of list) this.postings.set(p.id, p);
   }
 
-  /** An alert email brings these cards, and each is ranked (unless `ranked` is false): the order has settled. */
-  async alert(site: Site, cards: AlertCard[], ranked = true): Promise<void> {
+  /**
+   * An alert email brings these cards, and each is ranked (unless `ranked` is false): the order has
+   * settled. `stored` are the ones a result is made of, when not every one.
+   */
+  async alert(
+    site: Site,
+    cards: AlertCard[],
+    { ranked = true, stored = cards }: { ranked?: boolean; stored?: AlertCard[] } = {},
+  ): Promise<void> {
     this.publish(...cards.map((c) => c.posting));
     this.mails += 1;
     const res = await this.context.request.post('/api/v1/connector/mail/batch', {
@@ -115,7 +122,7 @@ export class Desk {
       data: { messages: [alertMail(site, cards, `${site}-${this.mails}-${Date.now()}`)] },
     });
     expect(res.status(), await res.text()).toBe(200);
-    const wanted = cards.map((c) => c.posting.id);
+    const wanted = stored.map((c) => c.posting.id);
     await expect
       .poll(
         async () =>
