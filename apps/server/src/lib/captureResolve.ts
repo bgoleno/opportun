@@ -26,7 +26,7 @@ import {
   type NormalizedPosting,
   type OpportunityStage,
 } from '@opportun/core';
-import { and, asc, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import {
   boundLockWaits,
@@ -458,7 +458,11 @@ async function acceptPending(
   }
 }
 
-/** Accepted leads recorded against an opportunity. */
+/**
+ * The leads the user accepted, or a capture took, into an opportunity. Not one ingest linked (#971):
+ * nobody decided it, and it gave the opportunity nothing, so it says neither who holds a key nor where
+ * a description came from (sec on https://github.com/bgoleno/opportun/pull/985).
+ */
 async function leadsBehind(
   db: Exec,
   ctx: UserCtx,
@@ -472,6 +476,7 @@ async function leadsBehind(
         eq(discoveryResults.userId, ctx.userId),
         eq(discoveryResults.opportunityId, opportunityId),
         eq(discoveryResults.disposition, 'accepted'),
+        or(isNull(discoveryResults.rankSkipReason), ne(discoveryResults.rankSkipReason, 'linked')),
       ),
     )
     .all();
@@ -500,8 +505,8 @@ const isElsewhere = (r: DiscoveryResultView, key: string): boolean =>
  * the same whole title (sameTitle): one at another level is another job, whatever is behind it.
  *
  * A lead of another location of the role (it has one, and is stored under another key) says nothing of
- * who holds this key: ingest links those and Accept chains them (#971), and they made the next capture
- * of the role's own page a second opportunity.
+ * who holds this key: Accept chains those (#971), and they made the next capture of the role's own page
+ * a second opportunity.
  */
 async function keyHolder(
   db: Exec,

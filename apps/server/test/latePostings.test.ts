@@ -881,6 +881,80 @@ describe.each(SITES)('a capture on %s of a role with another location on it', (.
   });
 });
 
+// sec on #985: nobody decided a linked posting, so it says nothing of who holds a key, nor of where a
+// description came from.
+describe.each(SITES)('a capture on %s of a role with a linked posting behind it', (...site) => {
+  const [siteId, , , otherId, otherUrl] = site;
+  const SECOND: Site = [siteId, otherId, otherUrl, '', ''];
+  const NO_ID = { postingUrl: 'https://short.example.com/x', externalId: 'opaque-1' };
+
+  it.each([
+    ['without a location', null],
+    ['with one', THERE],
+  ])('another posting captured stays kept apart, the linked one %s', async (_what, location) => {
+    const { app, a } = await boot();
+    const first = await capture(app, a, site, HERE);
+    const { stats } = await arrive(app, a, [alertOf(site, location, NO_ID)]);
+    expect(stats.linked).toBe(1);
+    const second = await capture(app, a, SECOND, HERE);
+    expect([second.createdOpportunity, second.opportunityId === first.opportunityId]).toEqual([
+      true,
+      false,
+    ]);
+  });
+
+  it('a lead of no id the user accepted still lets it attach, as before', async () => {
+    const { app, a } = await boot();
+    const first = await capture(app, a, site, HERE);
+    const cardId = await card(app, a, alertOf(site, null, NO_ID));
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${cardId}/accept`,
+      payload: { attachTo: first.opportunityId },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await capture(app, a, SECOND, HERE)).opportunityId).toBe(first.opportunityId);
+  });
+
+  const OWN = 'My own words on it';
+  const byHand = async (app: FastifyInstance, c: TestClient) => {
+    const id = await ORIGINS['made by hand'](app, c);
+    await app.db
+      .update(opportunities)
+      .set({ descriptionMd: OWN, descriptionFingerprint: null })
+      .where(eq(opportunities.id, id))
+      .run();
+    return id;
+  };
+  const textOf = async (app: FastifyInstance, c: TestClient) =>
+    (await opportunitiesOf(app, c)).map((o) => o.descriptionMd);
+
+  it('a linked posting with the user’s very words is no stand-in: they stay', async () => {
+    const { app, a } = await boot();
+    const id = await byHand(app, a);
+    const { stats } = await arrive(app, a, [another(site, THERE, { descriptionMd: OWN })]);
+    expect(stats.linked).toBe(1);
+    const captured = await capture(app, a, SECOND, THERE);
+    expect(captured.opportunityId).toBe(id);
+    expect(await textOf(app, a)).toEqual([OWN]);
+  });
+
+  it('one the user accepted with that text is: the page replaces it, as before', async () => {
+    const { app, a } = await boot();
+    const id = await byHand(app, a);
+    const cardId = await card(app, a, another(site, THERE, { descriptionMd: OWN }));
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${cardId}/accept`,
+      payload: { attachTo: id },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const captured = await capture(app, a, SECOND, THERE);
+    expect(captured.opportunityId).toBe(id);
+    expect(await textOf(app, a)).toEqual([PAGE]);
+  });
+});
+
 describe('a role renamed since', () => {
   const rename = (app: FastifyInstance, id: string) =>
     app.db
