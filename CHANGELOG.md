@@ -219,9 +219,9 @@ merged after it.
   setting.** A newer or damaged database, one another process holds, a full disk, a data directory
   that cannot be used, Postgres not reached, refusing the sign-in or lacking a permission, a
   `DATABASE_URL` that cannot be parsed, a port in use or not allowed and an address that is not this
-  machine's each get a line naming the cause. A setting is named, never quoted, and no part of a
-  driver's error is logged. Anything else still logs `server failed to start`, as before. In 0.5.0
-  `docker logs` showed only that line
+  machine's each get a line naming the cause. These lines name a setting and never quote it, and no
+  part of a driver's error is logged. Anything else still logs `server failed to start`, as before.
+  In 0.5.0 these showed only that line
   ([#887](https://github.com/bgoleno/opportun/issues/887); PR
   [#905](https://github.com/bgoleno/opportun/pull/905)).
 - **Postgres: a connection that ends fails what was using it and never stops the server.** After a
@@ -230,7 +230,7 @@ merged after it.
   connection ended`, in place of `postgres idle connection error`. A transaction that finds its
   connection ended no longer leaves the pool without a connection. A job caught while Postgres is
   away ends once it is back: its end is tried again for up to 5 minutes, where before the job stayed
-  `running` until the next start and was never run again
+  `running` until the next start and was not run again until then
   ([#963](https://github.com/bgoleno/opportun/issues/963); PR
   [#972](https://github.com/bgoleno/opportun/pull/972)).
 
