@@ -868,6 +868,25 @@ describe('#914: a saved capture whose step gave up a wait', () => {
       expect(await entries()).toHaveLength(2);
     });
 
+    // sec on #955: only the key's own refusal leaves the location out.
+    it('a refusal with another code is not taken for the location’s', async () => {
+      const { app, bearer, row, entries } = await heldLocation();
+      let tries = 0;
+      setRaceHook(async (point) => {
+        if (point !== 'opportunities.update.locked') return;
+        tries += 1;
+        throw new HttpError(409, 'another_code');
+      });
+      // Where the location is free, so the refusal is the only one.
+      await app.db.delete(opportunities).where(eq(opportunities.location, 'Austin, TX')).run();
+      const res = await push(app, bearer);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error.code).toBe('another_code');
+      expect(tries).toBe(1);
+      expect((await row()).compNote).toBeNull();
+      expect(await entries()).toHaveLength(2);
+    });
+
     it('any other refusal of the fill still fails the capture', async () => {
       const { app, bearer, entries } = await heldLocation();
       failAt('opportunities.update.locked', () => new HttpError(409, 'duplicate'));

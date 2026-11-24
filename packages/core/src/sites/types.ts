@@ -113,8 +113,15 @@ export interface SiteIdentity {
   readonly fetchHosts: readonly HostRule[];
   /** Hosts a link or a page can name: read and captured, never fetched by the server. */
   readonly pageHosts: readonly HostRule[];
-  /** The job a link to the site names, or null. */
+  /** The job a link to the site names, or null: for a capture site, what a captured tab shows. */
   jobFromUrl(url: SiteUrl): JobRef | null;
+  /**
+   * Capture sites: the job a link a lead holds names, or null. `jobFromUrl`, and the addresses a tab
+   * only passes through or that hold the id beside a list (redirects, split views), whose page is
+   * not read there. More forms of the same id, nothing else
+   * (https://github.com/bgoleno/opportun/issues/967).
+   */
+  storedJobFromUrl?(url: SiteUrl): JobRef | null;
   /** A job of this site named by a link on another host (Greenhouse's gh_jid), or null. */
   embeddedJobFromUrl?(url: SiteUrl): JobRef | null;
   isJobId(id: string): boolean;

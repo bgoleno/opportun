@@ -42,6 +42,25 @@ export function captureSiteOf(href: string): CaptureSiteId | null {
   return CAPTURE_SITES.find((s) => linkOnHost(url, s.pageHosts))?.id ?? null;
 }
 
+/** The host to open a capture site's job on, by the site's own domain. */
+const READ_AT: readonly (readonly [domain: string, host: string])[] = [
+  ['linkedin.com', 'www.linkedin.com'],
+  ['indeed.com', 'www.indeed.com'],
+];
+
+/**
+ * For a tab on another address of a capture site (its mobile or a country's pages, whose layout no
+ * reader knows), the host its jobs are read on, or null for every other tab
+ * (https://github.com/bgoleno/opportun/issues/967).
+ */
+export function readableHostFor(href: string): string | null {
+  const url = parse(href);
+  if (url === null || captureSiteOf(href) !== null) return null;
+  const host = url.hostname.toLowerCase();
+  const site = READ_AT.find(([domain]) => host === domain || host.endsWith(`.${domain}`));
+  return site === undefined ? null : site[1];
+}
+
 /**
  * The job key of an Indeed tab showing one posting, lowercased: `jk` on `/viewjob`, `vjk` on the
  * `/jobs` split view and on the home page `/` (the job open in the right pane, #156). Null for
