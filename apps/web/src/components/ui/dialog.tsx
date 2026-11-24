@@ -57,10 +57,11 @@ function DialogContent({
   showClose?: boolean;
   /**
    * For a dialog whose parent may refuse to close it: one that shows something once, or that must
-   * wait for a request (#898). Escape only asks (`onOpenChange(false)`), and a close the browser
-   * makes anyway is shown again unless the parent agreed to it. Without this the browser closes
-   * the dialog on Escape whatever the parent answers, and the parent, still `open`, can neither
-   * show it again nor show the next one.
+   * wait for a request (#898). Escape only asks (`onOpenChange(false)`) in every dialog; with this, a
+   * close the browser makes anyway (one it lets nobody refuse: a second Escape with nothing done
+   * since, or Escape in a dialog opened with no user action) is shown again unless the parent agreed
+   * to it. Without this such a close stands whatever the parent answers, and the parent, still
+   * `open`, can neither show it again nor show the next one.
    */
   guardClose?: boolean;
 }) {
@@ -93,11 +94,18 @@ function DialogContent({
       onCancel={(e) => {
         onCancel?.(e);
         // A file input's own `cancel` bubbles to here: only the dialog's is Escape.
-        if (!guardClose || e.target !== e.currentTarget) return;
+        if (e.target !== e.currentTarget || e.defaultPrevented) return;
+        // Escape is a question to the parent, as the X and the backdrop are. Closed by the browser,
+        // the dialog gave the focus back before its parent knew, and what was pressed next opened
+        // nothing (#975).
         e.preventDefault();
         setOpen(false);
       }}
       onClose={(e) => {
+        // close() gives the focus back at once, and this event comes with the next frame. Open again
+        // by then, the dialog was opened by what was pressed in between: the event is an earlier
+        // close's, and acting on it would close this one (#975).
+        if (e.target === e.currentTarget && e.currentTarget.open) return;
         onClose?.(e);
         setOpen(false);
         // Escape is not always refusable (a second one, with nothing clicked or typed since, is
