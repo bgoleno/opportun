@@ -29,6 +29,7 @@ import {
   type FindPostingResult,
   type PostingCandidateView,
 } from './api';
+import { descriptionAtStake, ReplaceDescriptionDialog } from './ReplaceDescription';
 
 /** Description characters shown per candidate. */
 const PREVIEW = 200;
@@ -108,10 +109,13 @@ function CandidateRow({
 export function FindPostingDialog({
   opp,
   result,
+  replaces,
   onClose,
 }: {
   opp: OpportunityView;
   result: FindPostingResult;
+  /** The description the user agreed to lose to the board's copy (#858): a picked row replaces it. */
+  replaces?: string;
   onClose: () => void;
 }) {
   const attach = useAttachPosting(opp.id);
@@ -122,6 +126,8 @@ export function FindPostingDialog({
   const [text, setText] = useState('');
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
   const [failure, setFailure] = useState<ReactNode>(null);
+  /** Asking before a paste that would replace the user's description (#858). */
+  const [asking, setAsking] = useState<(() => Promise<void>) | null>(null);
 
   const confident = result.candidates ?? [];
   const all = result.board ?? result.candidates ?? [];
@@ -136,12 +142,21 @@ export function FindPostingDialog({
   async function send(body: AttachPostingVars, title: string) {
     setFailure(null);
     try {
-      await attach.mutateAsync(body);
-      toast({ title: 'Posting attached', description: title, variant: 'success' });
+      const attached = await attach.mutateAsync(body);
+      // A description of the user's is kept unless they agreed to lose it, and it is said.
+      const kept = attached.descriptionIsUserWritten ? '. Your own description was kept.' : '';
+      toast({ title: 'Posting attached', description: `${title}${kept}`, variant: 'success' });
       onClose();
     } catch (err) {
       setFailure(postingErrorMessage(err));
     }
+  }
+
+  /** What was agreed to the search was about the board's copy: other text is asked about anew. */
+  async function paste(body: AttachPostingVars, title: string) {
+    const atStake = descriptionAtStake(opp);
+    if (atStake === null) return await send(body, title);
+    setAsking(() => () => send({ ...body, replaceDescription: atStake }, title));
   }
 
   async function submitByHand(e: FormEvent) {
@@ -159,7 +174,7 @@ export function FindPostingDialog({
         return;
       }
       setFieldError(undefined);
-      await send({ url: value }, value);
+      await paste({ url: value }, value);
       return;
     }
     const value = text.trim();
@@ -172,141 +187,163 @@ export function FindPostingDialog({
       return;
     }
     setFieldError(undefined);
-    await send({ text: value }, opp.title);
+    await paste({ text: value }, opp.title);
   }
 
   return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Add the posting</DialogTitle>
-          <DialogDescription className="break-words">
-            {headline(result, opp.companyName)}
-          </DialogDescription>
-        </DialogHeader>
+    <>
+      <Dialog
+        open
+        onOpenChange={(open) => {
+          if (!open) onClose();
+        }}
+      >
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Add the posting</DialogTitle>
+            <DialogDescription className="break-words">
+              {headline(result, opp.companyName)}
+            </DialogDescription>
+          </DialogHeader>
 
-        {failure !== null ? <FormError message={failure} /> : null}
+          {failure !== null ? <FormError message={failure} /> : null}
 
-        {result.note !== undefined ? (
-          <div
-            role="status"
-            className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200"
-          >
-            <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
-            <span className="flex-1">{result.note}</span>
-          </div>
-        ) : null}
-
-        {all.length > 0 ? (
-          <div className="grid gap-3">
-            <FormField
-              label="Search the board"
-              hint={`Filters the ${all.length} postings found on the board.`}
+          {result.note !== undefined ? (
+            <div
+              role="status"
+              className="flex flex-wrap items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200"
             >
-              {(c) => (
-                <Input
-                  type="search"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder={opp.title}
-                  {...c}
-                />
-              )}
-            </FormField>
-            {rows.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Nothing on the board matches that.</p>
-            ) : (
-              <ul className="grid gap-2">
-                {rows.map((candidate) => (
-                  <CandidateRow
-                    key={`${candidate.posting.externalId ?? candidate.posting.postingUrl ?? candidate.posting.title}`}
-                    candidate={candidate}
-                    busy={attach.isPending}
-                    onAttach={() =>
-                      void send({ posting: candidate.posting }, candidate.posting.title)
-                    }
-                  />
-                ))}
-              </ul>
-            )}
-          </div>
-        ) : null}
-
-        <form
-          className="grid gap-4 border-t pt-4"
-          noValidate
-          onSubmit={(e) => void submitByHand(e)}
-        >
-          <fieldset className="grid gap-2">
-            <legend className="mb-1 text-sm font-medium">Add it by hand</legend>
-            <div className="flex flex-wrap gap-4 text-sm">
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="radio"
-                  name={modeName}
-                  value="url"
-                  checked={mode === 'url'}
-                  onChange={() => {
-                    setMode('url');
-                    setFieldError(undefined);
-                  }}
-                />
-                Link
-              </label>
-              <label className="inline-flex items-center gap-2">
-                <input
-                  type="radio"
-                  name={modeName}
-                  value="text"
-                  checked={mode === 'text'}
-                  onChange={() => {
-                    setMode('text');
-                    setFieldError(undefined);
-                  }}
-                />
-                Pasted text
-              </label>
+              <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+              <span className="flex-1">{result.note}</span>
             </div>
-          </fieldset>
-          {mode === 'url' ? (
-            <FormField
-              label="Posting link"
-              hint="An https link to the job posting. LinkedIn and Indeed links cannot be read; paste the text instead."
-              error={fieldError}
-            >
-              {(c) => (
-                <Input
-                  type="url"
-                  inputMode="url"
-                  autoComplete="off"
-                  value={url}
-                  onChange={(e) => setUrl(e.target.value)}
-                  {...c}
-                />
+          ) : null}
+
+          {all.length > 0 ? (
+            <div className="grid gap-3">
+              <FormField
+                label="Search the board"
+                hint={`Filters the ${all.length} postings found on the board.`}
+              >
+                {(c) => (
+                  <Input
+                    type="search"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder={opp.title}
+                    {...c}
+                  />
+                )}
+              </FormField>
+              {rows.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Nothing on the board matches that.</p>
+              ) : (
+                <ul className="grid gap-2">
+                  {rows.map((candidate) => (
+                    <CandidateRow
+                      key={`${candidate.posting.externalId ?? candidate.posting.postingUrl ?? candidate.posting.title}`}
+                      candidate={candidate}
+                      busy={attach.isPending}
+                      onAttach={() =>
+                        void send(
+                          {
+                            posting: candidate.posting,
+                            ...(replaces === undefined ? {} : { replaceDescription: replaces }),
+                          },
+                          candidate.posting.title,
+                        )
+                      }
+                    />
+                  ))}
+                </ul>
               )}
-            </FormField>
-          ) : (
-            <FormField label="Posting description" error={fieldError}>
-              {(c) => (
-                <Textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} {...c} />
-              )}
-            </FormField>
-          )}
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={attach.isPending}>
-              Attach posting
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+            </div>
+          ) : null}
+
+          <form
+            className="grid gap-4 border-t pt-4"
+            noValidate
+            onSubmit={(e) => void submitByHand(e)}
+          >
+            <fieldset className="grid gap-2">
+              <legend className="mb-1 text-sm font-medium">Add it by hand</legend>
+              <div className="flex flex-wrap gap-4 text-sm">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name={modeName}
+                    value="url"
+                    checked={mode === 'url'}
+                    onChange={() => {
+                      setMode('url');
+                      setFieldError(undefined);
+                    }}
+                  />
+                  Link
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="radio"
+                    name={modeName}
+                    value="text"
+                    checked={mode === 'text'}
+                    onChange={() => {
+                      setMode('text');
+                      setFieldError(undefined);
+                    }}
+                  />
+                  Pasted text
+                </label>
+              </div>
+            </fieldset>
+            {mode === 'url' ? (
+              <FormField
+                label="Posting link"
+                hint="An https link to the job posting. LinkedIn and Indeed links cannot be read; paste the text instead."
+                error={fieldError}
+              >
+                {(c) => (
+                  <Input
+                    type="url"
+                    inputMode="url"
+                    autoComplete="off"
+                    value={url}
+                    onChange={(e) => setUrl(e.target.value)}
+                    {...c}
+                  />
+                )}
+              </FormField>
+            ) : (
+              <FormField label="Posting description" error={fieldError}>
+                {(c) => (
+                  <Textarea
+                    rows={8}
+                    value={text}
+                    onChange={(e) => setText(e.target.value)}
+                    {...c}
+                  />
+                )}
+              </FormField>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={attach.isPending}>
+                Attach posting
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+      {/* Beside the dialog, not in it: a close event of one in it would close it as well. */}
+      <ReplaceDescriptionDialog
+        open={asking !== null}
+        from="paste"
+        onOpenChange={(open) => {
+          if (!open) setAsking(null);
+        }}
+        onConfirm={() => asking?.()}
+      />
+    </>
   );
 }

@@ -39,12 +39,17 @@
 // context to make up for data that was never kept. The deterministic extraction has no such
 // gap: it is already the accepted quality bar for a live capture with no AI key, so re-derive
 // holds itself to the same bar rather than inventing a second, approximate path.
-import { capturedPage, confirm } from './postingReconcile';
+import { capturedPage, confirm, writeReconcileNote } from './postingReconcile';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { createActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
-import { getOpportunity, updateOpportunity, type OpportunityView } from '../repos/opportunities';
+import {
+  DescriptionChanged,
+  getOpportunity,
+  updateOpportunity,
+  type OpportunityView,
+} from '../repos/opportunities';
 import { HttpError } from './errors';
 import { storedDescriptionOf } from './captureRecognizers';
 import { descriptionFingerprint, isSystemWritten } from './postingFingerprint';
@@ -58,7 +63,7 @@ export type RederiveOutcome =
   | { kind: 'capture_only'; opportunity: OpportunityView }
   /** The capture's site found no description in it (or has no recognizer); nothing was changed. */
   | { kind: 'no_description_found' }
-  /** The description changed while the board was read, so nothing was written (#851). */
+  /** The description changed while the board was read, so it was left as it is (#851, #858). */
   | { kind: 'left_alone'; opportunity: OpportunityView };
 
 /**
@@ -144,10 +149,29 @@ export async function rederivePosting(
   const derived = storedDescriptionOf(capture.siteId, capture.text);
   if (derived === null) return { kind: 'no_description_found' };
 
-  const updated = await updateOpportunity(db, ctx, opportunityId, {
-    descriptionMd: derived,
-    descriptionFingerprint: descriptionFingerprint(derived),
-  });
+  // Only over the description this started from (#858): the search above can take seconds, and what
+  // the user saved meanwhile is theirs, forced or not. The posting's state is no part of this path.
+  let updated: OpportunityView;
+  try {
+    updated = await updateOpportunity(
+      db,
+      ctx,
+      opportunityId,
+      { descriptionMd: derived, descriptionFingerprint: descriptionFingerprint(derived) },
+      { ifDescription: opp },
+    );
+  } catch (err) {
+    if (!(err instanceof DescriptionChanged)) throw err;
+    const opportunity = await getOpportunity(db, ctx, opportunityId);
+    await writeReconcileNote(
+      db,
+      ctx,
+      opportunityId,
+      'edited',
+      'The description changed while it was being re-derived from the capture, so it was left as it is.',
+    );
+    return { kind: 'left_alone', opportunity };
+  }
   await note(
     db,
     ctx,
