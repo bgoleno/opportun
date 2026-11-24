@@ -20,6 +20,13 @@ when the milestone's work was merged.
   ([#886](https://github.com/bgoleno/opportun/issues/886),
   [#902](https://github.com/bgoleno/opportun/issues/902); PR
   [#900](https://github.com/bgoleno/opportun/pull/900)).
+- **Pipeline board: a card dropped with the mouse lands in the column under the pointer.** Dropped
+  quickly on an expanded Dismissed or Closed, a card could move to a stage hidden behind it, without
+  asking. This was so in 0.4.0 and 0.5.0 too. The target is now the card or column whose part on
+  screen holds the pointer; in the gap between columns it is the nearest column. Keyboard drags are
+  unchanged
+  ([#960](https://github.com/bgoleno/opportun/issues/960); PR
+  [#965](https://github.com/bgoleno/opportun/pull/965)).
 
 ### Opportunities and posting links
 
@@ -184,6 +191,43 @@ when the milestone's work was merged.
   ([#909](https://github.com/bgoleno/opportun/issues/909); PR
   [#940](https://github.com/bgoleno/opportun/pull/940)).
 
+### Discovery
+
+- **Discovery: a card decided elsewhere leaves the open page, and no dialog offers a button that
+  cannot succeed.** A result decided elsewhere, in another tab say, is removed from the page you
+  have open when you return to it. For a minute after a return, or ten after you open a posting
+  from the page, the page also asks every 3 seconds whether anything was accepted, while it is
+  visible. The page says what happened, with **View opportunity**, instead of an error. A selection
+  follows its cards, and a dialog for a card that left closes. Accept on a dismissed result no
+  longer creates an opportunity. The answer for a result already decided is `409 already_decided`
+  (with its `disposition`, and `existingId` when there is one), in place of `duplicate`,
+  `already_accepted` and `not_pending`; `duplicate` now means only that a pending result matches
+  another opportunity. A card is one company and one whole title (levels included, `sr` and `jr`
+  spelled out). The side navigation no longer moves the page when a card above leaves the list
+  ([#968](https://github.com/bgoleno/opportun/issues/968); PR
+  [#976](https://github.com/bgoleno/opportun/pull/976)).
+
+### Server and database
+
+- **Startup: a server that cannot start now logs why and what to check, without revealing a
+  setting.** A newer or damaged database, one another process holds, a full disk, a data directory
+  that cannot be used, Postgres not reached, refusing the sign-in or lacking a permission, a
+  `DATABASE_URL` that cannot be parsed, a port in use or not allowed and an address that is not this
+  machine's each get a line naming the cause. A setting is named, never quoted, and no part of a
+  driver's error is logged. Anything else still logs `server failed to start`, as before. In 0.5.0
+  `docker logs` showed only that line
+  ([#887](https://github.com/bgoleno/opportun/issues/887); PR
+  [#905](https://github.com/bgoleno/opportun/pull/905)).
+- **Postgres: a connection that ends fails what was using it and never stops the server.** After a
+  restart, a failover or a session limit, the request or job that was using it fails as for any
+  database error, and the server serves the next request. Each ending is logged once as `postgres
+  connection ended`, in place of `postgres idle connection error`. A transaction that finds its
+  connection ended no longer leaves the pool without a connection. A job caught while Postgres is
+  away ends once it is back: its end is tried again for up to 5 minutes, where before the job stayed
+  `running` until the next start and was never run again
+  ([#963](https://github.com/bgoleno/opportun/issues/963); PR
+  [#972](https://github.com/bgoleno/opportun/pull/972)).
+
 ### Docs
 
 - **Docs: the Settings guide covers Linked accounts and what checking an AI key sends; the Inbox
@@ -227,6 +271,11 @@ when the milestone's work was merged.
   [#952](https://github.com/bgoleno/opportun/issues/952); PRs
   [#950](https://github.com/bgoleno/opportun/pull/950),
   [#958](https://github.com/bgoleno/opportun/pull/958)).
+- **Docs: the assisted-apply technical design names where the capture sites are defined.**
+  `CAPTURE_SITES` is in `packages/core/src/sites/capture.ts`; the extension reads it through
+  `@opportun/core/captureSites` and the server through `@opportun/core`
+  ([#882](https://github.com/bgoleno/opportun/issues/882); PR
+  [#978](https://github.com/bgoleno/opportun/pull/978)).
 
 ## 0.5.0 (2026-11-22)
 
