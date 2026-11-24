@@ -1035,8 +1035,8 @@ export async function resolveCapture(
   // `searching` with no check behind it, so it may throw, as it always could.
   // One budget for them all: each step waits for what is left as it starts, and 1 ms when nothing is,
   // so a step nobody blocks still goes through. A step with several waits can overrun it, the fill by
-  // its attempt's, user's and row's if three holders block it one after another: some 15 s, and 1 ms
-  // for each step after.
+  // its attempt's, user's and row's if three holders block it one after another: some 15 s, three
+  // times over if it starts over for applications being started (#913), and 1 ms for each step after.
   await racePoint('captureResolve.recorded');
   const deadline = Date.now() + CAPTURE_SLOT.lockTimeoutMs;
   const waitMs = (): number => Math.max(1, deadline - Date.now());

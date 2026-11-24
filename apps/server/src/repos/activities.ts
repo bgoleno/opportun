@@ -70,7 +70,8 @@ export async function assertOpportunityOwned(
  * keeps the opportunity there until the write commits. On Postgres a delete that has the row is
  * waited for, and the row then read is gone (404), where the insert would have failed on its foreign
  * key (#925). The lock is the one that foreign key takes, so adds don't wait for each other, nor for
- * a save of the opportunity. SQLite's write gate runs the two one after the other.
+ * a save of the opportunity, except one that changes its link, which holds the row as a delete does
+ * (#913). SQLite's write gate runs the two one after the other.
  */
 export async function holdOpportunity(
   tx: Exec,

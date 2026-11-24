@@ -374,6 +374,107 @@ describe('started from what was read before a save', () => {
   });
 });
 
+// tl on https://github.com/bgoleno/opportun/pull/996: what the unique index says first is said first.
+describe('started twice from what was read before a save', () => {
+  const create = (s: Scene, idempotencyKey: string) =>
+    createSubmissionDraft(s.app.db, s.ctx, s.oppId, { idempotencyKey, resumeId: s.resumeId });
+  /** Two creates are past their checks; the first inserts, a save marks it, the second goes on. */
+  async function second(s: Scene, keys: [string, string]) {
+    const pause = pauseAt('submissions.create');
+    const late = create(s, keys[1]).then(
+      (r) => ({ id: r.submission.id, replayed: r.replayed }),
+      (e: unknown) => e as { code: string; statusCode: number },
+    );
+    await pause.reached;
+    const first = (await create(s, keys[0])).submission.id;
+    await save(s);
+    pause.release();
+    const out = await late;
+    await expectMarked(s, first);
+    expect(await attempts(s)).toBe(1);
+    return { first, out };
+  }
+
+  it('with one key, as by a double click: the second is the first one, replayed', async () => {
+    const s = await scene();
+    const key = newId();
+    const { first, out } = await second(s, [key, key]);
+    expect(out).toEqual({ id: first, replayed: true });
+  });
+
+  it('with another key, as from a second tab: it hears of the one that is live', async () => {
+    const s = await scene();
+    const { out } = await second(s, [newId(), newId()]);
+    expect(out).toMatchObject({ statusCode: 409, code: 'live_submission_exists' });
+  });
+
+  it('control: the first given up meanwhile, the second is refused for the posting', async () => {
+    const s = await scene();
+    const pause = pauseAt('submissions.create');
+    const late = ended(create(s, newId()));
+    await pause.reached;
+    const first = (await create(s, newId())).submission.id;
+    await save(s);
+    await end(s, first);
+    pause.release();
+    expect(await late).toBe('409 posting_changed');
+  });
+});
+
+describe('started while the identity is written again', () => {
+  const VERIFIED: AtsJobRef = { ...REF, verifiedVia: 'gh_jid', verifiedAt: 1 };
+  it.each<[string, AtsJobRef | null, string]>([
+    ['checked again, the same job', { ...VERIFIED, verifiedAt: 2 }, 'ok'],
+    ['written by a check that says no more of it', REF, 'ok'],
+    ['another kind', { ...VERIFIED, kind: 'ats_lever' }, '409 posting_changed'],
+    ['another board', { ...VERIFIED, org: 'othercorp' }, '409 posting_changed'],
+    ['another job', { ...VERIFIED, externalId: '2000002' }, '409 posting_changed'],
+    ['another address', { ...VERIFIED, url: NEW_URL }, '409 posting_changed'],
+    ['none', null, '409 posting_changed'],
+  ])('%s', async (_w, ref, expected) => {
+    const s = await scene();
+    const set = (atsJobRef: AtsJobRef | null) =>
+      s.app.db.update(opportunities).set({ atsJobRef }).where(eq(opportunities.id, s.oppId)).run();
+    await set(VERIFIED);
+    const pause = pauseAt('submissions.create');
+    const starting = ended(start(s));
+    await pause.reached;
+    await set(ref);
+    pause.release();
+    expect(await starting).toBe(expected);
+    expect(await attempts(s)).toBe(expected === 'ok' ? 1 : 0);
+  });
+});
+
+// A `gh_jid` check writes the identity with no user's lock (repos/opportunities.ts).
+it.runIf(testDialect === 'postgres')(
+  'an identity written while the save waits for the row is the one it goes by',
+  async () => {
+    const s = await scene();
+    const verified: AtsJobRef = {
+      ...REF,
+      externalId: '2000002',
+      url: NEW_URL,
+      verifiedVia: 'gh_jid',
+      verifiedAt: 1,
+    };
+    const held = heldOpen(s.app, (tx) =>
+      tx
+        .update(opportunities)
+        .set({ atsJobRef: verified })
+        .where(eq(opportunities.id, s.oppId))
+        .run(),
+    );
+    await held.reached;
+    const saving = ended(save(s, { postingUrl: 'https://www.example.com/careers?gh_jid=2000002' }));
+    expect(await someoneBlocked(s.app)).toBe(true);
+    held.go();
+    await held.done;
+    expect(await saving).toBe('ok');
+    expect((await getOpportunity(s.app.db, s.ctx, s.oppId)).atsJobRef).toEqual(verified);
+  },
+);
+
 describe.runIf(testDialect === 'postgres')('the save starts over', () => {
   /** Another request starts a draft at each of the save's first `n` tries, the last one given up. */
   function madeAtEach(s: Scene, n: number) {

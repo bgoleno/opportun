@@ -14,6 +14,7 @@ import {
   canSubmissionTransition,
   newId,
   submissionFieldProblem,
+  type AtsJobRef,
   type Submission,
   type SubmissionAnswer,
   type SubmissionFields,
@@ -233,6 +234,20 @@ export interface DraftOptions {
   actor?: string | null;
 }
 
+/** What a draft was being pinned from is no longer what the opportunity has (#913). */
+class PostingChanged extends Error {}
+
+/** Whether a draft made from either would be pinned alike. Not when, or by what, it was checked. */
+function pinnedAlike(a: AtsJobRef | null, b: AtsJobRef): boolean {
+  return (
+    a !== null &&
+    a.kind === b.kind &&
+    a.org === b.org &&
+    a.externalId === b.externalId &&
+    a.url === b.url
+  );
+}
+
 /**
  * Starts a draft for one opportunity, or returns the one this key already created
  * (`replayed`). Eligible (#114 criterion 1): the opportunity has an ATS identity whose posting
@@ -371,15 +386,9 @@ export async function createSubmissionDraft(
       if (
         fresh.postingUrl !== opp.postingUrl ||
         fresh.postingState !== opp.postingState ||
-        JSON.stringify(fresh.atsJobRef) !== JSON.stringify(opp.atsJobRef)
+        !pinnedAlike(fresh.atsJobRef, ref)
       ) {
-        throw new HttpError(
-          409,
-          'posting_changed',
-          "This opportunity's posting changed while you were starting the application. Check the posting, then start again.",
-          undefined,
-          { userFacing: true },
-        );
+        throw new PostingChanged();
       }
       const [row] = await tx
         .insert(applicationSubmissions)
@@ -413,12 +422,24 @@ export async function createSubmissionDraft(
     if (resume !== null) await enqueueSnapshot(db, ctx.userId, created.id, resume.id);
     return { submission: view(created), replayed: false };
   } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
-    // Lost a race: either the same key (a double click) or another live attempt.
+    const changed = err instanceof PostingChanged;
+    if (!changed && !isUniqueViolation(err)) throw err;
+    // Lost a race: either the same key (a double click) or another live attempt. A changed posting
+    // hides the same two: what it changed beside can have been started, and marked, meanwhile (tl on
+    // https://github.com/bgoleno/opportun/pull/996).
     const raced = await replay();
     if (raced !== null) return raced;
     const winner = await liveFor(db, ctx, opportunityId);
     if (winner !== undefined) throw liveExists(winner);
+    if (changed) {
+      throw new HttpError(
+        409,
+        'posting_changed',
+        "This opportunity's posting changed while you were starting the application. Check the posting, then start again.",
+        undefined,
+        { userFacing: true },
+      );
+    }
     // The row that won was finished in between (cancelled, say). The race is over: the client
     // retries as for any conflict, rather than seeing the raw driver error as a 500.
     throw new HttpError(

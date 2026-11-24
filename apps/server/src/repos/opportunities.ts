@@ -590,6 +590,8 @@ async function updateOnce(
       // written yet (#913). The row is held against a start first, so none can come after the look:
       // one that waits for it reads the link again and is refused (createSubmissionDraft).
       if (!(await lockOpportunityRow(tx, ctx, id, true))) throw notFound();
+      // Not all that write the row take the user's lock: from here it is as it stays.
+      current = await getViewSync(tx, ctx, id);
       const live = await liveAttemptId(tx, ctx, id);
       if (live !== null && live !== lockedAttempt) throw new AttemptMade();
     }
@@ -941,9 +943,10 @@ class AttemptMade extends Error {}
 const ATTEMPT_TRIES = 3;
 
 /**
- * A merge, a delete or a link's save takes the locks of the attempts there are and then waits for the
- * user's, and an attempt can be made in between (#944, #913). It can't be locked then: an attempt's lock comes before
- * the rows. So the transaction is rolled back, and starts over with that attempt among them.
+ * A merge, a delete or a link's save takes the locks of the attempts there are and then waits for
+ * the user's, and an attempt can be made in between (#944, #913). It can't be locked then: an
+ * attempt's lock comes before the rows. So the transaction is rolled back, and starts over with that
+ * attempt among them.
  */
 async function withEveryAttempt<T>(run: () => Promise<T>): Promise<T> {
   for (let tries = 1; ; tries += 1) {
