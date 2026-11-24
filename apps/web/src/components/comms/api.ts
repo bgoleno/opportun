@@ -17,7 +17,7 @@ import {
 } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import { api } from '@/lib/api';
-import { INBOX_FILTER_MAX } from './limits';
+import { filterTooLong } from './limits';
 import type { RejectPayload } from './RejectForm';
 import { qk, type OpportunityView, type Page } from '@/lib/opportunities';
 
@@ -145,7 +145,7 @@ function filterQuery(f: InboxFilters): string {
 
 /** The typed filters that are too long to send (#894), by the names the Inbox gives them. */
 export function tooLongFilters(f: InboxFilters): ('keyword' | 'sender')[] {
-  const over = (v: string | undefined) => (v?.trim().length ?? 0) > INBOX_FILTER_MAX;
+  const over = (v: string | undefined) => filterTooLong(v?.trim() ?? '');
   return [
     ...(over(f.q) ? (['keyword'] as const) : []),
     ...(over(f.sender) ? (['sender'] as const) : []),

@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { resolvePolicy, DEFAULT_POLICIES } from './policies';
 import { estimateCost, estimateCostUsd, FALLBACK_PRICE } from './pricing';
 import { createLanguageModel } from './providers';
-import { runStructured, streamChat } from './router';
+import { runStructured, sanitizeDetail, streamChat } from './router';
 import {
   AiUnavailableError,
   type AiDeps,
@@ -717,5 +717,21 @@ describe('prompt caching (#356)', () => {
     }).usd;
     expect(run.estCostUsd).toBeCloseTo(expected, 12);
     expect(run.estCostUsd).toBeLessThan(estimateCostUsd(run.provider, run.model, 1000, 50));
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/896: no message echoes the AI key or any part of it.
+// The keys are made up.
+describe('sanitizeDetail leaves no part of the key', () => {
+  const KEY = 'zq-madeup-alpha\nbravo-0123';
+  it.each([KEY, `${KEY}\n`, `  ${KEY} \n`])('key %#', (key) => {
+    for (const said of [key, key.trim()]) {
+      const out = sanitizeDetail(`Headers: "Bearer ${said}" is refused`, key);
+      for (const part of ['madeup', 'alpha', 'bravo', '0123']) expect(out).not.toContain(part);
+      expect(out).toContain('is refused');
+    }
+  });
+  it('a key of white space only takes nothing away', () => {
+    expect(sanitizeDetail('refused by the provider', ' \n ')).toBe('refused by the provider');
   });
 });

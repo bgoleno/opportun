@@ -1,15 +1,13 @@
-// The per-site recognizer registry (design D18). The capture route asks this module what a
-// captured tab is; it asks the recognizer whose site claims the host, and refuses everything
-// else. Adding Wellfound is adding a recognizer and its tests here, not touching the route
-// (routes/connectorCapture.ts), the resolve path (lib/captureResolve.ts) or the merge
-// (lib/postingMerge.ts).
+// Reading a captured tab with the recognizer of the site that claims its host (design D18). The
+// recognizers are the site modules' (apps/server/src/sites, https://github.com/bgoleno/opportun/issues/769).
+// The capture route asks this module what a captured tab is; it asks the recognizer whose site
+// claims the host, and refuses everything else. Adding a site is adding its module and its tests,
+// not touching the route (routes/connectorCapture.ts), the resolve path (lib/captureResolve.ts)
+// or the merge (lib/postingMerge.ts).
 //
-// The seam is server-side only. The extension keeps its own site gates (manifest host
-// permissions, canonical.ts's per-site URL checks, the popup's tab check), which since
-// https://github.com/bgoleno/opportun/pull/81 let through LinkedIn jobs and profiles and Indeed
-// jobs; packages/extension/src/canonical.ts is where they are defined. A shared site table
-// driving both is its own piece of work: adding a site needs an extension rebuild and
-// redistribution anyway.
+// The extension reads the same sites (packages/core/src/sites/capture.ts) and keeps its own gates:
+// the manifest's host permissions, its rules for a tab that shows one posting in a split view
+// (packages/extension/src/canonical.ts), and a reader for each site's page.
 //
 // Each recognizer also says how to read a description back out of a capture already stored on
 // an opportunity's timeline, so re-derive (lib/postingRederive.ts) uses the extraction of the
@@ -17,21 +15,9 @@
 //
 // C-1 is unchanged: a recognizer reads the text the user's own browser already rendered and
 // nothing here ever fetches a URL.
+import { SITE_MODULES, type CaptureInputPage } from '../sites';
 import { siteOfUrl } from './captureSites';
-import { indeedDescriptionOf, recognizeIndeedPage } from './indeedCapture';
-import {
-  cutTrailingNoise,
-  descriptionOf,
-  linesOf,
-  recognizeLinkedInPage,
-  type Recognition,
-} from './linkedinCapture';
-
-export interface CaptureInputPage {
-  url: string;
-  title: string;
-  text: string;
-}
+import type { Recognition } from './linkedinCapture';
 
 /** What a recognizer returns, tagged with the site it came from. */
 export type CapturedPage =
@@ -42,38 +28,11 @@ export type CapturedPage =
 /** A page a recognizer read, with the unrecognized case excluded. */
 export type RecognizedPage = Exclude<CapturedPage, { kind: 'unrecognized' }>;
 
-export interface CaptureRecognizer {
-  /** The CAPTURE_SITES id this recognizer serves. */
-  siteId: string;
-  recognize(input: CaptureInputPage): Recognition;
-  /**
-   * The job description in a capture's stored text, or null when there is none to find. It is
-   * deterministic and never calls AI: re-derive holds itself to the bar of a live capture with
-   * no AI key (see lib/postingRederive.ts).
-   */
-  storedDescriptionOf(text: string): string | null;
-}
-
-/**
- * LinkedIn's re-derive extraction, unchanged from before Indeed (issue #264). A capture made
- * before #246 shipped still carries the recommended rail in its raw stored text, so the text is
- * cut the way extractPage cuts it at capture time before descriptionOf reads it: descriptionOf's
- * own end markers exist to find where "About the job" ends, not to find the rail, and a real
- * capture was confirmed (read-only) to have nothing stop it between the posting and the rail.
- */
-const linkedInStoredDescriptionOf = (text: string): string | null =>
-  descriptionOf(linesOf(cutTrailingNoise(text)));
-
-export const CAPTURE_RECOGNIZERS: readonly CaptureRecognizer[] = [
-  {
-    siteId: 'linkedin',
-    recognize: recognizeLinkedInPage,
-    storedDescriptionOf: linkedInStoredDescriptionOf,
-  },
-  { siteId: 'indeed', recognize: recognizeIndeedPage, storedDescriptionOf: indeedDescriptionOf },
-];
-
-const bySite = new Map(CAPTURE_RECOGNIZERS.map((r) => [r.siteId, r]));
+const bySite = new Map(
+  SITE_MODULES.flatMap((m) =>
+    m.capture === undefined ? [] : [[m.identity.id, m.capture] as const],
+  ),
+);
 
 /**
  * Reads a captured tab, or refuses it. The host decides which recognizer runs, so a page on a

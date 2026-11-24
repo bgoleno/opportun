@@ -131,6 +131,74 @@ describe('LinkedAccountsCard', () => {
     ).toBeInTheDocument();
   });
 
+  it.each([
+    ['still set up here', ['github']],
+    ['removed here too', []],
+  ])(
+    'unlinking one already unlinked elsewhere says so, and reads the list again: %s (#896)',
+    async (_what, providers) => {
+      const user = userEvent.setup();
+      const SENTENCE =
+        'This provider is already unlinked from your account. There is nothing more to do.';
+      let linked = true;
+      mockApi({
+        'GET /auth/oauth/providers': { providers },
+        'GET /auth/oauth/accounts': () => ({
+          hasPassword: true,
+          accounts: linked ? [{ provider: 'github', createdAt: NOW }] : [],
+        }),
+        'DELETE /auth/oauth/github': () => {
+          linked = false;
+          return { status: 404, body: { error: { code: 'not_linked', message: SENTENCE } } };
+        },
+      });
+      renderWithProviders(<LinkedAccountsCard />);
+      await user.click(await screen.findByRole('button', { name: 'Unlink GitHub' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Confirm your password' });
+      await user.type(within(dialog).getByLabelText('Current password'), 'right password');
+      await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: 'Unlink GitHub' })).toBeNull(),
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent(SENTENCE);
+    },
+  );
+
+  it.each([
+    ['another is left', ['google']],
+    ['none is left', []],
+  ])(
+    'linking one the administrator removed says so, and takes it off the list: %s (#896)',
+    async (_what, left) => {
+      const user = userEvent.setup();
+      const SENTENCE =
+        'This sign-in provider is no longer set up on this server. Use another one, or ask its administrator.';
+      let providers = ['github', ...left];
+      const navigate = vi.fn();
+      mockApi({
+        'GET /auth/oauth/providers': () => ({ providers }),
+        'GET /auth/oauth/accounts': { hasPassword: true, accounts: [] },
+        'POST /auth/oauth/github/link': () => {
+          providers = left;
+          return {
+            status: 409,
+            body: { error: { code: 'provider_not_configured', message: SENTENCE } },
+          };
+        },
+      });
+      renderWithProviders(<LinkedAccountsCard navigate={navigate} />);
+      await user.click(await screen.findByRole('button', { name: 'Link GitHub' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Confirm your password' });
+      await user.type(within(dialog).getByLabelText('Current password'), 'right password');
+      await user.click(within(dialog).getByRole('button', { name: 'Continue' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Link GitHub' })).toBeNull());
+      expect(screen.getByRole('alert')).toHaveTextContent(SENTENCE);
+      expect(navigate).not.toHaveBeenCalled();
+    },
+  );
+
   it('hides itself when no provider is configured', async () => {
     const { calls } = mockApi({
       'GET /auth/oauth/providers': { providers: [] },

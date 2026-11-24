@@ -9,6 +9,7 @@
 //
 // Pure functions only (no IO), exported for tests.
 
+import { linkedin, linkOnHost } from '@opportun/core';
 import {
   MIN_KEPT_CHARS,
   MIN_KEPT_FRACTION,
@@ -63,10 +64,9 @@ export type Recognition = LinkedInPage | { kind: 'unrecognized'; reason: Unrecog
 
 export type LinkedInPath = { kind: 'profile'; slug: string } | { kind: 'job'; id: string };
 
-/** The LinkedIn apex host, its www host, or a two-letter country subdomain (uk., de.). */
-const LINKEDIN_HOST = /^(?:www\.|[a-z][a-z]\.)?linkedin\.com$/;
+/** Whether a URL is on a LinkedIn host, compared as written (a trailing dot is not dropped). */
+const onLinkedIn = (url: URL): boolean => linkOnHost(url, linkedin.pageHosts);
 const PROFILE_PATH = /^\/in\/([^/]{1,200})\/?$/;
-const JOB_PATH = /^\/jobs\/view\/(\d{1,20})\/?$/;
 
 function parseUrl(raw: string): URL | null {
   try {
@@ -95,11 +95,11 @@ export function linkedInPathOf(raw: string): LinkedInPath | null {
   const url = parseUrl(raw);
   if (url === null || url.protocol !== 'https:') return null;
   if (url.username !== '' || url.password !== '') return null;
-  if (!LINKEDIN_HOST.test(url.hostname.toLowerCase())) return null;
+  if (!onLinkedIn(url)) return null;
   const profile = PROFILE_PATH.exec(url.pathname);
   if (profile !== null) return { kind: 'profile', slug: slugOf(profile[1]!) };
-  const job = JOB_PATH.exec(url.pathname);
-  if (job !== null) return { kind: 'job', id: job[1]! };
+  const job = linkedin.jobFromUrl(url);
+  if (job !== null) return { kind: 'job', id: job.id };
   return null;
 }
 
@@ -111,7 +111,7 @@ export function profileSlugOf(raw: string | null | undefined): string | null {
   if (raw === null || raw === undefined) return null;
   const url = parseUrl(raw.trim());
   if (url === null || (url.protocol !== 'https:' && url.protocol !== 'http:')) return null;
-  if (!LINKEDIN_HOST.test(url.hostname.toLowerCase())) return null;
+  if (!onLinkedIn(url)) return null;
   const m = PROFILE_PATH.exec(url.pathname);
   return m === null ? null : slugOf(m[1]!);
 }
@@ -330,7 +330,7 @@ export function recognizeLinkedInPage(input: {
   text: string;
 }): Recognition {
   const url = parseUrl(input.url);
-  if (url === null || !LINKEDIN_HOST.test(url.hostname.toLowerCase())) {
+  if (url === null || !onLinkedIn(url)) {
     return { kind: 'unrecognized', reason: 'not_linkedin' };
   }
   const path = linkedInPathOf(input.url);
