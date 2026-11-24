@@ -12,8 +12,19 @@ import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import { insertLeads } from '../src/lib/discoveryIngest';
 import { enqueue } from '../src/lib/jobQueue';
 import { resolveCapture } from '../src/lib/captureResolve';
-import { createRun, createSource, ensureChannelSource, insertResult } from '../src/repos/discovery';
+import {
+  createRun,
+  createSource,
+  ensureChannelSource,
+  insertResult,
+  prefilterRecall,
+} from '../src/repos/discovery';
+import { onSlowTransaction } from '../src/db/gate';
+import { pipelineText } from '../src/jobs/companySuggest';
+import { previewPurge } from '../src/jobs/purge';
 import { useApi } from './api';
+import { testDialect } from './db';
+import { heldApart, pauseAt } from './race';
 import type { TestClient } from './isolation';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
@@ -604,5 +615,223 @@ describe('a hand-made pair', () => {
     await arrive(app, a, [another(LINKEDIN, THERE)]);
     const linked = (await resultsOf(app, a)).filter((r) => r.rankSkipReason === 'linked');
     expect(linked.map((r) => r.opportunityId)).toEqual([first]);
+  });
+});
+
+describe('ingest and what else writes the role, in each order', () => {
+  const LATE = another(LINKEDIN, THERE);
+  const remove = (c: TestClient, id: string) =>
+    c.request({ method: 'DELETE', url: `/api/v1/opportunities/${id}` });
+  const merge = (c: TestClient, id: string, otherId: string) =>
+    c.request({ method: 'POST', url: `/api/v1/opportunities/${id}/merge`, payload: { otherId } });
+  /** The same role, made by hand at a third place, newer or older than the first. */
+  async function second(app: FastifyInstance, c: TestClient): Promise<string> {
+    const res = await c.request({
+      method: 'POST',
+      url: '/api/v1/opportunities',
+      payload: {
+        companyName: JOB.company,
+        title: JOB.title,
+        location: 'Chicago, IL',
+        sourceKind: 'manual',
+      },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    return res.json<{ id: string }>().id;
+  }
+  const linkedInto = async (app: FastifyInstance, c: TestClient) =>
+    (await resultsOf(app, c)).filter((r) => r.rankSkipReason === 'linked');
+
+  it('a delete first: a card, as the role is gone', async () => {
+    const { app, a } = await boot();
+    const id = await ORIGINS['made by hand'](app, a);
+    const [del, { stats }] = await heldApart(
+      app,
+      'opportunities.delete.locked',
+      () => remove(a, id),
+      () => arrive(app, a, [LATE]),
+    );
+    expect(del.statusCode, del.body).toBeLessThan(300);
+    expect(stats).toMatchObject({ inserted: 1, linked: 0 });
+    expect(await pendingOf(app, a)).toHaveLength(1);
+  });
+
+  it('the link first: the delete takes the entry with it, and the result keeps no opportunity', async () => {
+    const { app, a } = await boot();
+    const id = await ORIGINS['made by hand'](app, a);
+    const [{ stats }, del] = await heldApart(
+      app,
+      'discovery.ingest.linking.locked',
+      () => arrive(app, a, [LATE]),
+      () => remove(a, id),
+    );
+    expect(del.statusCode, del.body).toBeLessThan(300);
+    expect(stats).toMatchObject({ inserted: 0, linked: 1 });
+    expect((await linkedInto(app, a)).map((r) => r.opportunityId)).toEqual([null]);
+    expect(await opportunitiesOf(app, a)).toEqual([]);
+  });
+
+  it.each(['merge', 'link'] as const)('a merge of the role, the %s first', async (first) => {
+    const { app, a } = await boot();
+    const gone = await ORIGINS['made by hand'](app, a);
+    const kept = await second(app, a);
+    const merging = () => merge(a, kept, gone);
+    const linking = () => arrive(app, a, [LATE]);
+    const [merged, { stats }] =
+      first === 'merge'
+        ? await heldApart(app, 'opportunities.merge.locked', merging, linking)
+        : ((
+            await heldApart(app, 'discovery.ingest.linking.locked', linking, merging)
+          ).reverse() as [
+            Awaited<ReturnType<typeof merging>>,
+            Awaited<ReturnType<typeof linking>>,
+          ]);
+    expect(merged.statusCode, merged.body).toBe(200);
+    expect(stats).toMatchObject({ inserted: 0, linked: 1 });
+    expect((await opportunitiesOf(app, a)).map((o) => o.id)).toEqual([kept]);
+    expect((await linkedInto(app, a)).map((r) => r.opportunityId)).toEqual([kept]);
+    expect(
+      (await entries(app, kept)).filter((e) => e.externalUrl === LATE.postingUrl),
+    ).toHaveLength(1);
+  });
+
+  it.each(['capture', 'link'] as const)(
+    'a capture of the arriving posting itself, the %s first',
+    async (first) => {
+      const { app, a } = await boot();
+      const id = await ORIGINS['made by hand'](app, a);
+      const [, , , otherId, otherUrl] = LINKEDIN;
+      const page: Site = ['linkedin', otherId, otherUrl, '', ''];
+      const capturing = () => capture(app, a, page, THERE);
+      const linking = () => arrive(app, a, [LATE]);
+      if (first === 'capture') {
+        await heldApart(app, 'captureResolve.matched.locked', capturing, linking);
+        // The capture has its own opportunity as B of #967 is not here; its posting is no card.
+        expect(await pendingOf(app, a)).toEqual([]);
+        return;
+      }
+      const [{ stats }, captured] = await heldApart(
+        app,
+        'discovery.ingest.linking.locked',
+        linking,
+        capturing,
+      );
+      expect(stats.linked).toBe(1);
+      expect(captured.opportunityId).toBe(id);
+      expect(await opportunitiesOf(app, a)).toHaveLength(1);
+      expect(await pendingOf(app, a)).toEqual([]);
+    },
+  );
+
+  it('an Accept that makes the role, held: the card it leaves is linked by its own Accept', async () => {
+    const { app, a } = await boot();
+    onSlowTransaction(() => undefined); // parked on purpose
+    const { inserted } = await arrive(app, a, [alertOf(LINKEDIN, HERE)]);
+    const accept = (id: string) =>
+      a.request({ method: 'POST', url: `/api/v1/discovery/results/${id}/accept`, payload: {} });
+    const pause = pauseAt('discovery.decide.locked');
+    const accepting = accept(inserted[0]!.id);
+    await pause.reached;
+    const arriving = arrive(app, a, [LATE]);
+    // Postgres: the role is not there to be seen, and nothing waits. SQLite: one writer at a time.
+    if (testDialect === 'postgres') expect((await arriving).stats.inserted).toBe(1);
+    pause.release();
+    const res = await accepting;
+    expect(res.statusCode, res.body).toBe(200);
+    const { stats } = await arriving;
+    if (testDialect === 'sqlite') expect(stats.linked).toBe(1);
+    for (const r of await pendingOf(app, a)) {
+      const late = await accept(r.id);
+      expect(late.json().opportunityId).toBe(res.json().opportunityId);
+    }
+    expect(await opportunitiesOf(app, a)).toHaveLength(1);
+    expect(await pendingOf(app, a)).toEqual([]);
+  });
+
+  it.runIf(testDialect === 'postgres')('closed between the two looks: a card', async () => {
+    const { app, a } = await boot();
+    onSlowTransaction(() => undefined);
+    const id = await ORIGINS['made by hand'](app, a);
+    const pause = pauseAt('discovery.ingest.linking');
+    const arriving = arrive(app, a, [LATE]);
+    await pause.reached;
+    await move(app, id, 'closed');
+    pause.release();
+    expect((await arriving).stats).toMatchObject({ inserted: 1, linked: 0 });
+  });
+
+  it('one wait for the user’s lock is bounded as the ingest lock’s is', async () => {
+    const { app, a } = await boot();
+    const id = await ORIGINS['made by hand'](app, a);
+    if (testDialect === 'sqlite') return; // the write gate is the one wait
+    onSlowTransaction(() => undefined);
+    const pause = pauseAt('opportunities.delete.locked');
+    const deleting = remove(a, id);
+    await pause.reached;
+    const source = await ensureChannelSource(app.db, ctxOf(a), 'manual');
+    const began = performance.now();
+    await expect(
+      insertLeads(app.db, ctxOf(a), [LATE], source.id, undefined, { lockTimeoutMs: 200 }),
+    ).rejects.toThrow();
+    expect(performance.now() - began).toBeLessThan(5000);
+    pause.release();
+    expect((await deleting).statusCode).toBeLessThan(300);
+  });
+});
+
+describe('a linked posting is nobody’s decision', () => {
+  it('leaves the pre-filter’s recall and the suggestions’ evidence as they were', async () => {
+    const { app, a } = await boot();
+    const target = await a.request({
+      method: 'POST',
+      url: '/api/v1/role-targets',
+      payload: { name: 'Platform', titleFamily: 'Platform Engineer' },
+    });
+    expect(target.statusCode, target.body).toBe(201);
+    await ORIGINS['made by hand'](app, a);
+    const recall = await prefilterRecall(app.db, ctxOf(a));
+    const evidence = await pipelineText(app.db, ctxOf(a));
+    const posting = another(LINKEDIN, THERE, {
+      externalId: 'lv-1',
+      postingUrl: 'https://boards.example.com/initech/1',
+      descriptionMd: PAGE,
+    });
+    expect((await arrive(app, a, [posting], 'ats_lever')).stats.linked).toBe(1);
+    expect(await prefilterRecall(app.db, ctxOf(a))).toEqual(recall);
+    expect(await pipelineText(app.db, ctxOf(a))).toBe(evidence);
+    // An accept counts, so the two above can move.
+    await app.db
+      .update(discoveryResults)
+      .set({ rankSkipReason: null })
+      .where(eq(discoveryResults.userId, a.userId))
+      .run();
+    expect((await prefilterRecall(app.db, ctxOf(a))).positives).toBe(recall.positives + 1);
+    expect(await pipelineText(app.db, ctxOf(a))).not.toBe(evidence);
+  });
+
+  it('is kept by a purge of discovery results', async () => {
+    const { app, a } = await boot();
+    await ORIGINS['made by hand'](app, a);
+    await arrive(app, a, [another(LINKEDIN, THERE)]);
+    expect((await previewPurge(app.db, ctxOf(a))).discoveryResults).toBe(0);
+  });
+
+  it('is not unsuppressed while its opportunity is open', async () => {
+    const { app, a } = await boot();
+    const id = await ORIGINS['made by hand'](app, a);
+    await arrive(app, a, [another(LINKEDIN, THERE)]);
+    const [linked] = (await resultsOf(app, a)).filter((r) => r.rankSkipReason === 'linked');
+    const unsuppress = () =>
+      a.request({ method: 'POST', url: `/api/v1/discovery/results/${linked!.id}/unsuppress` });
+    const refused = await unsuppress();
+    expect([refused.statusCode, refused.json().error.code]).toEqual([
+      409,
+      'opportunity_still_active',
+    ]);
+    await move(app, id, 'dismissed');
+    expect((await unsuppress()).statusCode).toBe(200);
+    expect((await arrive(app, a, [another(LINKEDIN, THERE)])).stats).toMatchObject({
+      linked: 0,
+    });
   });
 });

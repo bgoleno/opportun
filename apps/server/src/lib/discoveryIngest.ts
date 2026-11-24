@@ -216,6 +216,7 @@ async function linkToOpen(
     `user:${ctx.userId}`,
     lockTimeoutMs === undefined ? {} : { timeoutMs: lockTimeoutMs },
   );
+  await racePoint('discovery.ingest.linking.locked');
   const opportunityId = await look();
   if (opportunityId === undefined) return null;
   const { id } = await insertResult(tx, ctx, { ...input, rankSkipReason: 'linked' });
