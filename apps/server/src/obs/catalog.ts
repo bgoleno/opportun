@@ -814,7 +814,7 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'listening on localhost only: this instance cannot be reached from another device until OPPORTUN_HOST names a reachable address (docs/install.md, "Reaching it from another device")':
     ['server.port'],
   // Database
-  'postgres idle connection error': [],
+  'postgres connection ended': [],
   'database collation does not match SQLite ordering: create the database with LOCALE_PROVIDER libc and C collation (docs/install.md)':
     [],
   'database directory is on a filesystem whose locking SQLite cannot depend on (docs/install.md)': [
