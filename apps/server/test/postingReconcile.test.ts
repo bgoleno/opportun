@@ -26,7 +26,7 @@ import { onSlowTransaction } from '../src/db/gate';
 import { useApi } from './api';
 import { testDialect } from './db';
 import type { TestClient } from './isolation';
-import { pauseAt, settledOrWaiting } from './race';
+import { pauseAt, settledOrWaiting, whileParked } from './race';
 
 vi.mock('@opportun/ai', async (orig) => ({
   ...(await orig<typeof import('@opportun/ai')>()),
@@ -305,9 +305,7 @@ describe('reconcilePosting', () => {
       postingState: 'needs_review',
       postingStateDetail: 'edited',
     });
-    expect(await reconcileNotes(app, ctx, before.id)).toEqual([
-      'Posting check skipped: description already edited',
-    ]);
+    expect(await reconcileNotes(app, ctx, before.id)).toEqual(['Posting check: description kept']);
   }
 
   it('a save between the re-read and the write is kept, and the skip is recorded (#856)', async () => {
@@ -319,10 +317,8 @@ describe('reconcilePosting', () => {
     const pause = pauseAt('posting.confirm');
 
     const check = run(app, ctx, id, boardWith([atsPosting({ compNote: '$200k' })]));
-    await pause.reached;
-    const saved = await save(a, id);
+    const saved = await whileParked(pause, () => save(a, id));
     expect(saved.statusCode, saved.body).toBe(200);
-    pause.release();
 
     const outcome = await check;
     await expectSkipped(app, ctx, before);
@@ -340,10 +336,8 @@ describe('reconcilePosting', () => {
     const pause = pauseAt('posting.confirm');
 
     const check = run(app, ctx, id, boardWith([atsPosting()]));
-    await pause.reached;
-    const saved = await save(a, id);
+    const saved = await whileParked(pause, () => save(a, id));
     expect(saved.statusCode, saved.body).toBe(200);
-    pause.release();
 
     const outcome = await check;
     await expectSkipped(app, ctx, before);
@@ -381,10 +375,8 @@ describe('reconcilePosting', () => {
     const pause = pauseAt('posting.confirm');
 
     const check = run(app, ctx, id, boardWith([atsPosting()]));
-    await pause.reached;
-    const saved = await save(a, id);
+    const saved = await whileParked(pause, () => save(a, id));
     expect(saved.statusCode, saved.body).toBe(200);
-    pause.release();
 
     const outcome = await check;
     await expectSkipped(app, ctx, before);
@@ -405,14 +397,14 @@ describe('reconcilePosting', () => {
     const pause = pauseAt('opportunities.update.locked');
 
     const check = run(app, ctx, id, boardWith([atsPosting()]));
-    await pause.reached;
-    const saving = save(a, id);
-    expect(await settledOrWaiting(app, saving)).toBe(
-      testDialect === 'postgres' ? 'settled' : 'waiting',
-    );
-    pause.release();
+    const [saving, seen] = await whileParked(pause, async () => {
+      const sent = save(a, id);
+      // In an array: a promise returned bare would be waited for, and on SQLite it waits for the check.
+      return [[sent], await settledOrWaiting(app, sent)] as const;
+    });
+    expect(seen).toBe(testDialect === 'postgres' ? 'settled' : 'waiting');
 
-    const [, saved] = await Promise.all([check, saving]);
+    const [, saved] = await Promise.all([check, saving[0]]);
     expect(saved.statusCode, saved.body).toBe(200);
     if (testDialect === 'postgres') return await expectSkipped(app, ctx, before);
     const out = await getOpportunity(app.db, ctx, id);
@@ -808,7 +800,54 @@ describe('reconcilePosting: timeline entries (issue #247)', () => {
 
     const notes = await notesOf(app, ctx, opp.id);
     expect(notes).toHaveLength(1);
-    expect(notes[0]).toMatchObject({ title: 'Posting check skipped: description already edited' });
+    expect(notes[0]).toMatchObject({ title: 'Posting check: description kept' });
+  });
+
+  // #858: the note said "skipped" before; the same outcome refreshes it, title included.
+  it('refreshes a note with the old title in place, and gives it the new one', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await seedCaptured(app, ctx);
+    await updateOpportunity(app.db, ctx, opp.id, { descriptionMd: 'my own notes' });
+    const old = await createActivity(app.db, ctx, opp.id, {
+      kind: 'note',
+      title: 'Posting check skipped: description already edited',
+      bodyMd: 'as it was written before',
+      occurredAt: 1,
+      participants: [],
+      externalUrl: null,
+    });
+
+    await run(app, ctx, opp.id, boardWith([atsPosting()]));
+
+    const notes = await notesOf(app, ctx, opp.id);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ id: old.id, title: 'Posting check: description kept' });
+    expect(notes[0]!.bodyMd).toContain('You have edited');
+    expect(notes[0]!.occurredAt).toBeGreaterThan(1);
+  });
+
+  it('an old-titled note is still that outcome: another outcome is written beside it (#858)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await seedCaptured(app, ctx);
+    const old = await createActivity(app.db, ctx, opp.id, {
+      kind: 'note',
+      title: 'Posting check skipped: description already edited',
+      bodyMd: 'as it was written before',
+      occurredAt: 1,
+      participants: [],
+      externalUrl: null,
+    });
+
+    await run(app, ctx, opp.id, boardWith([atsPosting({ title: 'Account Executive' })]));
+
+    const notes = await notesOf(app, ctx, opp.id);
+    expect(notes.map((n) => n.title)).toContain("Posting not found on the company's board");
+    expect(notes.find((n) => n.id === old.id)).toMatchObject({
+      title: 'Posting check skipped: description already edited',
+      bodyMd: 'as it was written before',
+    });
   });
 
   // reconcilePosting's outer catch (-> flag(..., 'failed', ...)) is not independently exercised
