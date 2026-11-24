@@ -43,6 +43,6 @@ describe('testApp', () => {
     // connection killed that way reaches the app as an idle-connection error, and a
     // connection checked out mid-query rejects with nobody left to catch it, which is how
     // this reached CI: an uncaught 57P01 and a close that hung for the hook's full 30s.
-    expect(logs.text()).not.toContain('postgres idle connection error');
+    expect(logs.text()).not.toContain('postgres connection ended');
   });
 });

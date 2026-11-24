@@ -5,7 +5,7 @@ import { newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import type { Db } from '../src/db/client';
+import { isStatementError, type Db } from '../src/db/client';
 import { exec } from './db';
 import { pauseAt } from './race';
 import { jobs, settings, users } from '../src/db/schema';
@@ -234,6 +234,116 @@ describe('job queue', () => {
       expect(logs.text()).not.toContain('handler exploded');
     } finally {
       await app.close();
+    }
+  });
+
+  // sec on #963: Postgres text holds no NUL, so the write that ends the job was refused for the text
+  // of its error, and its row stayed `running`.
+  it.each([
+    ['pending', 2],
+    ['dead', 1],
+  ])('a job whose error has a NUL in it is %s, its text cleaned', async (status, maxAttempts) => {
+    const { db } = await freshDb();
+    registerJob({
+      kind: 'test.fail',
+      payloadSchema: z.object({}),
+      maxAttempts,
+      run: async () => {
+        throw new Error('bad\u0000 byte \ud83d here');
+      },
+    });
+    const id = await enqueue(db, 'test.fail', {});
+    await runNextJob(db);
+    expect(await jobRow(db, id)).toMatchObject({
+      status,
+      lockedBy: null,
+      lastError: 'Error: bad byte  here',
+    });
+  });
+
+  // tl on #963: what tells them apart is the statement's own errors, not a list of a lost
+  // connection's, which would miss some.
+  it.each([
+    ...['22021', '23505', '42P01', 'SQLITE_CONSTRAINT_UNIQUE', 'SQLITE_TOOBIG', 'SQLITE_MISMATCH'],
+    'SQLITE_ERROR',
+  ])('%s is about the statement', (code) => {
+    expect(isStatementError(Object.assign(new Error('x'), { code }))).toBe(true);
+  });
+  it.each([
+    ...['57P03', '57P01', '57014', '53300', '25006', '08006', '55P03', 'ECONNREFUSED'],
+    ...['SQLITE_BUSY', 'SQLITE_FULL', 'SQLITE_IOERR_WRITE', undefined],
+  ])('%s is not about the statement', (code) => {
+    expect(isStatementError(Object.assign(new Error('x'), { code }))).toBe(false);
+  });
+  it('an error through the query builder’s wrapping is', async () => {
+    const { db } = await freshDb();
+    const row = { kind: 'k', payload: {}, runAt: 0, attempts: 0, maxAttempts: 1 } as const;
+    const same = { ...row, id: newId(), status: 'pending', createdAt: 0, updatedAt: 0 } as const;
+    await db.insert(jobs).values(same).run();
+    const err: unknown = await db
+      .insert(jobs)
+      .values(same)
+      .run()
+      .then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+    expect(isStatementError(err)).toBe(true);
+  });
+
+  /** `db`, with its first `n` updates after `arm()` failing with `err`. */
+  function failingUpdates(db: Db, n: number, err: Error) {
+    let left = 0;
+    const proxied = new Proxy(db, {
+      get(target, key) {
+        if (key === 'update' && left > 0) {
+          left -= 1;
+          throw err;
+        }
+        const value: unknown = Reflect.get(target, key, target);
+        return typeof value === 'function' ? (value.bind(target) as unknown) : value;
+      },
+    });
+    return { db: proxied, arm: () => (left = n) };
+  }
+
+  // tl on #963, on both engines (pgConnectionEnds.test.ts has what Postgres itself does).
+  it.each([
+    ['a lost connection', Object.assign(new Error('gone'), { code: 'ECONNREFUSED' }), 'done', 0],
+    ['an error without a code', new Error('gone'), 'done', 0],
+    ['the statement', Object.assign(new Error('bad'), { code: '22021' }), 'running', 1],
+  ])('the write of a job’s end that fails for %s', async (_for, err, status, errors) => {
+    const { db } = await freshDb();
+    const failing = failingUpdates(db, 2, err);
+    let runs = 0;
+    registerJob({
+      kind: 'test.echo',
+      payloadSchema: z.object({}),
+      maxAttempts: 2,
+      run: async () => {
+        runs += 1;
+        failing.arm();
+      },
+    });
+    const id = await enqueue(db, 'test.echo', {});
+    const seen: unknown[] = [];
+    const runner = startRunner(failing.db, {
+      intervalMs: 5,
+      workers: 1,
+      rowRetry: { firstMs: 10, maxMs: 10, limitMs: 10_000 },
+      onError: (e) => seen.push(e),
+    });
+    try {
+      const deadline = Date.now() + 2000;
+      while ((await jobRow(db, id)).status !== status || runs === 0 || seen.length < errors) {
+        if (Date.now() > deadline) throw new Error('timed out waiting');
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      await new Promise((r) => setTimeout(r, 100));
+      expect((await jobRow(db, id)).status).toBe(status);
+      expect([runs, seen.length]).toEqual([1, errors]);
+    } finally {
+      await runner.stop();
     }
   });
 

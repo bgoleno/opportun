@@ -201,6 +201,8 @@ export interface ClaimedJob {
   payload: unknown;
   attempts: number;
   maxAttempts: number;
+  /** What the claim wrote in locked_at. */
+  lockedAt: number;
   userId: string | null;
   /** The enqueuer's W3C traceparent, when it asked to continue its trace (design.md 14.6). */
   traceContext: string | null;
@@ -279,6 +281,7 @@ export async function claimNextJob(
     payload,
     attempts: Number(row.attempts),
     maxAttempts: Number(row.max_attempts),
+    lockedAt: now,
     userId: row.user_id,
     traceContext: row.trace_context ?? null,
   };

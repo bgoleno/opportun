@@ -845,6 +845,34 @@ export function pgPoolConfig(cfg: PostgresConfig): PoolConfig {
   };
 }
 
+/**
+ * Listens for the errors of every connection `pool` makes, from before it is first used, and logs
+ * the end of each once (https://github.com/bgoleno/opportun/issues/963). An 'error' event nobody
+ * listens for is an uncaught exception, which ends the process. pg-pool listens to a connection only
+ * while it is idle, and pool.query() while its one statement runs: one checked out, as a transaction's
+ * is, had nobody. The statement in flight, or the next one, rejects by itself, so what was using the
+ * connection fails as for any database error, and pg-pool drops the connection when it is released.
+ * A connection that ends says so more than once (Postgres's own message, then the socket's end), and
+ * pg-pool repeats an idle one's on the pool.
+ */
+export function watchConnections(
+  pool: Pool,
+  // #345: through the gated logger, the error as its type and frames (design 14.9).
+  onEnd: (err: Error) => void = (err) => dbLog('error', { err }, 'postgres connection ended'),
+): Pool {
+  const ended = new WeakSet<object>();
+  const once = (client: object, err: Error): void => {
+    if (ended.has(client)) return;
+    ended.add(client);
+    onEnd(err);
+  };
+  pool.on('connect', (client) => {
+    client.on('error', (err: Error) => once(client, err));
+  });
+  pool.on('error', (err, client) => once(client, err));
+  return pool;
+}
+
 const LOCALE_PROVIDERS: Record<string, string> = { c: 'libc', i: 'icu', b: 'builtin' };
 
 /**
@@ -882,8 +910,8 @@ async function collationWarnings(pool: Pool): Promise<string[]> {
 export interface ConnectOptions {
   /** Postgres only: an existing pool (tests pass a recording fake). Not ended on failure. */
   pool?: Pool;
-  /** Postgres only: an idle pooled connection failed (e.g. the server restarted). */
-  onIdleError?: (err: Error) => void;
+  /** Postgres only: a pooled connection ended (e.g. the server restarted). Called once for each. */
+  onConnectionEnd?: (err: Error) => void;
   /**
    * Overrides isTestRun()'s own process.env-based detection for this one connection (issue
    * #292): a test that needs to open a handle as if it were NOT a test run passes `false`
@@ -922,13 +950,7 @@ export interface ConnectOptions {
 async function openPostgres(cfg: PostgresConfig, opts: ConnectOptions): Promise<PgHandle> {
   installPgTypeParsers();
   const owned = opts.pool === undefined;
-  const pool = opts.pool ?? new pg.Pool(pgPoolConfig(cfg));
-  // Without a listener an idle connection's error would crash the process.
-  pool.on(
-    'error',
-    // #345: through the gated logger, the error as its type and frames (design 14.9).
-    opts.onIdleError ?? ((err: Error) => dbLog('error', { err }, 'postgres idle connection error')),
-  );
+  const pool = watchConnections(opts.pool ?? new pg.Pool(pgPoolConfig(cfg)), opts.onConnectionEnd);
   try {
     await migrateLockedPg(pool);
     const warnings = await collationWarnings(pool);
@@ -1046,8 +1068,9 @@ export async function openPgSession(cfg: PostgresConfig): Promise<PgSession> {
   }
   installPgTypeParsers();
   // Two connections: the session's own, and one for migrate().
-  const pool = new pg.Pool({ ...pgPoolConfig(cfg), max: 2, application_name: 'opportun-copy' });
-  pool.on('error', (err: Error) => dbLog('error', { err }, 'postgres idle connection error'));
+  const pool = watchConnections(
+    new pg.Pool({ ...pgPoolConfig(cfg), max: 2, application_name: 'opportun-copy' }),
+  );
   let client: pg.PoolClient | undefined;
   try {
     const [collation] = await collationWarnings(pool);
@@ -1303,23 +1326,20 @@ async function pgTransaction<T>(
   let restore: (() => void) | undefined;
   try {
     return await pgTransactionContext.run(conn, () =>
-      conn.raw.transaction(
-        async (tx) => {
-          if (caller === undefined) return body(tx as unknown as Exec);
-          restore = watchStatements(tx, watch);
-          started = performance.now();
-          checkNextTurn(watch); // an outside await before the first statement counts too
-          try {
-            return await body(tx as unknown as Exec);
-          } finally {
-            ended = performance.now();
-            watch.settled = true;
-            restore();
-            restore = undefined;
-          }
-        },
-        { isolationLevel: 'read committed' },
-      ),
+      onOwnConnection(conn, async (tx) => {
+        if (caller === undefined) return body(tx as unknown as Exec);
+        restore = watchStatements(tx, watch);
+        started = performance.now();
+        checkNextTurn(watch); // an outside await before the first statement counts too
+        try {
+          return await body(tx as unknown as Exec);
+        } finally {
+          ended = performance.now();
+          watch.settled = true;
+          restore();
+          restore = undefined;
+        }
+      }),
     );
   } finally {
     restore?.();
@@ -1331,6 +1351,48 @@ async function pgTransaction<T>(
         reportSlowTransaction({ durationMs, awaitedOutside, stack: caller });
       }
     }
+  }
+}
+
+/** Drizzle on one pooled connection, made once for it: reading the schema's relations is not free. */
+const ownDatabases = new WeakMap<pg.PoolClient, PgDb>();
+
+/**
+ * Drizzle's transaction on a connection taken here, and given back here whatever happens
+ * (https://github.com/bgoleno/opportun/issues/963), and not conn.raw.transaction: drizzle's own pooled
+ * one (0.45.4) runs BEGIN outside its try, so a connection that has ended by then was never given
+ * back, and poolMax of them left nothing to serve with. It is handed to another caller only after a
+ * COMMIT, or a ROLLBACK, that worked (drizzle then throws the body's own error): one whose BEGIN, COMMIT
+ * or ROLLBACK failed is destroyed, as its transaction may still be open.
+ */
+async function onOwnConnection<T>(
+  conn: PgConn,
+  body: (tx: Parameters<Parameters<PgDb['transaction']>[0]>[0]) => Promise<T>,
+): Promise<T> {
+  const client = await conn.pool.connect();
+  let clean = false;
+  let thrown: { err: unknown } | undefined;
+  try {
+    const own = ownDatabases.get(client) ?? drizzlePg(client, { schema: pgSchema });
+    ownDatabases.set(client, own);
+    const result = await own.transaction(
+      async (tx) => {
+        try {
+          return await body(tx);
+        } catch (err) {
+          thrown = { err };
+          throw err;
+        }
+      },
+      { isolationLevel: 'read committed' },
+    );
+    clean = true;
+    return result;
+  } catch (err) {
+    clean = thrown !== undefined && thrown.err === err;
+    throw err;
+  } finally {
+    client.release(!clean);
   }
 }
 
@@ -1602,6 +1664,29 @@ const WAIT_ENDINGS: ReadonlySet<unknown> = new Set(['55P03', '57014', '40P01']);
 export function isLockWaitEnded(err: unknown): boolean {
   const e = unwrapDriverError(err);
   return e instanceof Error && 'code' in e && WAIT_ENDINGS.has(e.code);
+}
+
+/** SQLSTATE classes: data exception, integrity constraint, syntax error or access rule. */
+const STATEMENT_SQLSTATE = /^(?:22|23|42)[0-9A-Z]{3}$/;
+const STATEMENT_SQLITE = new Set(['SQLITE_TOOBIG', 'SQLITE_MISMATCH', 'SQLITE_ERROR']);
+
+/**
+ * True when the database refused the statement for what it says or holds (SQLSTATE class 22, 23 or 42,
+ * and SQLite's like), so the same one again is refused again. Anything else may pass: a restart or a
+ * failover is answered in many ways (57P03 while it starts, 25006 by the old primary, 53300, node's own
+ * errors without a SQLSTATE), so those are not what is listed (tl on
+ * https://github.com/bgoleno/opportun/issues/963).
+ */
+export function isStatementError(err: unknown): boolean {
+  const e = unwrapDriverError(err);
+  return (
+    e instanceof Error &&
+    'code' in e &&
+    typeof e.code === 'string' &&
+    (STATEMENT_SQLSTATE.test(e.code) ||
+      STATEMENT_SQLITE.has(e.code) ||
+      e.code.startsWith('SQLITE_CONSTRAINT'))
+  );
 }
 
 /** True when `err` is the driver's unique-constraint violation (a lost insert race). */
