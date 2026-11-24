@@ -47,6 +47,8 @@ const CANDIDATE = (title: string, location: string, id: string) => ({
   otherLocations: [],
 });
 
+const PARTLY = 'Large Workday board: showing the first 200 of 500 postings.';
+
 const NO_ATTACHMENTS = { items: [], total: 0 };
 
 function setup(routes: Record<string, unknown>) {
@@ -644,6 +646,29 @@ describe('Find posting', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  // #1016: both sentences end in one full stop, whichever of them are there.
+  it.each([
+    [{}, 'Staff Product Manager, SIEM'],
+    [{ note: PARTLY }, `Staff Product Manager, SIEM. ${PARTLY}`],
+    [{ keptDescription: true }, 'Staff Product Manager, SIEM. Your own description was kept.'],
+    [
+      { keptDescription: true, note: PARTLY },
+      `Staff Product Manager, SIEM. Your own description was kept. ${PARTLY}`,
+    ],
+  ])('the attached toast has one full stop between its sentences: %o', async (said, text) => {
+    setup({
+      'POST /opportunities/opp-1/find-posting': {
+        outcome: 'attached',
+        opportunity: { ...BARE, descriptionMd: 'What We Do: cybercrime is growing.' },
+        candidate: CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003'),
+        ...said,
+      },
+    });
+    renderWithProviders(<DetailsPanel opp={BARE} />);
+    await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+    expect(await toastRegion().findByText(text)).toBeInTheDocument();
   });
 
   it('lists candidates with their locations and attaches the chosen one', async () => {

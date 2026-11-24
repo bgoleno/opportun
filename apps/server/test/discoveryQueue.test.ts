@@ -1525,16 +1525,50 @@ describe('POST /discovery/results/:id/unsuppress (#11)', () => {
     expect(await pendingIds(app, a)).toHaveLength(1);
   });
 
-  it('is a 409 on a pending result', async () => {
+  // #927: its dismissal was undone in another tab, and this one still listed it as dismissed.
+  it('is a 409 on a result put back in the queue, and says so', async () => {
     const { app, a } = await boot();
     const id = await seedResult(app, a);
+    const post = (path: string, payload: Record<string, unknown>) =>
+      a.request({ method: 'POST', url: `/api/v1/discovery/results/${path}`, payload });
+    expect((await post(`${id}/dismiss`, {})).statusCode).toBe(200);
+    const undone = await post('bulk-undo-dismiss', { ids: [id] });
+    expect(undone.json().results).toEqual([{ id, outcome: 'restored' }]);
     const res = await a.request({
       method: 'POST',
       url: `/api/v1/discovery/results/${id}/unsuppress`,
       payload: {},
     });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.code).toBe('already_pending');
+    expect(res.json().error).toEqual({
+      code: 'already_pending',
+      message:
+        'This result is back in the review queue, so there is nothing to unsuppress. Decide on it there.',
+    });
+  });
+
+  it('is a 409 on an accepted result whose opportunity was deleted, and says so (#927)', async () => {
+    const { app, a } = await boot();
+    const id = await seedResult(app, a);
+    const accept = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${id}/accept`,
+      payload: {},
+    });
+    const oppId = accept.json().opportunityId as string;
+    const deleted = await a.request({ method: 'DELETE', url: `/api/v1/opportunities/${oppId}` });
+    expect(deleted.statusCode, deleted.body).toBe(204);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${id}/unsuppress`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toEqual({
+      code: 'no_linked_opportunity',
+      message:
+        "This result's opportunity was deleted, so it cannot be unsuppressed. If the job comes up again, add it with New opportunity in the pipeline.",
+    });
   });
 
   it('is a 409 the second time: nothing is left for it to release', async () => {
