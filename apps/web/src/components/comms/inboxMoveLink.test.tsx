@@ -2,9 +2,10 @@
 // (https://github.com/bgoleno/opportun/issues/895). The list reloads before an action's outcome is
 // reported, and a row that left with the reload took its callbacks with it: a refused Move said
 // nothing, and "Message linked", "Message unlinked" and "Moved to Needs review" never showed.
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
+import { pressEscapeOn } from '@/test/dialog';
 import { mockApi, renderWithProviders, toastRegion } from '@/test/render';
 import type { CommunicationView } from './api';
 import { Inbox } from './Inbox';
@@ -379,15 +380,12 @@ describe('an action whose dialog was closed before it answered (#919)', () => {
     return { answer, asking };
   }
 
-  /** As a browser does for Escape: the native dialog's close event (jsdom has none of its own). */
-  const escape = (dialog: HTMLElement) => fireEvent(dialog, new Event('close'));
-
   async function closeBy(
     how: 'Escape' | 'Cancel',
     user: ReturnType<typeof userEvent.setup>,
     dialog: HTMLElement,
   ) {
-    if (how === 'Escape') escape(dialog);
+    if (how === 'Escape') pressEscapeOn(dialog);
     else await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   }
