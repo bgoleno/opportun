@@ -33,6 +33,7 @@ type Mode = 'url' | 'text';
 type Failure =
   | { kind: 'paste_text'; hint: string }
   | { kind: 'ai_unavailable'; hint: string }
+  | { kind: 'decided'; message: string }
   | { kind: 'other'; message: string };
 
 const TEXT_MAX = 200_000;
@@ -92,6 +93,8 @@ function toFailure(err: unknown): Failure {
         hint: hintOf(err, 'AI extraction is unavailable. Add the posting by hand instead.'),
       };
     }
+    // The lead was completed or decided somewhere else (#968): no second try can succeed.
+    if (err.code === 'not_capturable') return { kind: 'decided', message: errorMessage(err) };
     if (err.code === 'duplicate') {
       return { kind: 'other', message: 'That posting is already in your queue or pipeline.' };
     }
@@ -237,7 +240,9 @@ export function CaptureDialog(props: {
             </FormField>
           )}
 
-          {failure?.kind === 'other' ? <FormError message={failure.message} /> : null}
+          {failure?.kind === 'other' || failure?.kind === 'decided' ? (
+            <FormError message={failure.message} />
+          ) : null}
           {failure?.kind === 'paste_text' ? (
             <div
               role="alert"
@@ -282,7 +287,7 @@ export function CaptureDialog(props: {
             <Button type="button" variant="outline" onClick={props.onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={capture.isPending}>
+            <Button type="submit" disabled={capture.isPending || failure?.kind === 'decided'}>
               {capture.isPending ? 'Capturing...' : 'Capture'}
             </Button>
           </DialogFooter>

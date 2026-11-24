@@ -5,24 +5,24 @@
 // decided on can silently disappear -- narrowing the dedupe key itself was rejected for exactly
 // that risk (see the issue). Every member stays its own row underneath; this only decides how
 // many cards the queue renders.
+import { cardKey } from '@opportun/core';
 import type { DiscoveryResult } from './api';
 
 export interface ResultGroup {
-  /** dedupeKey's company+title segments, with the location segment dropped. Unique per member
-   *  when a result has no dedupeKey (should not happen for a pending row, but never assumed),
-   *  so a keyless result always gets its own singleton group. */
+  /** The card's key (@opportun/core cardKey): one company and one whole title, whatever the
+   *  location. Unique per member when a result has no dedupeKey (should not happen for a pending
+   *  row, but never assumed), so a keyless result always gets its own singleton group. */
   key: string;
   members: readonly DiscoveryResult[];
 }
 
-/** `dedupeKey`'s normalize() only narrows to `[a-z0-9 ]`, so `|` never appears in its company or
- *  title segments: splitting on `|` and keeping the first two segments is a safe way to drop
- *  only the location segment, not a heuristic over the posting's own text. */
 function groupKeyOf(r: DiscoveryResult): string {
-  return r.dedupeKey === null ? `#${r.id}` : r.dedupeKey.split('|').slice(0, 2).join('|');
+  return r.dedupeKey === null
+    ? `#${r.id}`
+    : cardKey(r.dedupeKey, r.posting.company, r.posting.title);
 }
 
-/** Groups results sharing a company+title key, preserving the incoming order: groups appear in
+/** Groups the results of one card (cardKey), preserving the incoming order: groups appear in
  *  the order their first member was seen, and members keep their relative order within a group
  *  (the queue's own list is already best-AI-score-first, so both stay sorted that way too). */
 export function groupResults(items: readonly DiscoveryResult[]): ResultGroup[] {

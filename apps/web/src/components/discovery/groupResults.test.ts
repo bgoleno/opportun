@@ -5,6 +5,7 @@
 // narrowing the dedupe key itself would risk (see the issue and PurgeCard-style three-state
 // precedent this session already applied elsewhere for the same "don't hide a real state"
 // reason).
+import { dedupeKey } from '@opportun/core';
 import { describe, expect, it } from 'vitest';
 import type { DiscoveryResult } from './api';
 import { groupResults } from './groupResults';
@@ -41,7 +42,7 @@ function result(over: Partial<DiscoveryResult> & { id: string }): DiscoveryResul
 }
 
 describe('groupResults', () => {
-  it('groups results sharing a company+title dedupeKey prefix, dropping only the location segment', () => {
+  it('groups results of one role, whatever the location segment of their key', () => {
     // The real shape measured on the live instance (issue #191): three states, one role.
     const ca = result({
       id: 'r-ca',
@@ -58,7 +59,6 @@ describe('groupResults', () => {
     });
     const groups = groupResults([ca, co, nc]);
     expect(groups).toHaveLength(1);
-    expect(groups[0]?.key).toBe('vandelay|technical product manager enterprise products');
     expect(groups[0]?.members).toEqual([ca, co, nc]);
   });
 
@@ -76,13 +76,7 @@ describe('groupResults', () => {
       dedupeKey: 'globex networks|senior product manager chronosphere|boston ma',
     });
     const groups = groupResults([pm, pm2, chrono]);
-    expect(groups).toHaveLength(2);
-    expect(groups.find((g) => g.key === 'globex networks|senior product manager')?.members).toEqual(
-      [pm, pm2],
-    );
-    expect(
-      groups.find((g) => g.key === 'globex networks|senior product manager chronosphere')?.members,
-    ).toEqual([chrono]);
+    expect(groups.map((g) => g.members)).toEqual([[pm, pm2], [chrono]]);
   });
 
   it('keeps a result with no dedupeKey in its own group rather than merging it with anything', () => {
@@ -101,17 +95,30 @@ describe('groupResults', () => {
     const b2 = result({ id: 'b2', aiScore: 70, dedupeKey: 'b|t|loc2' });
     // Incoming order is already best-score-first; b1 appears before a1, so b's group is first.
     const groups = groupResults([b1, a1, b2]);
-    expect(groups.map((g) => g.key)).toEqual(['b|t', 'a|t']);
-    expect(groups[0]?.members).toEqual([b1, b2]);
+    expect(groups.map((g) => g.members)).toEqual([[b1, b2], [a1]]);
   });
 
   it('returns a singleton group for a result that shares no key with anything else', () => {
     const solo = result({ id: 'solo', dedupeKey: 'acme|engineer|remote' });
     const groups = groupResults([solo]);
-    expect(groups).toEqual([{ key: 'acme|engineer', members: [solo] }]);
+    expect(groups.map((g) => g.members)).toEqual([[solo]]);
   });
 
   it('returns no groups for an empty list', () => {
     expect(groupResults([])).toEqual([]);
+  });
+
+  it('draws levels of one title as two cards, and Sr with Senior as one (#968)', () => {
+    const at = (id: string, title: string, location: string) =>
+      result({
+        id,
+        posting: { company: 'Initech', title, postingUrl: null, location },
+        dedupeKey: dedupeKey('Initech', title, location),
+      });
+    const senior = at('s', 'Senior Engineer', 'Austin');
+    const sr = at('sr', 'Sr. Engineer', 'Boston');
+    const principal = at('p', 'Principal Engineer', 'Austin');
+    const groups = groupResults([senior, principal, sr]);
+    expect(groups.map((g) => g.members.map((m) => m.id))).toEqual([['s', 'sr'], ['p']]);
   });
 });
