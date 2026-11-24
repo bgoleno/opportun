@@ -48,7 +48,7 @@ import {
 } from '../db/schema';
 import { postingAtsJobRefKeeping } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
-import { lockAttemptsOf, lockLiveAttempt, markPostingChanged } from './submissions';
+import { attemptIdsOf, lockAttemptsOf, lockLiveAttempt, markPostingChanged } from './submissions';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
 import { lastActivityAt } from './activities';
@@ -63,7 +63,14 @@ import {
   removeFromIndex,
   removeOpportunityFromIndex,
 } from './search';
-import { lockScope, rawAll, rawGet, runCount, withTransaction } from '../db/client';
+import {
+  isUniqueViolation,
+  lockScope,
+  rawAll,
+  rawGet,
+  runCount,
+  withTransaction,
+} from '../db/client';
 
 export type OpportunityRow = typeof opportunities.$inferSelect;
 /**
@@ -631,6 +638,9 @@ export async function updateOpportunity(
   });
 }
 
+/** How many cards one statement of a reorder writes. */
+const REORDER_STATEMENT = 500;
+
 export interface ReorderChange {
   id: string;
   sortOrder: number;
@@ -659,8 +669,29 @@ export async function reorderOpportunities(
     // The rows are written in the caller's order, and a merge holds two of them (#920).
     await lockScope(tx, userScope(ctx));
     const now = Date.now();
-    for (const { id, sortOrder } of changes) {
-      await tx.update(opportunities).set({ sortOrder, updatedAt: now }).where(owned(ctx, id)).run();
+    // The last value for an id that is there twice, as one statement after another gave.
+    const places = [...new Map(changes.map((c) => [c.id, c.sortOrder]))];
+    // In statements of 500, not one a card: the user's lock is held for the whole of it, a capture
+    // waits 5 s for that lock, and 2,000 round trips to a database in another zone take longer (#944).
+    for (let i = 0; i < places.length; i += REORDER_STATEMENT) {
+      const part = places.slice(i, i + REORDER_STATEMENT);
+      const place = sql.join(
+        part.map(([id, sortOrder]) => sql`WHEN ${id} THEN CAST(${sortOrder} AS integer)`),
+        sql` `,
+      );
+      await tx
+        .update(opportunities)
+        .set({ sortOrder: sql`CASE ${opportunities.id} ${place} END`, updatedAt: now })
+        .where(
+          and(
+            ownedBy(opportunities.userId, ctx),
+            inArray(
+              opportunities.id,
+              part.map(([id]) => id),
+            ),
+          ),
+        )
+        .run();
     }
   });
 }
@@ -876,10 +907,55 @@ async function activityIdsForUpdate(tx: Exec, ctx: UserCtx, id: string): Promise
   return rows.map((r) => r.id);
 }
 
+/** An attempt whose lock this transaction doesn't hold is on the opportunity that is going. */
+class AttemptMade extends Error {}
+/** How often a merge or a delete starts over for one: a live attempt is one at a time. */
+const ATTEMPT_TRIES = 3;
+
+/**
+ * A merge or a delete takes the locks of the attempts there are and then waits for the user's, and
+ * an attempt can be made in between (#944). It can't be locked then: an attempt's lock comes before
+ * the rows. So the transaction is rolled back, and starts over with that attempt among them.
+ */
+async function withEveryAttempt<T>(run: () => Promise<T>): Promise<T> {
+  for (let tries = 1; ; tries += 1) {
+    try {
+      return await run();
+    } catch (err) {
+      if (!(err instanceof AttemptMade)) throw err;
+      if (tries === ATTEMPT_TRIES) {
+        throw new HttpError(
+          409,
+          'conflict',
+          'An application was started on this opportunity meanwhile. Try again.',
+          undefined,
+          { userFacing: true },
+        );
+      }
+    }
+  }
+}
+
+/** Once the row of the one that is going is locked, none can be made on it: are all of them held? */
+async function assertAttemptsHeld(
+  tx: Exec,
+  ctx: UserCtx,
+  id: string,
+  held: ReadonlySet<string>,
+): Promise<void> {
+  const ids = await attemptIdsOf(tx, ctx, [id]);
+  if (ids.some((attempt) => !held.has(attempt))) throw new AttemptMade();
+}
+
 export async function deleteOpportunity(db: Db, ctx: UserCtx, id: string): Promise<void> {
+  await withEveryAttempt(() => deleteOnce(db, ctx, id));
+}
+
+async function deleteOnce(db: Db, ctx: UserCtx, id: string): Promise<void> {
   await withTransaction(db, async (tx) => {
     // Its attempts' locks before any row write: the delete cascades to them (#173).
-    await lockAttemptsOf(tx, ctx, [id]);
+    const held = await lockAttemptsOf(tx, ctx, [id]);
+    await racePoint('opportunities.attempts.locked');
     // The user's lock first of the rest (#920): whatever writes or names two opportunities, or a
     // message and then its opportunity, has it, and the delete reaches those rows the other way.
     await lockScope(tx, userScope(ctx));
@@ -888,6 +964,7 @@ export async function deleteOpportunity(db: Db, ctx: UserCtx, id: string): Promi
     // wait for the other (40P01, #917). Locked FOR UPDATE, so an activity being added (its foreign
     // key holds the row) is committed before they are read, and none can be added after.
     if (!(await lockOpportunityRow(tx, ctx, id, true))) throw notFound();
+    await assertAttemptsHeld(tx, ctx, id, held);
     await racePoint('opportunities.delete.locked');
     // Read, and left for the cascade to delete: a DELETE of their own would set null the attempts'
     // links to them there and then, and so have the attempts' rows before the cascade has reached
@@ -922,11 +999,76 @@ export async function mergeOpportunities(
   otherId: string,
 ): Promise<OpportunityView> {
   if (keepId === otherId) throw new HttpError(422, 'merge_self');
+  try {
+    return await withEveryAttempt(() => mergeOnce(db, ctx, keepId, otherId));
+  } catch (err) {
+    // An application being started on the kept one isn't there to be read yet, and its index entry
+    // is (#944). It is the same conflict; the start wins, and nothing was merged.
+    if (!metLiveIndex(err)) throw err;
+    await racePoint('opportunities.merge.indexMet');
+    const other = await liveAttempt(db, ctx, otherId);
+    if (other !== undefined && (await liveAttempt(db, ctx, keepId)) !== undefined) {
+      throw liveConflict(other.id);
+    }
+    // One of the two was given up since. The race is over: as a start that lost one answers.
+    throw new HttpError(
+      409,
+      'conflict',
+      'Another request changed this application. Try again.',
+      undefined,
+      { userFacing: true },
+    );
+  }
+}
+
+/**
+ * Two live attempts of one opportunity met on their index. Postgres names it. SQLite has no such
+ * error here: its write gate lets no start in while a merge runs.
+ */
+const metLiveIndex = (err: unknown): boolean =>
+  isUniqueViolation(err) &&
+  (err as { constraint?: unknown }).constraint === 'application_submissions_live_uq';
+
+/** The opportunity's live attempt: it can have one (application_submissions_live_uq). */
+async function liveAttempt(
+  exec: Exec,
+  ctx: UserCtx,
+  opportunityId: string,
+): Promise<{ id: string } | undefined> {
+  return await exec
+    .select({ id: applicationSubmissions.id })
+    .from(applicationSubmissions)
+    .where(
+      and(
+        ownedBy(applicationSubmissions.userId, ctx),
+        eq(applicationSubmissions.opportunityId, opportunityId),
+        inArray(applicationSubmissions.status, ['draft', 'reviewed', 'handed_off']),
+      ),
+    )
+    .get();
+}
+
+const liveConflict = (submissionId: string): HttpError =>
+  new HttpError(
+    409,
+    'live_submission_conflict',
+    'Both opportunities have an open application. Cancel one of them before merging.',
+    { submissionId },
+    { userFacing: true },
+  );
+
+async function mergeOnce(
+  db: Db,
+  ctx: UserCtx,
+  keepId: string,
+  otherId: string,
+): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
     // Every attempt's lock, live or not, before anything is moved or deleted (lock order:
     // submissionScope), in a fixed order so two merges cannot wait on each other: a posting
     // change marks a live attempt, and mail ingest confirms a submitted one (#173).
-    await lockAttemptsOf(tx, ctx, [keepId, otherId]);
+    const held = await lockAttemptsOf(tx, ctx, [keepId, otherId]);
+    await racePoint('opportunities.attempts.locked');
     // The user's lock (#920), then both rows, in the delete's order and before anything is read: an
     // add or a link to the other one, or a save of either, is done before the merge and goes with it,
     // or waits and finds the other gone. The kept one stays, so what only names it goes on: a resume
@@ -936,6 +1078,8 @@ export async function mergeOpportunities(
     for (const id of [keepId, otherId].sort()) {
       if (!(await lockOpportunityRow(tx, ctx, id, id === otherId))) throw notFound();
     }
+    // The kept one's are not moved, and one can be started on it all along.
+    await assertAttemptsHeld(tx, ctx, otherId, held);
     await racePoint('opportunities.merge.locked');
     const keep = await getViewSync(tx, ctx, keepId);
     const other = await getViewSync(tx, ctx, otherId);
@@ -945,27 +1089,9 @@ export async function mergeOpportunities(
     // opportunity may have one live attempt (application_submissions_live_uq), so when both
     // have one the merge is refused, naming the other's, and the user cancels one first. Nothing
     // is decided for them: either attempt may hold answers they want to keep.
-    const liveOf = (opportunityId: string) =>
-      tx
-        .select({ id: applicationSubmissions.id })
-        .from(applicationSubmissions)
-        .where(
-          and(
-            ownedBy(applicationSubmissions.userId, ctx),
-            eq(applicationSubmissions.opportunityId, opportunityId),
-            inArray(applicationSubmissions.status, ['draft', 'reviewed', 'handed_off']),
-          ),
-        )
-        .get();
-    const otherLive = await liveOf(otherId);
-    if (otherLive !== undefined && (await liveOf(keepId)) !== undefined) {
-      throw new HttpError(
-        409,
-        'live_submission_conflict',
-        'Both opportunities have an open application. Cancel one of them before merging.',
-        { submissionId: otherLive.id },
-        { userFacing: true },
-      );
+    const otherLive = await liveAttempt(tx, ctx, otherId);
+    if (otherLive !== undefined && (await liveAttempt(tx, ctx, keepId)) !== undefined) {
+      throw liveConflict(otherLive.id);
     }
     const [movedAttempts] = await tx
       .select({ n: count() })

@@ -44,7 +44,7 @@ async function seedOpportunity(
 ): Promise<string> {
   const opp = await createOpportunity(app.db, ctxOf(c), {
     companyName: 'Example Corp',
-    title: opts.title ?? `Senior Example Engineer ${newId().slice(-6)}`,
+    title: opts.title ?? `Senior Example Engineer ${newId()}`,
     sourceKind: 'manual',
   });
   await app.db

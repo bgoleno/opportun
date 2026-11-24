@@ -57,7 +57,7 @@ interface SubmissionJson {
 async function draft(app: FastifyInstance, c: TestClient, start: AtsJobRef = OLD_REF) {
   const opp = await createOpportunity(app.db, ctxOf(c), {
     companyName: 'Example Corp',
-    title: `Senior Example Engineer ${newId().slice(-6)}`,
+    title: `Senior Example Engineer ${newId()}`,
     sourceKind: 'manual',
   });
   await app.db
@@ -387,7 +387,7 @@ describe('lock order: the attempt, then the user, then rows (tl on #154; the dea
     const d = await draft(app, a); // the live attempt is on d.oppId, the one merged away
     const keep = await createOpportunity(app.db, ctxOf(a), {
       companyName: 'Example Corp',
-      title: `Senior Example Engineer ${newId().slice(-6)}`,
+      title: `Senior Example Engineer ${newId()}`,
       sourceKind: 'manual',
     });
     const [merged, e] = await heldApart(
