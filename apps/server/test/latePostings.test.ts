@@ -19,6 +19,7 @@ import {
   insertResult,
   prefilterRecall,
 } from '../src/repos/discovery';
+import { isLockTimeout } from '../src/db/client';
 import { onSlowTransaction } from '../src/db/gate';
 import { pipelineText } from '../src/jobs/companySuggest';
 import { previewPurge } from '../src/jobs/purge';
@@ -1475,11 +1476,12 @@ describe('ingest and what else writes the role, in each order', () => {
     const deleting = remove(a, id);
     await pause.reached;
     const source = await ensureChannelSource(app.db, ctxOf(a), 'manual');
-    const began = performance.now();
-    await expect(
-      insertLeads(app.db, ctxOf(a), [LATE], source.id, undefined, { lockTimeoutMs: 200 }),
-    ).rejects.toThrow();
-    expect(performance.now() - began).toBeLessThan(5000);
+    // Ended by that bound (55P03), not by the statement's, 30 s (57014): the code says which, where a
+    // busy host's clock could not (#948).
+    const ended = await insertLeads(app.db, ctxOf(a), [LATE], source.id, undefined, {
+      lockTimeoutMs: 200,
+    }).catch((err: unknown) => err);
+    expect(isLockTimeout(ended), String(ended)).toBe(true);
     pause.release();
     expect((await deleting).statusCode).toBeLessThan(300);
   });

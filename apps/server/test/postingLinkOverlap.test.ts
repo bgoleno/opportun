@@ -6,7 +6,7 @@
 // board gets its own share of the budget; and a save that ran out of time before its boards
 // answered leaves a one-off job to finish the check.
 import { eq } from 'drizzle-orm';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { jobs, opportunities } from '../src/db/schema';
 import {
   POSTING_CHECK_KIND,
@@ -152,6 +152,9 @@ describe('each board gets its own share of the check budget (#685 criterion 2)',
   it('a first board that hangs leaves the second its time, and the second gives the identity', async () => {
     const { app, a } = await boot();
     const { ctx, opp } = await companyWithBoards(app, a, ['hangs', 'holds', 'third']);
+    // The budget's clock stands still but for the board that hangs: a busy host spends none (#948).
+    vi.useFakeTimers({ toFake: ['Date'] });
+    onTestFinished(() => void vi.useRealTimers());
     const gh = greenhouse((token) =>
       token === 'hangs' ? new Promise<'fail'>(() => {}) : token === 'holds' ? 'yes' : 'no',
     );
@@ -159,7 +162,7 @@ describe('each board gets its own share of the check budget (#685 criterion 2)',
     const fetch = (async (url: string, init?: { timeoutMs?: number }) => {
       if (url.includes('/boards/hangs/')) {
         gh.asked.push({ token: 'hangs', jid: '7101', timeoutMs: init?.timeoutMs });
-        await new Promise((r) => setTimeout(r, init?.timeoutMs ?? 1000));
+        vi.setSystemTime(Date.now() + (init?.timeoutMs ?? 1000));
         throw new Error('timeout');
       }
       return gh.fetch(url, init as never);
@@ -176,7 +179,8 @@ describe('each board gets its own share of the check budget (#685 criterion 2)',
     expect(ref).toMatchObject({ org: 'holds', externalId: '7101' });
     expect(gh.asked.map((x) => x.token)).toEqual(['hangs', 'holds']);
     // The first board's share: a third of the budget, not all of it.
-    expect(gh.asked[0]!.timeoutMs).toBeLessThanOrEqual(100);
+    expect(gh.asked[0]!.timeoutMs).toBe(100);
+    expect(gh.asked[1]!.timeoutMs).toBe(100);
   });
 });
 

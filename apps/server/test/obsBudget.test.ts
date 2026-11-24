@@ -19,6 +19,7 @@ import { observeOutbound } from '../src/obs/outbound';
 import { useApi } from './api';
 import { countRows } from './db';
 import { useInMemoryTracing } from './otelProvider';
+import { cpuMs } from './scaling';
 
 const boot = useApi();
 const exporter = useInMemoryTracing();
@@ -57,14 +58,15 @@ describe('collection off: the budget of 14.11 (#343)', () => {
     const N = 100_000;
     const send = async () => ({ status: 200 });
     const call = { target: 'public_site' as const, method: 'GET', url: 'https://example.com' };
-    const started = performance.now();
+    // CPU time, which a busy host does not add to (#948).
+    const started = cpuMs();
     for (let i = 0; i < N; i += 1) {
       observeStatement('sqlite', 'SELECT 1', () => i);
       obs.record('db.client.operation.duration', 0.001, { 'db.system.name': 'sqlite' });
       obs.startSpan('http.server', {}).end();
     }
     for (let i = 0; i < N; i += 1) await observeOutbound(call, send);
-    const elapsed = performance.now() - started;
+    const elapsed = cpuMs() - started;
     // About a microsecond a call is the budget. 4 seconds for these 400,000 calls (the awaited
     // ones included) is a wide margin that still fails if a disabled call starts timing,
     // gating, aggregating or opening a span.
