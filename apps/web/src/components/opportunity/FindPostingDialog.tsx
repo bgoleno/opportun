@@ -154,7 +154,7 @@ export function FindPostingDialog({
     }
   }
 
-  /** What was agreed to the search was about the board's copy: other text is asked about anew. */
+  /** The search's agreement was for the board's copy: any other text is asked about anew. */
   async function paste(body: AttachPostingVars, title: string) {
     const atStake = descriptionAtStake(opp);
     if (atStake === null) return await send(body, title);
