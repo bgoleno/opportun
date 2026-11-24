@@ -325,77 +325,119 @@ describe.runIf(testDialect === 'postgres')('a Postgres connection that ends (#96
     const one = (db: Exec) => rawGet<{ v: number }>(db, sql`SELECT 1 AS v`);
     const transaction = (db: Db) => withTransaction(db, (tx) => one(tx));
 
+    /** The pool's connections all given back or gone, none waited for, and no more than `max`. */
+    const whole = (pool: pg.Pool, max: number) => {
+      expect([pool.idleCount, pool.waitingCount]).toEqual([pool.totalCount, 0]);
+      expect(pool.totalCount).toBeLessThanOrEqual(max);
+    };
+    /** poolMax and one more transactions, one after another and at once, and a lone statement. */
+    async function serves(pool: pg.Pool, db: Db, max: number): Promise<void> {
+      const all = Array.from({ length: max + 1 }, () => ({ v: 1 }));
+      for (const v of all) expect(await transaction(db)).toEqual(v);
+      expect(await Promise.all(all.map(() => transaction(db)))).toEqual(all);
+      expect(await one(db)).toEqual({ v: 1 });
+      whole(pool, max);
+    }
+    /** Passes `client`'s statements on, except the ones `fails` names. */
+    function failing(client: pg.PoolClient, fails: (text: string) => boolean, why: string) {
+      const query = client.query.bind(client) as (...args: unknown[]) => unknown;
+      const patched = ((...args: unknown[]) =>
+        fails((args[0] as { text?: string }).text ?? '')
+          ? Promise.reject(new Error(why))
+          : query(...args)) as never;
+      client.query = patched;
+      return () => client.query === patched;
+    }
+    const max = 2;
+
     it('when it has ended before BEGIN: the pool serves poolMax and one more after', async () => {
-      const max = 2;
       const { by, pool, db, taken } = await small(max);
       taken.as = async (client) => {
         const { rows } = await client.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
         await by.query('SELECT pg_terminate_backend($1)', [rows[0]!.pid]);
         await settle();
       };
-      for (let i = 0; i < max + 1; i += 1) await expect(transaction(db)).rejects.toThrow();
+      for (let i = 0; i < max + 1; i += 1) {
+        await expect(transaction(db)).rejects.toThrow();
+        whole(pool, max);
+      }
       taken.as = async () => undefined;
-      for (let i = 0; i < max + 1; i += 1) expect(await transaction(db)).toEqual({ v: 1 });
-      expect(await Promise.all([transaction(db), transaction(db), transaction(db)])).toHaveLength(
-        3,
-      );
-      expect(await one(db)).toEqual({ v: 1 });
-      expect([pool.idleCount, pool.waitingCount]).toEqual([pool.totalCount, 0]);
+      await serves(pool, db, max);
       expect(crashes).toEqual([]);
     }, 60_000);
 
     it('when BEGIN fails on a live one: it is not used again', async () => {
-      const { pool, db, taken } = await small(1);
-      let first: pg.PoolClient | undefined;
+      const { pool, db, taken } = await small(max);
+      const failed = new Set<pg.PoolClient>();
+      const untouched: (() => boolean)[] = [];
       taken.as = async (client) => {
-        first = client;
-        const query = client.query.bind(client) as (...args: unknown[]) => unknown;
-        client.query = (() => {
-          client.query = query as never;
-          return Promise.reject(new Error('BEGIN failed'));
-        }) as never;
+        failed.add(client);
+        untouched.push(failing(client, (text) => text.startsWith('begin'), 'BEGIN failed'));
       };
-      await expect(transaction(db)).rejects.toThrow('BEGIN failed');
-      let next: pg.PoolClient | undefined;
+      for (let i = 0; i < max + 1; i += 1) {
+        await expect(transaction(db)).rejects.toThrow('BEGIN failed');
+        whole(pool, max);
+      }
+      expect(failed.size).toBe(max + 1);
+      expect(untouched.map((same) => same())).toEqual([true, true, true]);
+      let reused = 0;
       taken.as = async (client) => {
-        next = client;
+        if (failed.has(client)) reused += 1;
       };
-      expect(await transaction(db)).toEqual({ v: 1 });
-      expect(next === first).toBe(false);
-      expect([pool.totalCount, pool.idleCount]).toEqual([1, 1]);
+      await serves(pool, db, max);
+      expect(reused).toBe(0);
     });
 
     it('when ROLLBACK fails on a live one: it is not used again, with its transaction open', async () => {
-      const { pool, db, taken } = await small(1);
-      let first: pg.PoolClient | undefined;
+      const { pool, db, taken } = await small(max);
+      const failed = new Set<pg.PoolClient>();
+      const untouched: (() => boolean)[] = [];
       taken.as = async (client) => {
-        first = client;
-        const query = client.query.bind(client) as (...args: unknown[]) => unknown;
-        client.query = ((...args: unknown[]) =>
-          (args[0] as { text?: string }).text === 'rollback'
-            ? Promise.reject(new Error('ROLLBACK failed'))
-            : query(...args)) as never;
+        failed.add(client);
+        untouched.push(failing(client, (text) => text === 'rollback', 'ROLLBACK failed'));
       };
-      await expect(
-        withTransaction(db, async (tx) => {
-          await one(tx);
-          throw new Error('undo');
-        }),
-      ).rejects.toThrow('ROLLBACK failed');
-      let next: pg.PoolClient | undefined;
+      for (let i = 0; i < max + 1; i += 1) {
+        await expect(
+          withTransaction(db, async (tx) => {
+            await one(tx);
+            throw new Error('undo');
+          }),
+        ).rejects.toThrow('ROLLBACK failed');
+        whole(pool, max);
+      }
+      expect(failed.size).toBe(max + 1);
+      expect(untouched.map((same) => same())).toEqual([true, true, true]);
+      let reused = 0;
       taken.as = async (client) => {
-        next = client;
+        if (failed.has(client)) reused += 1;
       };
-      expect(await transaction(db)).toEqual({ v: 1 });
-      expect(next === first).toBe(false);
-      expect([pool.totalCount, pool.idleCount]).toEqual([1, 1]);
+      await serves(pool, db, max);
+      expect(reused).toBe(0);
+    });
+
+    it('when COMMIT fails on a live one: it is not used again', async () => {
+      const { pool, db, taken } = await small(max);
+      const failed = new Set<pg.PoolClient>();
+      taken.as = async (client) => {
+        failed.add(client);
+        failing(client, (text) => text === 'commit', 'COMMIT failed');
+      };
+      for (let i = 0; i < max + 1; i += 1) {
+        await expect(transaction(db)).rejects.toThrow('COMMIT failed');
+        whole(pool, max);
+      }
+      expect(failed.size).toBe(max + 1);
+      taken.as = async () => undefined;
+      await serves(pool, db, max);
     });
 
     it('an ordinary one, committed or rolled back, goes back and is used again', async () => {
       const { pool, db, taken } = await small(1);
-      const clients: unknown[] = [];
+      const clients: pg.PoolClient[] = [];
+      const queries: unknown[] = [];
       taken.as = async (client) => {
         clients.push(client);
+        queries.push(client.query);
       };
       expect(await transaction(db)).toEqual({ v: 1 });
       await expect(
@@ -407,10 +449,15 @@ describe.runIf(testDialect === 'postgres')('a Postgres connection that ends (#96
       await expect(withTransaction(db, (tx) => rawGet(tx, sql`SELECT 1 / 0 AS v`))).rejects.toThrow(
         'division by zero',
       );
+      // A body that goes on after a failed statement: Postgres answers its COMMIT with a ROLLBACK,
+      // which is no error.
+      await withTransaction(db, (tx) => rawGet(tx, sql`SELECT 1 / 0 AS v`).catch(() => undefined));
       expect(await transaction(db)).toEqual({ v: 1 });
+      expect(clients).toHaveLength(5);
       expect(new Set(clients).size).toBe(1);
-      expect(clients).toHaveLength(4);
-      expect([pool.totalCount, pool.idleCount]).toEqual([1, 1]);
+      // What watches a transaction's statements is off the connection when it goes back.
+      expect(new Set([...queries, clients[0]!.query]).size).toBe(1);
+      expect([pool.totalCount, pool.idleCount, pool.waitingCount]).toEqual([1, 1, 0]);
     });
 
     it('one on the database inside another is still refused', async () => {

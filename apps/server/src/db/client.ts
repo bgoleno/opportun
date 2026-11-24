@@ -1332,9 +1332,9 @@ const ownDatabases = new WeakMap<pg.PoolClient, PgDb>();
 
 /**
  * Drizzle's transaction on a connection taken here, and given back here whatever happens
- * (https://github.com/bgoleno/opportun/issues/963). Drizzle's own pooled one runs BEGIN outside its
- * try: a connection that has ended by then was never given back, and poolMax of them left nothing to
- * serve with. It is handed to another caller only after a COMMIT, or a ROLLBACK, that worked (drizzle
+ * (https://github.com/bgoleno/opportun/issues/963), and not conn.raw.transaction: drizzle's own pooled
+ * one (0.45.4) runs BEGIN outside its try, so a connection that has ended by then was never given
+ * back, and poolMax of them left nothing to serve with. It is handed to another caller only after a COMMIT, or a ROLLBACK, that worked (drizzle
  * then throws the body's own error): one whose BEGIN, COMMIT or ROLLBACK failed is destroyed, as its
  * transaction may still be open.
  */
