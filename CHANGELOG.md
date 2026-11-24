@@ -212,6 +212,41 @@ merged after it.
   spelled out). The side navigation no longer moves the page when a card above leaves the list
   ([#968](https://github.com/bgoleno/opportun/issues/968); PR
   [#976](https://github.com/bgoleno/opportun/pull/976)).
+- **Capture: a captured posting ends its Discovery card, and the extension says what happened.**
+  A capture of a job that has a card in Discovery accepts that card, and every other pending result
+  of the same card, into the one opportunity, each on its timeline. An opportunity the capture
+  creates is at Interested in the same step, so "created, but not moved" can no longer happen. The
+  match also finds the card through another address for the same job, such as a LinkedIn
+  `/jobs/view/<words>-<id>` link. A description is filled in only while it is still the one the
+  capture read; your own text is kept. The extension answers in one sentence for each case, including
+  when the server is busy, shows a working line while it waits, and on a tab at another address
+  of a capture site, such as `m.linkedin.com` or `uk.indeed.com`, says that nothing was read or sent.
+  The browser extension and pipeline guides describe it
+  ([#956](https://github.com/bgoleno/opportun/issues/956); PR
+  [#980](https://github.com/bgoleno/opportun/pull/980)).
+- **Discovery: a posting of a job already in the pipeline makes no card and no second
+  opportunity.** A posting for the very job you captured (the same id on the same site) is refused
+  as a duplicate, with nothing stored. A posting of the same company and whole title in another
+  location, while that opportunity is open, is stored as accepted into it, with one timeline entry
+  and nothing else changed, and the run history counts it as linked. Another level of the title is
+  a card of its own, and a closed or dismissed role gives a card. Accept on a card that is already
+  there attaches it to the opportunity, or asks when another opportunity holds the same key.
+  Capture posting answers a duplicate with a link, **View opportunity**. Decided shows "Linked to an
+  opportunity already there". A board's next run can bring cards for another level of a title that
+  were dropped as duplicates before
+  ([#971](https://github.com/bgoleno/opportun/issues/971),
+  [#967](https://github.com/bgoleno/opportun/issues/967); PR
+  [#985](https://github.com/bgoleno/opportun/pull/985)).
+
+### Dialogs
+
+- **Dialogs: a button pressed just as a dialog closes opens its own dialog, which no longer closes
+  at once, and Escape asks like the X does.** Before, the late close of the first dialog closed the
+  second. After Capture posting, Find posting, a resume's Delete or Archive, two-factor setup, the
+  show-once token, the temporary password or the follow confirmation closes, the keyboard is back
+  on the button that opened it. Escape asks the dialog's parent, as the X and the backdrop do
+  ([#975](https://github.com/bgoleno/opportun/issues/975); PR
+  [#986](https://github.com/bgoleno/opportun/pull/986)).
 
 ### Server and database
 
