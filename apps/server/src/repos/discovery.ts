@@ -634,9 +634,11 @@ const OPEN_STAGES = OPPORTUNITY_STAGES.filter((s) => s !== 'closed' && s !== 'di
 /**
  * The open opportunity of the card (cardKey, #968) this posting is of, if there is one; the oldest,
  * if several: one whose own company and title make that card, or one a result of that card was
- * accepted into (issue #226). When one holds the posting's very key, none is found by its own company
- * and title: that is `duplicate`, at ingest and at Accept, which asks (tl on #967). An opportunity made
- * by Create anyway has no stored key, so only its result finds it. Scoped to THIS user's own data, the same as every other lookup in this file.
+ * accepted into (issue #226). When one of the first holds the posting's very key, none is found by its
+ * own company and title: that is `duplicate`, at ingest and at Accept, which asks (tl on
+ * https://github.com/bgoleno/opportun/issues/967). An opportunity made by Create anyway has no stored
+ * key, so only its result finds it. Scoped to THIS user's own data, the same as every other lookup in
+ * this file.
  * Takes the posting's stored key and the posting.
  *
  * Both scans are the stored key's company and title (dedupeGroupKey, issue #209), and cardKey then
@@ -694,17 +696,25 @@ export async function findChainTarget(
       ),
     )
     .all();
-  // The holder of the posting's own key is the question Accept asks (createOpportunity's duplicate).
-  const asked = own.some(({ dedupeKey }) => dedupeKey === storedKey);
-  const [oldest] = [...(asked ? [] : own), ...accepted]
-    .filter(
+  const ofCard = <
+    T extends { dedupeKey: string | null; company: string | null; title: string | null },
+  >(
+    rows: T[],
+  ): T[] =>
+    rows.filter(
       ({ dedupeKey, company, title }) =>
         dedupeKey !== null &&
         company !== null &&
         title !== null &&
         cardKey(dedupeKey, company, title) === card,
-    )
-    .sort((x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1));
+    );
+  const byOwn = ofCard(own);
+  // The holder of the posting's own key is the question Accept asks (createOpportunity's duplicate);
+  // one at another level is another job, and no question about this one.
+  const asked = byOwn.some(({ dedupeKey }) => dedupeKey === storedKey);
+  const [oldest] = [...(asked ? [] : byOwn), ...ofCard(accepted)].sort(
+    (x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1),
+  );
   return oldest?.id;
 }
 

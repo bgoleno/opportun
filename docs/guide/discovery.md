@@ -384,8 +384,10 @@ job alert, an MCP source, or **Capture posting**):
   for a Closed opportunity too.
 
 You get a card when the opportunity is Dismissed, when it is Closed and the posting is not the very
-one you captured, and for another level of the same title ("Principal" beside "Senior"), another
-title or another company. A company you denied is dismissed as always.
+one you captured, and for another level of the same title ("Principal" beside "Senior"), also at the
+very same place, another title or another company. Earlier versions dropped another level at the same
+place as a duplicate, so a board's next run can bring some of those. Accepting one asks, as it matches
+by everything but its level: **Create anyway** makes it. A company you denied is dismissed as always.
 
 A linked posting is listed under **Decided**, in the **Accepted** tab, as **Linked to an opportunity
 already there**, with **View opportunity**. The source's run history counts it as `linked`. It says
@@ -399,7 +401,8 @@ it is offered.
 ## Decided results
 
 Accepting or dismissing a result keeps a later sighting of the same job (same company, title
-and location, however it resurfaces) from showing up in the queue again, rather than treating
+and location, however it resurfaces; another level of the title, "Principal" beside "Senior", is
+another job) from showing up in the queue again, rather than treating
 it as new each time. **Decided**, with its own **Dismissed** and **Accepted** tabs, is where
 those settled results live.
 

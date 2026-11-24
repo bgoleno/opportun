@@ -22,6 +22,7 @@ import {
 import { onSlowTransaction } from '../src/db/gate';
 import { pipelineText } from '../src/jobs/companySuggest';
 import { previewPurge } from '../src/jobs/purge';
+import { MULTI_POSTED_PREFIX } from '../src/lib/jobKinds';
 import { useApi } from './api';
 import { testDialect } from './db';
 import { heldApart, pauseAt } from './race';
@@ -564,6 +565,158 @@ describe('a card already there', () => {
   });
 });
 
+// The stored key strips the level at either end, so by key alone another level at the same place is
+// the same job: it is not (tl on #985, the owner on #967).
+describe('another level of the title at the very same place', () => {
+  const PRINCIPAL = { title: `Principal ${JOB.title}` };
+  const accept = (c: TestClient, id: string, payload: Record<string, unknown> = {}) =>
+    c.request({ method: 'POST', url: `/api/v1/discovery/results/${id}/accept`, payload });
+  const FEED = { postingUrl: 'https://boards.example.com/initech/1' };
+  /** The other level, through a source nothing came from yet. */
+  const principal = (over: Partial<NormalizedPosting> = {}): NormalizedPosting =>
+    another(LINKEDIN, HERE, { ...PRINCIPAL, ...FEED, externalId: 'board-9', ...over });
+
+  type Beside = (app: FastifyInstance, c: TestClient) => Promise<unknown>;
+  const BESIDE: readonly (readonly [string, Beside])[] = [
+    ['a captured opportunity', (app, c) => ORIGINS.captured(app, c)],
+    ['an opportunity made by hand', (app, c) => ORIGINS['made by hand'](app, c)],
+    [
+      'an accepted result alone',
+      async (app, c) => {
+        const id = await ORIGINS.accepted(app, c);
+        await app.db
+          .update(opportunities)
+          .set({ dedupeKey: null })
+          .where(eq(opportunities.id, id))
+          .run();
+      },
+    ],
+    [
+      'a dismissed result',
+      async (app, c) => {
+        const { inserted } = await arrive(app, c, [alertOf(LINKEDIN, HERE)]);
+        const res = await c.request({
+          method: 'POST',
+          url: `/api/v1/discovery/results/${inserted[0]!.id}/dismiss`,
+          payload: { reason: 'stale' },
+        });
+        expect(res.statusCode, res.body).toBe(200);
+      },
+    ],
+    [
+      'a linked result',
+      async (app, c) => {
+        const id = await ORIGINS['made by hand'](app, c);
+        await app.db
+          .update(opportunities)
+          .set({ location: THERE, dedupeKey: dedupeKey(JOB.company, JOB.title, THERE) })
+          .where(eq(opportunities.id, id))
+          .run();
+        expect((await arrive(app, c, [alertOf(LINKEDIN, HERE)])).stats.linked).toBe(1);
+      },
+    ],
+  ];
+
+  it.each(BESIDE)('beside %s: a card, and the same title is a duplicate', async (_what, beside) => {
+    const { app, a } = await boot();
+    await beside(app, a);
+    const { stats, inserted } = await arrive(app, a, [principal()], 'ats_lever');
+    expect(stats).toMatchObject({ inserted: 1, duplicates: 0, linked: 0 });
+    expect(inserted[0]!.aiRationale).toBeNull();
+    expect((await pendingOf(app, a)).map((r) => r.posting.title)).toEqual([PRINCIPAL.title]);
+    // The control: the title that is there, through a source nothing came from yet.
+    const same = principal({ title: JOB.title, externalId: 'board-10' });
+    expect((await arrive(app, a, [same], 'mcp')).stats).toMatchObject({ duplicates: 1 });
+  });
+
+  it('beside a pending card of the same source: another card', async () => {
+    const { app, a } = await boot();
+    await arrive(app, a, [alertOf(LINKEDIN, HERE)]);
+    const { stats } = await arrive(app, a, [another(LINKEDIN, HERE, PRINCIPAL)]);
+    expect(stats).toMatchObject({ inserted: 1, duplicates: 0 });
+    const again = another(LINKEDIN, HERE, { externalId: '1000000003', postingUrl: null });
+    expect((await arrive(app, a, [again])).stats).toMatchObject({ duplicates: 1 });
+  });
+
+  it('beside a pending card of another source: new, not posted on several', async () => {
+    const { app, a } = await boot();
+    await arrive(app, a, [alertOf(LINKEDIN, HERE)]);
+    const other = await arrive(app, a, [principal()], 'ats_lever');
+    expect(other.inserted.map((r) => r.aiRationale)).toEqual([null]);
+    const same = await arrive(
+      app,
+      a,
+      [principal({ title: JOB.title, externalId: 'board-10' })],
+      'mcp',
+    );
+    expect(same.inserted.map((r) => r.aiRationale)).toEqual([MULTI_POSTED_PREFIX]);
+  });
+
+  it.each([
+    ['Senior', 'Sr'],
+    ['Sr.', 'Senior'],
+    ['Junior', 'Jr'],
+  ])('%s and %s are one level: a duplicate', async (first, second) => {
+    const { app, a } = await boot();
+    const posting = (level: string, id: string) =>
+      principal({ title: `${level} ${JOB.title}`, externalId: id });
+    const { inserted } = await arrive(app, a, [posting(first, 'b-1')], 'ats_lever');
+    expect((await accept(a, inserted[0]!.id)).statusCode).toBe(200);
+    expect((await arrive(app, a, [posting(second, 'b-2')], 'mcp')).stats).toMatchObject({
+      duplicates: 1,
+    });
+  });
+
+  it('its next poll is a duplicate, pending and once made by Create anyway', async () => {
+    const { app, a } = await boot();
+    await ORIGINS['made by hand'](app, a);
+    const { inserted } = await arrive(app, a, [principal()], 'ats_lever');
+    let n = 0;
+    // One source, another id each time: what finds it is its key and its title.
+    const poll = () => arrive(app, a, [principal({ externalId: `board-2${(n += 1)}` })]);
+    // Another source's first: posted on several. Then it is this source's own.
+    expect((await poll()).stats).toMatchObject({ inserted: 1 });
+    expect((await poll()).stats).toMatchObject({ duplicates: 1 });
+    // Its key is the other level's, so Accept asks, and Create anyway makes it.
+    const asked = await accept(a, inserted[0]!.id);
+    expect([asked.statusCode, asked.json().error.code]).toEqual([409, 'duplicate']);
+    const made = await accept(a, inserted[0]!.id, { force: true });
+    expect(made.statusCode, made.body).toBe(200);
+    expect(await opportunitiesOf(app, a)).toHaveLength(2);
+    expect((await poll()).stats).toMatchObject({ duplicates: 1 });
+    const elsewhere = principal({ externalId: 'board-12' });
+    expect((await arrive(app, a, [elsewhere], 'mcp')).stats).toMatchObject({ duplicates: 1 });
+  });
+
+  // Only a holder of the same card is the question (tl on #985).
+  it('a holder at another level is not the question: Accept goes to the open one of its title', async () => {
+    const { app, a } = await boot();
+    const make = async (title: string, location: string) =>
+      (
+        await a.request({
+          method: 'POST',
+          url: '/api/v1/opportunities',
+          payload: { companyName: JOB.company, title, location, sourceKind: 'manual' },
+        })
+      ).json<{ id: string }>().id;
+    const senior = `Senior ${JOB.title}`;
+    await make(PRINCIPAL.title, HERE);
+    const boston = await make(senior, THERE);
+    const { inserted, stats } = await arrive(app, a, [principal({ title: senior })], 'ats_lever');
+    // At ingest it is linked by itself; a card that was there before goes the same way at Accept.
+    expect([stats.linked, inserted]).toEqual([1, []]);
+    await app.db
+      .update(discoveryResults)
+      .set({ disposition: 'pending', opportunityId: null, rankSkipReason: null })
+      .where(eq(discoveryResults.userId, a.userId))
+      .run();
+    const [card] = await pendingOf(app, a);
+    const res = await accept(a, card!.id);
+    expect([res.statusCode, res.json().opportunityId]).toEqual([200, boston]);
+    expect(await opportunitiesOf(app, a)).toHaveLength(2);
+  });
+});
+
 describe('a role renamed since', () => {
   const rename = (app: FastifyInstance, id: string) =>
     app.db
@@ -919,8 +1072,11 @@ describe('a linked posting is nobody’s decision', () => {
     ]);
     await move(app, id, 'dismissed');
     expect((await unsuppress()).statusCode).toBe(200);
-    expect((await arrive(app, a, [another(LINKEDIN, THERE)])).stats).toMatchObject({
+    // Another id: the same one from the same source stays a duplicate, as today.
+    const next = another(LINKEDIN, THERE, { externalId: '1000000009', postingUrl: null });
+    expect((await arrive(app, a, [next])).stats).toMatchObject({
       linked: 0,
+      inserted: 1,
     });
   });
 });

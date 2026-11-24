@@ -3,7 +3,13 @@
 // it for leads that arrive outside a source run (alert mail, a capture). In lib/ so the alert-mail
 // adapter and the capture route store leads without importing the discovery-run job.
 import { enqueue } from './jobQueue';
-import { dedupeKey, newId, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
+import {
+  dedupeKey,
+  newId,
+  NormalizedPostingSchema,
+  sameTitle,
+  type NormalizedPosting,
+} from '@opportun/core';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import { isLockTimeout, lockScope, withTransaction, type Db } from '../db/client';
 import { jsonText } from '../db/dialect';
@@ -58,6 +64,10 @@ export interface RunStats {
 type DuplicateCheck = 'duplicate' | 'multi_posted' | 'new';
 
 /**
+ * By the key, and by the whole title with it (sameTitle): the key strips a level, and another level at
+ * the same place is another job (the owner, on https://github.com/bgoleno/opportun/issues/967). A
+ * stored posting without a title is compared by its key alone.
+ *
  * Duplicates: a live (non-dismissed) opportunity with the key; any result with the key the user
  * already decided on (accepted or dismissed), so an attached, force-accepted or merged-away
  * posting is not re-suggested on the next poll; a pending result with the key from this same
@@ -74,7 +84,7 @@ async function checkDuplicate(
 ): Promise<DuplicateCheck> {
   const { externalId } = posting;
   const opp = await exec
-    .select({ id: opportunities.id })
+    .select({ title: opportunities.title })
     .from(opportunities)
     .where(
       and(
@@ -84,15 +94,20 @@ async function checkDuplicate(
       ),
     )
     .get();
-  if (opp !== undefined) return 'duplicate';
+  if (opp !== undefined && sameTitle(opp.title, posting.title)) return 'duplicate';
   // The indexed dedupe-key lookup first; the externalId scan (a JSON extract over this
   // source's results) runs only when the key alone did not settle it as a duplicate.
-  const rows = await exec
-    .select({ disposition: discoveryResults.disposition, sourceId: discoveryRuns.sourceId })
+  const withKey = await exec
+    .select({
+      disposition: discoveryResults.disposition,
+      sourceId: discoveryRuns.sourceId,
+      title: jsonText(discoveryResults.posting, 'title'),
+    })
     .from(discoveryResults)
     .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
     .where(and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.dedupeKey, key)))
     .all();
+  const rows = withKey.filter(({ title }) => title === null || sameTitle(title, posting.title));
   if (rows.some((r) => r.disposition !== 'pending')) return 'duplicate';
   const pending = rows.filter((r) => r.disposition === 'pending');
   if (pending.some((r) => r.sourceId === sourceId)) return 'duplicate';

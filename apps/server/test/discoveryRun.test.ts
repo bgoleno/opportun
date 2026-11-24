@@ -310,7 +310,7 @@ describe('discovery.run job', () => {
     const ctx = ctxOf(a);
     await createOpportunity(app.db, ctx, {
       companyName: 'Initech',
-      title: 'Senior Staff Platform Engineer',
+      title: 'Staff, Platform Engineer',
       location: 'Austin, TX',
       sourceKind: 'manual',
     });
@@ -375,9 +375,7 @@ describe('discovery.run job', () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     registerSource(fakeSource('ats_lever', { postings: [P1] }));
-    registerSource(
-      fakeSource('mcp', { postings: [{ ...P1, title: 'Sr. Staff Platform Engineer' }] }),
-    );
+    registerSource(fakeSource('mcp', { postings: [{ ...P1, title: 'Staff, Platform Engineer' }] }));
     const lever = await createSource(app.db, ctx, {
       kind: 'ats_lever',
       config: { org: 'initech' },
