@@ -383,6 +383,9 @@ job alert, an MCP source, or **Capture posting**):
   job id on the same site), even if its title or location has changed: nothing is added. This holds
   for a Closed opportunity too.
 
+A place that was linked while the role was open brings a card again, once, when it is posted anew after
+the role is Closed, Dismissed or deleted. The very posting that was linked does not.
+
 You get a card when the opportunity is Dismissed, when it is Closed and the posting is not the very
 one you captured, and for another level of the same title ("Principal" beside "Senior"), also at the
 very same place, another title or another company. Earlier versions dropped another level at the same

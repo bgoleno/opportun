@@ -963,6 +963,140 @@ describe.each(SITES)('a capture on %s of a role with a linked posting behind it'
   );
 });
 
+// The owner's decision on #971, for a place ingest linked: nobody decided it, so it holds its key only
+// while its role is open (https://github.com/bgoleno/opportun/issues/990, qa on #985).
+describe('a place linked while its role was open, posted again with a new id', () => {
+  const [, , , linkedId, linkedUrl] = LINKEDIN;
+  const LINKED = another(LINKEDIN, THERE);
+  const again = (id = '1000000009'): NormalizedPosting => ({
+    ...JOB,
+    location: THERE,
+    externalId: id,
+    postingUrl: `https://www.linkedin.com/jobs/view/${id}`,
+  });
+  /** The role, with the place linked to it. */
+  async function linked(app: FastifyInstance, c: TestClient): Promise<string> {
+    const id = await ORIGINS['made by hand'](app, c);
+    expect((await arrive(app, c, [LINKED])).stats.linked).toBe(1);
+    return id;
+  }
+  const GONE: readonly (readonly [
+    string,
+    (app: FastifyInstance, c: TestClient, id: string) => Promise<unknown>,
+  ])[] = [
+    ['closed', (app, _c, id) => move(app, id, 'closed')],
+    ['dismissed', (app, _c, id) => move(app, id, 'dismissed')],
+    [
+      'deleted',
+      async (_app, c, id) => {
+        const res = await c.request({ method: 'DELETE', url: `/api/v1/opportunities/${id}` });
+        expect(res.statusCode, res.body).toBeLessThan(300);
+      },
+    ],
+  ];
+
+  it.each(GONE)('the role %s: a card, once', async (_how, ends) => {
+    const { app, a } = await boot();
+    await ends(app, a, await linked(app, a));
+    const { stats, inserted } = await arrive(app, a, [again()]);
+    expect(stats).toMatchObject({ inserted: 1, linked: 0, duplicates: 0 });
+    expect(inserted[0]!.aiRationale).toBeNull(); // not posted on several: the linked one is no card
+    // Its next poll, and another id of it from the same source.
+    for (const next of [again(), again('1000000010')]) {
+      expect((await arrive(app, a, [next])).stats).toMatchObject({ duplicates: 1, inserted: 0 });
+    }
+    expect(await pendingOf(app, a)).toHaveLength(1);
+  });
+
+  it.each(GONE)(
+    'the role %s: the very posting that was linked brings no card',
+    async (_how, ends) => {
+      const { app, a } = await boot();
+      await ends(app, a, await linked(app, a));
+      expect((await arrive(app, a, [LINKED])).stats).toMatchObject({ duplicates: 1, inserted: 0 });
+      expect(await pendingOf(app, a)).toEqual([]);
+    },
+  );
+
+  it('the role closed, and the place captured into it: the same id brings no card', async () => {
+    const { app, a } = await boot();
+    const id = await linked(app, a);
+    const page: Site = ['linkedin', linkedId, linkedUrl, '', ''];
+    expect((await capture(app, a, page, THERE)).opportunityId).toBe(id);
+    await move(app, id, 'closed');
+    const other = another(LINKEDIN, THERE, { externalId: 'opaque-9' });
+    expect((await arrive(app, a, [other], 'mcp')).stats).toMatchObject({ duplicates: 1 });
+  });
+
+  it.each(OPEN)('the role at %s: a duplicate, as before', async (stage) => {
+    const { app, a } = await boot();
+    await move(app, await linked(app, a), stage);
+    expect((await arrive(app, a, [again()])).stats).toMatchObject({ duplicates: 1, inserted: 0 });
+  });
+
+  it('the role opened again: a duplicate again', async () => {
+    const { app, a } = await boot();
+    const id = await linked(app, a);
+    await move(app, id, 'closed');
+    await move(app, id, 'applied');
+    expect((await arrive(app, a, [again()])).stats).toMatchObject({ duplicates: 1, inserted: 0 });
+  });
+
+  it.each(GONE)(
+    'accepted by the user, not linked, the role %s: a duplicate, as before',
+    async (_how, ends) => {
+      const { app, a } = await boot();
+      const id = await ORIGINS['made by hand'](app, a);
+      const cardId = await card(app, a, LINKED);
+      const res = await a.request({
+        method: 'POST',
+        url: `/api/v1/discovery/results/${cardId}/accept`,
+        payload: { attachTo: id },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      await ends(app, a, id);
+      expect((await arrive(app, a, [again()])).stats).toMatchObject({ duplicates: 1, inserted: 0 });
+    },
+  );
+
+  it('dismissed by the user beside it: a duplicate, as before', async () => {
+    const { app, a } = await boot();
+    const id = await linked(app, a);
+    await move(app, id, 'closed');
+    const { inserted } = await arrive(app, a, [again()]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${inserted[0]!.id}/dismiss`,
+      payload: { reason: 'stale' },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await arrive(app, a, [again('1000000011')])).stats).toMatchObject({ duplicates: 1 });
+  });
+
+  it('accepted then: an opportunity of its own, and the place is a duplicate', async () => {
+    const { app, a } = await boot();
+    const closed = await linked(app, a);
+    await move(app, closed, 'closed');
+    const { inserted } = await arrive(app, a, [again()]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${inserted[0]!.id}/accept`,
+      payload: {},
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().opportunityId).not.toBe(closed);
+    expect((await arrive(app, a, [again('1000000011')])).stats).toMatchObject({ duplicates: 1 });
+  });
+
+  it("another user's: theirs alone", async () => {
+    const { app, a, b } = await boot();
+    await move(app, await linked(app, a), 'closed');
+    await linked(app, b);
+    expect((await arrive(app, b, [again()])).stats).toMatchObject({ duplicates: 1, inserted: 0 });
+    expect((await arrive(app, a, [again()])).stats).toMatchObject({ duplicates: 0, inserted: 1 });
+  });
+});
+
 describe('a role renamed since', () => {
   const rename = (app: FastifyInstance, id: string) =>
     app.db
