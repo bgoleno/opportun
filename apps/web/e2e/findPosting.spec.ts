@@ -337,11 +337,12 @@ test.describe('Find posting from each posting state (#859)', () => {
       "Opportun checks the company's board again; your description is kept.",
     );
     await ask.getByRole('button', { name: 'Refetch' }).click();
-    await expect(toasts(page).getByText('Office Coordinator')).toBeVisible();
+    // It changed nothing, so it says so and adds no entry to the timeline (#866).
+    await expect(toasts(page).getByText('Nothing changed')).toBeVisible();
     expect(await description(page, own)).toBe(TYPED);
-    await expect(await timeline(page, own)).toContainText(
-      "Checked on the company's board; your description was kept.",
-    );
+    const ownTimeline = await timeline(page, own);
+    await expect(ownTimeline.getByText('Job posting attached')).toHaveCount(1);
+    await expect(ownTimeline).not.toContainText("Checked on the company's board");
   });
 });
 

@@ -55,7 +55,10 @@ export function SubmissionStatusChip({ status }: { status: string }) {
   );
 }
 
-/** The promise, visible from the first step to the last (design (a) 3). */
+/**
+ * The promise, visible from the first step to the last (design (a) 3). `host` is empty while the
+ * posting is not recognised: there is no site to name yet (#893).
+ */
 export function WillNotSubmitCallout({ host }: { host: string }) {
   return (
     <p
@@ -65,7 +68,12 @@ export function WillNotSubmitCallout({ host }: { host: string }) {
       <ShieldCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
       <span>
         Opportun will not submit this. You will press the submit button on{' '}
-        <span className="font-mono [overflow-wrap:anywhere]">{host}</span> yourself.
+        {host === '' ? (
+          'the application site'
+        ) : (
+          <span className="font-mono [overflow-wrap:anywhere]">{host}</span>
+        )}{' '}
+        yourself.
       </span>
     </p>
   );

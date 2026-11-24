@@ -15,6 +15,7 @@
 //   - a description the user edited by hand is left alone and flagged instead (D11);
 //   - fields are filled where empty and never blanked (D7);
 //   - anything short of one confident match writes nothing and raises a flag (D8).
+import { possessive } from '@opportun/core';
 import { z } from 'zod';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
@@ -25,6 +26,7 @@ import { getOpportunity } from '../repos/opportunities';
 import { POSTING_RECONCILE_KIND } from '../lib/jobKinds';
 import { requireService, type JobHandler } from './registry';
 import { confirm, flag, noBodies, type ReconcileOutcome } from '../lib/postingReconcile';
+import { opportunityGone, settleUnfinishedCheck } from '../lib/postingChecks';
 
 export { POSTING_RECONCILE_KIND };
 
@@ -117,17 +119,18 @@ async function reconcile(
         ctx,
         opportunityId,
         'none_found',
-        `Checked ${opp.companyName}'s board and found no posting matching "${opp.title}".`,
+        `Checked ${possessive(opp.companyName)} board and found no posting matching "${opp.title}".`,
       );
     case 'unreachable':
-      // Its boards could not be read (#835): the check did not finish, which is not "found
-      // nothing". Find posting tries again from the banner.
+      // Its boards could not be read (#835), or the search for one could not finish (#866): the
+      // check did not finish, which is not "found nothing". Find posting tries again from the
+      // banner.
       return await flag(
         db,
         ctx,
         opportunityId,
         'failed',
-        `Couldn't read ${opp.companyName}'s board just now, so nothing was checked. Try Find posting again.`,
+        `Couldn't read ${possessive(opp.companyName)} board just now, so nothing was checked. Try Find posting again.`,
       );
     default:
       return await flag(
@@ -147,10 +150,25 @@ export const postingReconcileJob: JobHandler<z.infer<typeof PayloadSchema>> = {
   async run(db, payload, ctx) {
     if (ctx.userId === null) throw new Error(`${POSTING_RECONCILE_KIND} needs a user`);
     const user: UserCtx = { userId: ctx.userId, isAdmin: false };
-    const outcome = await reconcilePosting(db, user, payload.opportunityId, {
-      fetch: requireService(ctx, 'sourceFetch'),
-      log: requireService(ctx, 'log'),
-    });
+    let outcome: ReconcileOutcome;
+    try {
+      outcome = await reconcilePosting(db, user, payload.opportunityId, {
+        fetch: requireService(ctx, 'sourceFetch'),
+        log: requireService(ctx, 'log'),
+      });
+    } catch (err) {
+      // Deleted, or merged into another, while the board was read (#897): there is nothing left to
+      // check, and a retry would only fail again. Looked up rather than read off the error: a
+      // missing company is a 404 too, and is a real failure.
+      if (!(await opportunityGone(db, user, payload.opportunityId))) throw err;
+      await ctx.setResult({ status: 'gone' });
+      return;
+    }
     await ctx.setResult(outcome);
+  },
+  // Its posting must not stay `searching`, with its page still saying it is being checked (#869).
+  async onDead(db, payload, { userId }) {
+    if (userId === null) return;
+    await settleUnfinishedCheck(db, { userId, isAdmin: false }, payload.opportunityId);
   },
 };

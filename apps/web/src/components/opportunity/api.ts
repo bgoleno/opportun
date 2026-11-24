@@ -1,7 +1,8 @@
 // Queries and mutations for one opportunity's detail page.
 import type { Activity, ActivityKind, NextStep, NormalizedPosting } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api';
+import { useState } from 'react';
+import { api, ApiError } from '@/lib/api';
 import {
   qk,
   type AttachmentMeta,
@@ -207,7 +208,8 @@ export interface PostingCandidateView {
 export interface FindPostingResult {
   /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity. */
   /**
-   * 'unreachable' (#835): the company's boards could not be read, which is not "no match".
+   * 'unreachable' (#835, #866): the company's boards could not be read, or the search for one
+   * could not finish, which is not "no match" or "no board".
    * 'already_confirmed' (#852): a background check confirmed it after the page loaded.
    */
   outcome:
@@ -220,6 +222,10 @@ export interface FindPostingResult {
     | 'already_confirmed';
   /** An attach that changed nothing: a Refetch that found the same job (#835). */
   unchanged?: true;
+  /** What a Refetch changed (#866): absent on a first attach, and when `unchanged`. */
+  changed?: ('link' | 'job' | 'description' | 'location' | 'remote' | 'compensation')[];
+  /** 'attached' with the user's own description left as it was, not compared (#866). */
+  keptDescription?: true;
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity?: OpportunityView;
   candidate?: PostingCandidateView;
@@ -258,6 +264,56 @@ export function useFindPosting(id: string) {
     onSettled: refresh,
   });
 }
+
+/** Find posting refused because a background check is reading the board (#852). */
+export function isPostingSearching(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'posting_searching';
+}
+
+/**
+ * A number that moves on when the posting leaves 'searching', or otherwise changes to a state
+ * with no check under way (#870). Read when Find posting is pressed and again when its refusal
+ * (isPostingSearching) is shown: a different number means the check it speaks of is over, so the
+ * refusal no longer holds. Counted, not compared by state, because a check can end in the state
+ * it found ('needs_review' again), and because the refusal's own refresh can bring the check's
+ * end before the refusal itself arrives (useFindPosting waits for it).
+ */
+export function useChecksEnded(postingState: OpportunityView['postingState']): number {
+  const state = postingState ?? null;
+  const [last, setLast] = useState({ state, ended: 0 });
+  if (last.state === state) return last.ended;
+  const next = { state, ended: state === 'searching' ? last.ended : last.ended + 1 };
+  setLast(next);
+  return next.ended;
+}
+
+/**
+ * Whether the check a Find posting refusal speaks of is over already (#866, tl and qa on #885):
+ * called once the refusal is in, when the refresh after it has been read (useFindPosting waits for
+ * it). The check can have ended in the state the page showed, which useChecksEnded cannot see.
+ * Says no when that refresh failed, or nothing on the page reads the opportunity: not known.
+ */
+export function useCheckOver(id: string): () => boolean {
+  const qc = useQueryClient();
+  return () => {
+    const read = qc.getQueryState<OpportunityView>(qk.opportunity(id));
+    return (
+      read?.data !== undefined &&
+      read.status === 'success' &&
+      !read.isInvalidated &&
+      read.data.postingState !== 'searching'
+    );
+  };
+}
+
+/**
+ * Said in place of a refusal for a check that is over: the click is answered (#866). "Ended", and
+ * not as a success: its job may have died (#869), which the posting's own notice then says.
+ */
+export const CHECK_ENDED = {
+  title: 'Check ended',
+  description: 'The board check ended while this page was open. The page is up to date now.',
+} as const;
 
 /** Attaches a chosen candidate, a pasted link or pasted description text. */
 export function useAttachPosting(id: string) {

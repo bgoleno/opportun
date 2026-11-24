@@ -831,6 +831,7 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'job runner': [],
   'no handler registered for this job kind': ['opportun.job.id', 'opportun.job.kind'],
   'invalid stored payload; job marked dead': ['opportun.job.id', 'opportun.job.kind'],
+  'a dead job was not settled by its handler': ['opportun.job.id', 'opportun.job.kind'],
   'job exhausted its retries; marked dead': [
     'opportun.job.id',
     'opportun.job.kind',
@@ -903,6 +904,12 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'lead resolution lookup failed': ['opportun.source.id'],
   'workday capture retry failed': ['opportun.discovery_result.id'],
   'posting reconciliation failed': ['opportun.opportunity.id'],
+  'saved capture: the kept-apart note gave up a lock wait': ['opportun.opportunity.id'],
+  'saved capture: the fill gave up a lock wait': ['opportun.opportunity.id'],
+  'saved capture: the stage move gave up a lock wait': ['opportun.opportunity.id'],
+  'saved capture: what follows a stage move gave up a lock wait': ['opportun.opportunity.id'],
+  'saved capture: the posting state gave up a lock wait': ['opportun.opportunity.id'],
+  'unfinished posting check not settled': ['opportun.opportunity.id'],
   'ats job ref backfill': [
     'opportun.count.read',
     'opportun.count.set',

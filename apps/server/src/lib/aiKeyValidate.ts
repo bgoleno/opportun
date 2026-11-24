@@ -19,6 +19,7 @@ import type { Db } from '../db/client';
 import { secrets, settings } from '../db/schema';
 import type { Exec, UserCtx } from '../repos/base';
 import { buildAiDeps, readSetting, writeSetting } from './ai';
+import { usableAiKey } from './aiKeyValue';
 import { notFound } from './errors';
 import { getSecretValue } from './secretBox';
 
@@ -62,6 +63,8 @@ const LIST_TIMEOUT_MS = 15_000;
 const MAX_LIST_BYTES = 5 * 1024 * 1024;
 const UNVERIFIABLE = 'unverifiable: endpoint has no model list';
 const NOT_LISTED = 'model not available to this key';
+const UNUSABLE =
+  'This key cannot be used. Delete it, then copy the key again from the provider and save it.';
 
 const isProvider = (id: string): id is ProviderId => (PROVIDERS as readonly string[]).includes(id);
 
@@ -329,7 +332,9 @@ export async function validateAiKey(
   if (!isProvider(provider)) {
     return { ...base, ok: false, models: [], error: 'key is not linked to a provider' };
   }
-  const apiKey = await getSecretValue(db, ctx, row.id);
+  const usable = usableAiKey(await getSecretValue(db, ctx, row.id));
+  if (usable === undefined) return { ...base, ok: false, models: [], error: UNUSABLE };
+  const apiKey = usable;
   const policies = await referencedPolicies(db, ctx, provider);
   const providerFetch = (
     await buildAiDeps(db, ctx, opts.env === undefined ? {} : { env: opts.env })

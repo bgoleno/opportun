@@ -4,8 +4,9 @@
 //
 // The search box works over the whole ranked board, not just the confident rows: a stored title
 // as generic as "Staff Product Manager" can rank the wrong req first and bury the right one.
+import { possessive } from '@opportun/core';
 import { AlertTriangle, ExternalLink } from 'lucide-react';
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
 import { Button } from '@/components/ui/button';
@@ -20,8 +21,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
-import { errorMessage } from '@/lib/api';
 import { safeHttpUrl, type OpportunityView } from '@/lib/opportunities';
+import { postingErrorMessage } from './AlreadyTracked';
 import {
   useAttachPosting,
   type AttachPostingVars,
@@ -37,7 +38,7 @@ type Mode = 'url' | 'text';
 
 function headline(result: FindPostingResult, company: string): string {
   if (result.needsConfirmation === true) {
-    return `This posting came from a link in a message, on a board that is not ${company}'s own board. Check it before attaching.`;
+    return `This posting came from a link in a message, on a board that is not ${possessive(company)} own board. Check it before attaching.`;
   }
   if (result.outcome === 'candidates') {
     // One candidate is offered rather than attached when the server would not settle it alone
@@ -48,6 +49,9 @@ function headline(result: FindPostingResult, company: string): string {
   }
   if (result.outcome === 'none') {
     return 'No close match on the board. Search it, or add the posting by hand.';
+  }
+  if (result.outcome === 'unreachable') {
+    return "The company's board couldn't be read just now. Add the posting by hand.";
   }
   return result.hint ?? 'No job board found for this company. Add the posting by hand.';
 }
@@ -117,7 +121,7 @@ export function FindPostingDialog({
   const [url, setUrl] = useState('');
   const [text, setText] = useState('');
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [failure, setFailure] = useState<ReactNode>(null);
 
   const confident = result.candidates ?? [];
   const all = result.board ?? result.candidates ?? [];
@@ -136,7 +140,7 @@ export function FindPostingDialog({
       toast({ title: 'Posting attached', description: title, variant: 'success' });
       onClose();
     } catch (err) {
-      setFailure(errorMessage(err));
+      setFailure(postingErrorMessage(err));
     }
   }
 

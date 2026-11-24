@@ -44,6 +44,7 @@ import {
   roleTargets,
   stageHistory,
   resumeSends,
+  SCHEMA_DIALECT,
 } from '../db/schema';
 import { postingAtsJobRefKeeping } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
@@ -52,7 +53,7 @@ import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
 import { lastActivityAt } from './activities';
 import type { Db, Exec, UserCtx } from './base';
-import { ownedBy } from './base';
+import { ownedBy, ownedSql } from './base';
 import { findOrCreateCompanySync } from './companies';
 import { detectDedupeCandidates, rejectDedupeCandidate } from './opportunityDedupe';
 import { likeContains, orderBy, sortColumns, type ListOpts, type Page } from './list';
@@ -62,7 +63,7 @@ import {
   removeFromIndex,
   removeOpportunityFromIndex,
 } from './search';
-import { runCount, withTransaction } from '../db/client';
+import { lockScope, rawAll, rawGet, runCount, withTransaction } from '../db/client';
 
 export type OpportunityRow = typeof opportunities.$inferSelect;
 /**
@@ -412,6 +413,10 @@ export async function createOpportunity(
   opts: { force?: boolean } = {},
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
+    // The user's lock before the claim, which can write a dismissed holder's row: the company lookup
+    // takes it anyway, and an update holding it while waiting on that row would close a cycle
+    // (#889; lock order: submissionScope).
+    await lockScope(tx, userScope(ctx));
     if (input.roleTargetId != null) await assertRoleTargetOwned(tx, ctx, input.roleTargetId);
     const key = dedupeKey(input.companyName, input.title, input.location);
     let storedKey: string | null = key;
@@ -423,6 +428,9 @@ export async function createOpportunity(
     } else {
       await claimDedupeKey(tx, ctx, key, null);
     }
+    // The key claimed, the company not yet looked up: where a claim and the user's lock could cross
+    // (test/opportunityUpdateRace.test.ts).
+    await racePoint('opportunities.create.locked');
     const company = await findOrCreateCompanySync(tx, ctx, input.companyName);
     const sortOrder = await nextSortOrder(tx, ctx, 'discovered');
     const now = Date.now();
@@ -478,9 +486,40 @@ export async function createOpportunity(
   });
 }
 
-/** Edits descriptive fields. Changing company, title or location re-claims the dedupe key. */
+/** The row's description, text and fingerprint, is this one (null is equal to null). */
+function descriptionIs(
+  was: Pick<OpportunityRow, 'descriptionMd' | 'descriptionFingerprint'>,
+): SQL | undefined {
+  return and(
+    was.descriptionMd === null
+      ? isNull(opportunities.descriptionMd)
+      : eq(opportunities.descriptionMd, was.descriptionMd),
+    was.descriptionFingerprint === null
+      ? isNull(opportunities.descriptionFingerprint)
+      : eq(opportunities.descriptionFingerprint, was.descriptionFingerprint),
+  );
+}
+
+/** updateOpportunity's `ifDescription` no longer holds: nothing was written. */
+export class DescriptionChanged extends Error {
+  override name = 'DescriptionChanged';
+}
+
+/**
+ * The user's lock (lock order: submissionScope). A create, and an update of the company, title,
+ * location or posting link, hold it from before they read what they write from (#889).
+ */
+const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
+
+/**
+ * Edits descriptive fields. Changing company, title or location re-claims the dedupe key; a patch
+ * with none of the three writes neither the company nor the key, so it cannot put back what another
+ * save has changed since this one read the row. Those three, and a posting link, are saved one at a
+ * time, under the user's lock and from a read made under it: each save's key and ATS identity come
+ * from the company and link the last one left (#889).
+ */
 export async function updateOpportunity(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   id: string,
   patch: UpdateOpportunityInput,
@@ -488,22 +527,41 @@ export async function updateOpportunity(
    * The identity the new posting URL was given by a check made before this write (#398: a
    * `gh_jid` link proven on Greenhouse's API, lib/greenhouseEmbed). Without it a new URL keeps
    * or drops the identity by postingAtsJobRefKeeping, which asks nobody.
+   *
+   * `ifDescription`: write only while the description is still the one read before (#856), or
+   * throw DescriptionChanged with nothing written. The text itself is compared, not only the
+   * fingerprint: a user's save leaves the fingerprint as it was, which is how it is known to be
+   * theirs (lib/postingFingerprint).
    */
-  opts: { atsJobRef?: AtsJobRef | null } = {},
+  opts: {
+    atsJobRef?: AtsJobRef | null;
+    ifDescription?: Pick<OpportunityRow, 'descriptionMd' | 'descriptionFingerprint'>;
+  } = {},
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
-    const current = await getViewSync(tx, ctx, id);
-    // A new posting URL will mark the live attempt (#144): its lock comes first, before the
-    // company lookup below takes the user's (lock order: submissionScope).
-    const urlWillChange = patch.postingUrl !== undefined && patch.postingUrl !== current.postingUrl;
-    const lockedAttempt = urlWillChange ? await lockLiveAttempt(tx, ctx, id) : null;
+    let current = await getViewSync(tx, ctx, id);
+    // A new posting URL will mark the live attempt (#144): its lock comes first, before the user's
+    // below (lock order: submissionScope). Taken for any posting URL, the same one too: whether it
+    // is a change is known only from the read made under the user's lock, below.
+    const lockedAttempt =
+      patch.postingUrl === undefined ? null : await lockLiveAttempt(tx, ctx, id);
     if (patch.roleTargetId != null) await assertRoleTargetOwned(tx, ctx, patch.roleTargetId);
     const { companyName, ...fields } = patch;
+    const changesKey =
+      companyName !== undefined || fields.title !== undefined || fields.location !== undefined;
+    // Two saves could each change one part of the key and each make it from the other's old part. So
+    // could a link's identity be kept from a company another save has just changed (#785), or from a
+    // link it has just replaced (tl on #910). So these are made one at a time, and from the row as
+    // the last one left it: on Postgres the first read can be of before the locks were had.
+    if (changesKey || patch.postingUrl !== undefined) {
+      await lockScope(tx, userScope(ctx));
+      current = await getViewSync(tx, ctx, id);
+    }
     let companyId = current.companyId;
     if (companyName !== undefined)
       companyId = (await findOrCreateCompanySync(tx, ctx, companyName)).id;
     let key = current.dedupeKey;
-    if (key !== null) {
+    if (changesKey && key !== null) {
       key = dedupeKey(
         companyName ?? current.companyName,
         fields.title ?? current.title,
@@ -529,17 +587,29 @@ export async function updateOpportunity(
       companyId !== current.companyId &&
       opts.atsJobRef === undefined &&
       kept?.verifiedVia === 'gh_jid';
-    await tx
+    await racePoint('opportunities.update.locked');
+    // The condition is in the UPDATE, not a check of `current`: on Postgres a save can commit
+    // between that read and here, and only the statement itself sees the row as it then is.
+    const written = await tx
       .update(opportunities)
       .set({
         ...fields,
         ...(dropForCompany ? { atsJobRef: null } : urlChanged ? { atsJobRef: newRef } : {}),
-        companyId,
-        dedupeKey: key,
+        ...(companyName === undefined ? {} : { companyId }),
+        ...(changesKey ? { dedupeKey: key } : {}),
         updatedAt: now,
       })
-      .where(owned(ctx, id))
-      .run();
+      .where(
+        and(
+          owned(ctx, id),
+          opts.ifDescription === undefined ? undefined : descriptionIs(opts.ifDescription),
+        ),
+      )
+      .returning({ id: opportunities.id });
+    if (written.length === 0) {
+      // Deleted while this waited for its row (#917), or the condition no longer holds.
+      throw opts.ifDescription === undefined ? notFound() : new DescriptionChanged();
+    }
     // A new posting URL under a live attempt (#144): the attempt says so and its review lapses.
     if (urlChanged) await markPostingChanged(tx, ctx, lockedAttempt, id, now);
     if (companyName !== undefined || fields.title !== undefined) {
@@ -586,6 +656,8 @@ export async function reorderOpportunities(
   changes: ReorderChange[],
 ): Promise<void> {
   await withTransaction(db, async (tx) => {
+    // The rows are written in the caller's order, and a merge holds two of them (#920).
+    await lockScope(tx, userScope(ctx));
     const now = Date.now();
     for (const { id, sortOrder } of changes) {
       await tx.update(opportunities).set({ sortOrder, updatedAt: now }).where(owned(ctx, id)).run();
@@ -643,12 +715,13 @@ export async function recordAtsJobRef(
  * can flag a state without disturbing a ref an earlier run established.
  */
 export async function setPostingState(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   id: string,
   patch: {
-    postingState: PostingState | null;
-    postingStateDetail: PostingStateDetail | null;
+    /** Undefined leaves the state as it is (#866: a Refetch is not a confirmation). */
+    postingState: PostingState | null | undefined;
+    postingStateDetail: PostingStateDetail | null | undefined;
     atsJobRef?: AtsJobRef | null;
     descriptionFingerprint?: string | null;
   },
@@ -663,8 +736,10 @@ export async function setPostingState(
     await tx
       .update(opportunities)
       .set({
-        postingState: patch.postingState,
-        postingStateDetail: patch.postingStateDetail,
+        ...(patch.postingState === undefined ? {} : { postingState: patch.postingState }),
+        ...(patch.postingStateDetail === undefined
+          ? {}
+          : { postingStateDetail: patch.postingStateDetail }),
         ...(patch.atsJobRef === undefined ? {} : { atsJobRef: patch.atsJobRef }),
         ...(patch.descriptionFingerprint === undefined
           ? {}
@@ -719,7 +794,7 @@ export async function transitionOpportunityIn(
   // Issue #240: a card never inherits a rank from the stage it left, and self-transitions
   // are invalid (see applyTransition), so this always runs on a real stage change.
   const sortOrder = await nextSortOrder(tx, ctx, result.stage);
-  await tx
+  const moved = await tx
     .update(opportunities)
     .set({
       stage: result.stage,
@@ -729,7 +804,9 @@ export async function transitionOpportunityIn(
       updatedAt: historyEntry.at,
     })
     .where(owned(ctx, id))
-    .run();
+    .returning({ id: opportunities.id });
+  // Deleted while this waited for its row (#925): the history below names it.
+  if (moved.length === 0) throw notFound();
   await tx
     .insert(stageHistory)
     .values({ id: newId(), userId: ctx.userId, opportunityId: id, ...historyEntry })
@@ -767,14 +844,58 @@ export async function afterStageChange(db: Db, ctx: UserCtx, view: OpportunityVi
   }
 }
 
+/** SQLite has no row locks: the write gate already runs transactions one at a time. */
+const FOR_UPDATE = SCHEMA_DIALECT === 'postgres' ? sql` FOR UPDATE` : sql``;
+const FOR_NO_KEY_UPDATE = SCHEMA_DIALECT === 'postgres' ? sql` FOR NO KEY UPDATE` : sql``;
+
+/**
+ * Locks the opportunity's row against every other writer of it; false when there is none. One that is
+ * `going` is locked against whatever names it too; one that stays lets a foreign key to it through.
+ */
+async function lockOpportunityRow(
+  tx: Exec,
+  ctx: UserCtx,
+  id: string,
+  going: boolean,
+): Promise<boolean> {
+  const lock = going ? FOR_UPDATE : FOR_NO_KEY_UPDATE;
+  const row = await rawGet(
+    tx,
+    sql`SELECT id FROM opportunities WHERE ${ownedSql('user_id', ctx)} AND id = ${id}${lock}`,
+  );
+  return row !== undefined;
+}
+
+/** The ids of the opportunity's activities, their rows locked. */
+async function activityIdsForUpdate(tx: Exec, ctx: UserCtx, id: string): Promise<string[]> {
+  const rows = await rawAll<{ id: string }>(
+    tx,
+    sql`SELECT id FROM activities
+        WHERE ${ownedSql('user_id', ctx)} AND opportunity_id = ${id}${FOR_UPDATE}`,
+  );
+  return rows.map((r) => r.id);
+}
+
 export async function deleteOpportunity(db: Db, ctx: UserCtx, id: string): Promise<void> {
   await withTransaction(db, async (tx) => {
     // Its attempts' locks before any row write: the delete cascades to them (#173).
     await lockAttemptsOf(tx, ctx, [id]);
-    // Index rows first: the activity ids are gone once the delete cascades.
-    await removeOpportunityFromIndex(tx, ctx, id);
-    const changes = await runCount(tx.delete(opportunities).where(owned(ctx, id)));
-    if (changes === 0) throw notFound();
+    // The user's lock first of the rest (#920): whatever writes or names two opportunities, or a
+    // message and then its opportunity, has it, and the delete reaches those rows the other way.
+    await lockScope(tx, userScope(ctx));
+    // Then the opportunity's row, its activities', and the search rows last: the order a save of any
+    // of them takes, which writes its row and then indexes it. With the search rows first, each could
+    // wait for the other (40P01, #917). Locked FOR UPDATE, so an activity being added (its foreign
+    // key holds the row) is committed before they are read, and none can be added after.
+    if (!(await lockOpportunityRow(tx, ctx, id, true))) throw notFound();
+    await racePoint('opportunities.delete.locked');
+    // Read, and left for the cascade to delete: a DELETE of their own would set null the attempts'
+    // links to them there and then, and so have the attempts' rows before the cascade has reached
+    // their next steps and resumes, which a delete of one of those takes the other way round (tl on
+    // #923). Locked as well, so one a merge is moving away is waited for, and not counted.
+    const gone = await activityIdsForUpdate(tx, ctx, id);
+    await tx.delete(opportunities).where(owned(ctx, id)).run();
+    await removeOpportunityFromIndex(tx, ctx, id, gone);
   });
 }
 
@@ -806,6 +927,16 @@ export async function mergeOpportunities(
     // submissionScope), in a fixed order so two merges cannot wait on each other: a posting
     // change marks a live attempt, and mail ingest confirms a submitted one (#173).
     await lockAttemptsOf(tx, ctx, [keepId, otherId]);
+    // The user's lock (#920), then both rows, in the delete's order and before anything is read: an
+    // add or a link to the other one, or a save of either, is done before the merge and goes with it,
+    // or waits and finds the other gone. The kept one stays, so what only names it goes on: a resume
+    // being moved to it, or an application being started on it, holds a row the merge moves next, and
+    // would wait here for the merge while the merge waited for it (40P01). The search rows come last.
+    await lockScope(tx, userScope(ctx));
+    for (const id of [keepId, otherId].sort()) {
+      if (!(await lockOpportunityRow(tx, ctx, id, id === otherId))) throw notFound();
+    }
+    await racePoint('opportunities.merge.locked');
     const keep = await getViewSync(tx, ctx, keepId);
     const other = await getViewSync(tx, ctx, otherId);
     const now = Date.now();
@@ -918,12 +1049,12 @@ export async function mergeOpportunities(
       })
       .returning()
       .get();
-    await indexActivity(tx, ctx, note);
-    await removeFromIndex(tx, ctx, 'opportunity', otherId);
     // Everything moved, the other opportunity not yet deleted: a test parks the merge here to
     // prove the lock order with an edit of that opportunity (test/submissionPostingChange.test.ts).
     await racePoint('opportunities.merge.moved');
     await tx.delete(opportunities).where(owned(ctx, otherId)).run();
+    await indexActivity(tx, ctx, note);
+    await removeFromIndex(tx, ctx, 'opportunity', otherId);
     return await getViewSync(tx, ctx, keepId);
   });
 }
@@ -950,6 +1081,8 @@ export async function dismissPossibleDuplicate(
   otherId: string,
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
+    // Writes one of them and then names both (#920).
+    await lockScope(tx, userScope(ctx));
     await getViewSync(tx, ctx, id);
     await getViewSync(tx, ctx, otherId);
     const now = Date.now();

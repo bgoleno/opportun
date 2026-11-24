@@ -381,13 +381,29 @@ that the job was not found on a Greenhouse board known for this company. Saving 
 this kind with **Edit link** runs the same check. Opportun asks nothing of Greenhouse when an
 opportunity is created or its mail is read.
 
-From the Apply panel, the **Find posting** button answers in a line under it: "Posting attached.",
-"Recognised on Greenhouse.", "Several postings could be this job. Choose it on the Details tab.", "A
-posting on the company's board could be this job. Check it on the Details tab." (when exactly one is
-offered), "This job was not found on the company's board. Paste the posting on the Details tab.", "No
-job board is known for this company yet. Add its careers page on the Details tab.", or, when you wrote
-the description yourself and no known board holds the job, "This job was not found on a Greenhouse
-board known for this company. Check the posting link on the Details tab."
+From the Apply panel, the **Find posting** button always answers, in a line under it. Which line
+depends on what the search found:
+
+- "Posting attached." when it attached a posting.
+- On a posting that was already confirmed, which the button reads again: "Nothing changed: the
+  posting matches the company's board.", or "Nothing changed. Your own description was kept." when
+  you wrote the description; "Posting updated from the board." or, with your own description
+  kept, "Posting updated from the board. Your own description was kept."
+- "Recognised on Greenhouse." when it recognised the job without attaching anything.
+- "This posting was confirmed already. This page is up to date now." when a background check
+  confirmed it while the page was open.
+- "Several postings could be this job. Choose it on the Details tab.", or, when exactly one is
+  offered, "A posting on the company's board could be this job. Check it on the Details tab."
+- "This job was not found on the company's board. Paste the posting on the Details tab."
+- "The company's board couldn't be read just now, so nothing was checked. Try Find posting
+  again."
+- "No job board is known for this company. Paste the posting on the Details tab."
+- When you wrote the description yourself and no known board holds the job: "This job was not
+  found on a Greenhouse board known for this company. Check the posting link on the Details tab."
+
+When a board was read only in part, its note follows the sentence. The line goes when it is no
+longer true of the opportunity: on the next press, when a background check has ended since, or
+when the posting's state or link is no longer what the answer left.
 
 One confident match is attached straight away. Several are listed for you to pick from, with
 a search box over the whole board. If no board is reachable, paste the posting link or the
@@ -401,6 +417,33 @@ link or text if your posting is not among them. The note shows next to the candi
 if a single confident match was attached straight away on a board read only in part, it is
 kept on the opportunity's timeline too, since that caveat stays true long after the toast
 confirming the attach is gone.
+
+If Find posting cannot read the company's board, or could not finish looking for one, the Details
+tab says "Couldn't read the company's board just now, so nothing was checked." in one notice, with
+**Try again** and **Add by hand** (the second opens "Add the posting", for a posting link or pasted text, with no
+search, since there is no board that was read to search; a confirmed posting has nothing to add,
+so it is not offered there). It stands in for the state's own line,
+so there is one notice and one **Try again**; the state's **Confirm** stays beside it when the
+state offers one. While a background check runs, only "Checking the company's job board for this
+posting." shows. The notice goes when a check ends or you attach or confirm a posting. A company
+whose board could not be looked for is not reported as having no board.
+
+Once a posting is confirmed, the Details tab says "Matched on the company's board." (or
+"Confirmed by you.") with a **Refetch** button, which asks first and then runs the search again.
+What it says afterwards depends on what changed:
+
+- **Something changed:** "Posting updated", "Updated from the board:" followed by what changed,
+  from the posting link, the job on the board, the description, the location, remote and the
+  compensation note, and "Your own description was kept." when yours was not replaced. The
+  timeline records it, naming the description and the facts it took.
+- **Nothing changed:** "Nothing changed", with "The posting matches the company's board.", or,
+  when your own description was kept, "Your own description was kept." (a description of yours is
+  kept without being compared with the board's, so it is not said to match). Nothing is added to
+  the timeline.
+
+A Refetch is not your confirmation: when it changes nothing or keeps your description, the
+posting stays as it was, matched or confirmed by you. One that changes anything while the description is
+not yours counts as matched. A row you pick yourself is always recorded on the timeline.
 
 The description is stored as text, so it survives the posting being taken down. A description
 you wrote or edited yourself is never overwritten; one Opportun wrote, such as the page text

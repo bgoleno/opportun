@@ -17,6 +17,7 @@ import { HttpError } from './errors';
 import { boardReadAtsJobRef, postingAtsJobRefKeeping } from './atsJobRef';
 import { descriptionFingerprint } from './postingFingerprint';
 import { mergePostingText } from './postingMerge';
+import { racePoint } from './racePoints';
 import { type BodyReader, type ReadFrom } from './postingSearch';
 import { sanitizePosting } from './postingSanitize';
 import { siteLabel, siteOfLabel, siteOfUrl } from './captureSites';
@@ -24,6 +25,7 @@ import { sourceLabel } from './sourceLabels';
 import { createActivity, listActivities, updateActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
 import {
+  DescriptionChanged,
   getOpportunity,
   setPostingState,
   updateOpportunity,
@@ -133,7 +135,7 @@ const KNOWN_RECONCILE_TITLES = new Set(Object.values(RECONCILE_NOTE_TITLES));
  * sequential writes -- the same risk this file already accepts between updateOpportunity and
  * setPostingState in confirm(). Not worth that blast radius for this.
  */
-async function writeReconcileNote(
+export async function writeReconcileNote(
   db: Db,
   ctx: UserCtx,
   opportunityId: string,
@@ -176,6 +178,44 @@ export async function flag(
   return { status: 'needs_review', detail };
 }
 
+/** A description that changed while the board was read stays as it is, and the timeline says so. */
+async function leaveEdited(db: Db, ctx: UserCtx, opportunityId: string): Promise<ReconcileOutcome> {
+  return await flag(
+    db,
+    ctx,
+    opportunityId,
+    'edited',
+    'The description changed while the board was being checked, so the board search left it as it is.',
+  );
+}
+
+type OpportunityPatch = Parameters<typeof updateOpportunity>[3];
+
+/**
+ * Writes confirm()'s patch, only while the description is still `opp`'s: DescriptionChanged, with
+ * nothing written, when it is not (#856).
+ */
+async function writeConfirmed(
+  db: Db,
+  ctx: UserCtx,
+  opp: OpportunityView,
+  patch: OpportunityPatch,
+): Promise<void> {
+  const only = { ifDescription: opp };
+  try {
+    await updateOpportunity(db, ctx, opp.id, patch, only);
+  } catch (err) {
+    // updateOpportunity recomputes the dedupe key whenever `location` changes, and the ATS
+    // states one on nearly every success, so a live opportunity already holding that key
+    // would otherwise cost the user the description they captured for. The description is
+    // the point; the location is not worth losing it over.
+    if (!(err instanceof HttpError) || err.statusCode !== 409) throw err;
+    const retry = { ...patch };
+    delete retry.location;
+    await updateOpportunity(db, ctx, opp.id, retry, only);
+  }
+}
+
 /**
  * Stores the ATS posting over the capture, keeping what the capture alone carried. Exported for
  * issue #264: re-deriving a description from a stored capture, when a confident board match
@@ -207,22 +247,18 @@ export async function confirm(
 
   // The row as it is now (#851, qa): the board read can take seconds, and a description the user
   // saved meanwhile is theirs (D11). `opp` is what this run read before the board; anything
-  // changed since is left alone, and said so, instead of replaced with the board's copy.
+  // changed since is left alone, and said so, instead of replaced with the board's copy. The
+  // write below carries the same condition (#856), for a save that lands after this read; this
+  // read also covers a posting that leaves nothing to write.
   const now = await getOpportunity(db, ctx, opp.id);
   if (
     now.descriptionMd !== opp.descriptionMd ||
     now.descriptionFingerprint !== opp.descriptionFingerprint
   ) {
-    return await flag(
-      db,
-      ctx,
-      opp.id,
-      'edited',
-      'The description changed while the board was being checked, so the board search left it as it is.',
-    );
+    return await leaveEdited(db, ctx, opp.id);
   }
 
-  const patch: Parameters<typeof updateOpportunity>[3] = {};
+  const patch: OpportunityPatch = {};
   if (description !== '') {
     patch.descriptionMd = description;
     patch.descriptionFingerprint = descriptionFingerprint(description);
@@ -233,18 +269,13 @@ export async function confirm(
   if (posting.location != null) patch.location = posting.location;
   if (posting.remote != null) patch.remote = posting.remote;
   if (posting.compNote != null) patch.compNote = posting.compNote;
+  await racePoint('posting.confirm');
   if (Object.keys(patch).length > 0) {
     try {
-      await updateOpportunity(db, ctx, opp.id, patch);
+      await writeConfirmed(db, ctx, opp, patch);
     } catch (err) {
-      // updateOpportunity recomputes the dedupe key whenever `location` changes, and the ATS
-      // states one on nearly every success, so a live opportunity already holding that key
-      // would otherwise cost the user the description they captured for. The description is
-      // the point; the location is not worth losing it over.
-      if (!(err instanceof HttpError) || err.statusCode !== 409) throw err;
-      const retry = { ...patch };
-      delete retry.location;
-      await updateOpportunity(db, ctx, opp.id, retry);
+      if (err instanceof DescriptionChanged) return await leaveEdited(db, ctx, opp.id);
+      throw err;
     }
   }
 

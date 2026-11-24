@@ -41,6 +41,25 @@ describe('renderOutcome', () => {
     ).toEqual({ tone: 'success', text: 'Added to an opportunity you already track.' });
   });
 
+  it.each([
+    ['interested', 'Added to your pipeline as Interested.'],
+    [null, 'Added to an opportunity you already track.'],
+  ])('says when its details were not added, at stage %s (#914)', (stage, said) => {
+    const job = {
+      kind: 'job' as const,
+      resultId: 'r1',
+      duplicate: false,
+      refined: false,
+      opportunityId: 'o1',
+      stage,
+    };
+    expect(renderOutcome({ ...job, filled: false })).toEqual({
+      tone: 'success',
+      text: `${said} Its details could not be added just now. Add them on the opportunity's page.`,
+    });
+    expect(renderOutcome(job)).toEqual({ tone: 'success', text: said });
+  });
+
   it('still reads a response from a server older than these fields', () => {
     // The contract is frozen in both directions: an extension newer than its server must not
     // fall over when opportunityId and stage are absent.

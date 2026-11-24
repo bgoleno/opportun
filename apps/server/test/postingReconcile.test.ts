@@ -22,8 +22,11 @@ import {
   updateOpportunity,
 } from '../src/repos/opportunities';
 import type { UserCtx } from '../src/repos/base';
+import { onSlowTransaction } from '../src/db/gate';
 import { useApi } from './api';
+import { testDialect } from './db';
 import type { TestClient } from './isolation';
+import { pauseAt, settledOrWaiting } from './race';
 
 vi.mock('@opportun/ai', async (orig) => ({
   ...(await orig<typeof import('@opportun/ai')>()),
@@ -266,6 +269,156 @@ describe('reconcilePosting', () => {
     expect(out.postingState).not.toBe('confirmed');
   });
 
+  // #856: the save lands after the check's own re-read, so only a condition on the write itself
+  // can keep it. Characters a careless comparison or rewrite would lose: trailing spaces, CRLF, a
+  // blank line, a combining accent. (The route trims the ends.)
+  const SAVED = 'Mine, kept exactly.  \r\n\r\n  Café, not Café.';
+
+  const save = (a: TestClient, id: string) =>
+    a.request({
+      method: 'PATCH',
+      url: `/api/v1/opportunities/${id}`,
+      payload: { descriptionMd: SAVED },
+    });
+
+  const reconcileNotes = async (app: FastifyInstance, ctx: UserCtx, id: string) =>
+    (await listActivities(app.db, ctx, id, { limit: 50, offset: 0 })).items
+      .filter((i) => i.kind === 'note')
+      .map((i) => i.title);
+
+  /** What a check that skipped leaves: the saved text to the byte, nothing else of the board's. */
+  async function expectSkipped(
+    app: FastifyInstance,
+    ctx: UserCtx,
+    before: Awaited<ReturnType<typeof getOpportunity>>,
+  ) {
+    const out = await getOpportunity(app.db, ctx, before.id);
+    expect(Buffer.from(out.descriptionMd ?? '')).toEqual(Buffer.from(SAVED));
+    expect(out).toMatchObject({
+      descriptionFingerprint: before.descriptionFingerprint,
+      descriptionIsUserWritten: true,
+      postingUrl: before.postingUrl,
+      location: before.location,
+      compNote: before.compNote,
+      dedupeKey: before.dedupeKey,
+      atsJobRef: before.atsJobRef,
+      postingState: 'needs_review',
+      postingStateDetail: 'edited',
+    });
+    expect(await reconcileNotes(app, ctx, before.id)).toEqual([
+      'Posting check skipped: description already edited',
+    ]);
+  }
+
+  it('a save between the re-read and the write is kept, and the skip is recorded (#856)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const { id } = await seedCaptured(app, ctx);
+    const before = await getOpportunity(app.db, ctx, id);
+    const pause = pauseAt('posting.confirm');
+
+    const check = run(app, ctx, id, boardWith([atsPosting({ compNote: '$200k' })]));
+    await pause.reached;
+    const saved = await save(a, id);
+    expect(saved.statusCode, saved.body).toBe(200);
+    pause.release();
+
+    const outcome = await check;
+    await expectSkipped(app, ctx, before);
+    expect(outcome).toEqual({ status: 'needs_review', detail: 'edited' });
+  });
+
+  // The same, with no description to start from: "unchanged" then means "still none".
+  it('a first description saved between the re-read and the write is kept (#856)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const { id } = await seedCaptured(app, ctx);
+    await updateOpportunity(app.db, ctx, id, { descriptionMd: null, descriptionFingerprint: null });
+    const before = await getOpportunity(app.db, ctx, id);
+    const pause = pauseAt('posting.confirm');
+
+    const check = run(app, ctx, id, boardWith([atsPosting()]));
+    await pause.reached;
+    const saved = await save(a, id);
+    expect(saved.statusCode, saved.body).toBe(200);
+    pause.release();
+
+    const outcome = await check;
+    await expectSkipped(app, ctx, before);
+    expect(outcome).toEqual({ status: 'needs_review', detail: 'edited' });
+  });
+
+  it('an opportunity with no description and no save still takes the board copy (#856)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const { id } = await seedCaptured(app, ctx);
+    await updateOpportunity(app.db, ctx, id, { descriptionMd: null, descriptionFingerprint: null });
+
+    await run(app, ctx, id, boardWith([atsPosting()]));
+
+    const out = await getOpportunity(app.db, ctx, id);
+    expect(out).toMatchObject({ postingState: 'confirmed', descriptionIsUserWritten: false });
+    expect(out.descriptionMd).toContain('Comp: $200k base.');
+  });
+
+  // The board's location would take a key another live opportunity holds, so the check writes
+  // again without it: that second write must keep the save too.
+  it('a save before the write that gives up the location is kept (#856)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const { id } = await seedCaptured(app, ctx);
+    await createOpportunity(app.db, ctx, {
+      companyName: 'Soylent',
+      title: TITLE,
+      location: 'Remote, United States',
+      sourceKind: 'manual',
+    });
+    const before = await getOpportunity(app.db, ctx, id);
+    const pause = pauseAt('posting.confirm');
+
+    const check = run(app, ctx, id, boardWith([atsPosting()]));
+    await pause.reached;
+    const saved = await save(a, id);
+    expect(saved.statusCode, saved.body).toBe(200);
+    pause.release();
+
+    const outcome = await check;
+    await expectSkipped(app, ctx, before);
+    expect(outcome).toEqual({ status: 'needs_review', detail: 'edited' });
+  });
+
+  // Parked inside the write's own transaction, after its read and before its UPDATE. On Postgres
+  // the save commits meanwhile, so a check read in that transaction would be stale and only the
+  // UPDATE's own WHERE sees it. On SQLite the write gate holds the save back until the check
+  // commits; it then lands on top, so the text is kept either way.
+  it("a save that lands inside the write's transaction is kept (#856)", async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const { id } = await seedCaptured(app, ctx);
+    const before = await getOpportunity(app.db, ctx, id);
+    onSlowTransaction(() => undefined);
+    const pause = pauseAt('opportunities.update.locked');
+
+    const check = run(app, ctx, id, boardWith([atsPosting()]));
+    await pause.reached;
+    const saving = save(a, id);
+    expect(await settledOrWaiting(app, saving)).toBe(
+      testDialect === 'postgres' ? 'settled' : 'waiting',
+    );
+    pause.release();
+
+    const [, saved] = await Promise.all([check, saving]);
+    expect(saved.statusCode, saved.body).toBe(200);
+    if (testDialect === 'postgres') return await expectSkipped(app, ctx, before);
+    const out = await getOpportunity(app.db, ctx, id);
+    expect(Buffer.from(out.descriptionMd ?? '')).toEqual(Buffer.from(SAVED));
+  });
+
   // qa on #855: a forced re-derive whose confirm() left a description saved meanwhile alone must
   // say so, not answer "merged" and log that it merged with the captured page.
   it('a re-derive racing a save answers left_alone, with no "merged" note (#851)', async () => {
@@ -386,6 +539,48 @@ describe('reconcilePosting', () => {
 
     const out = await getOpportunity(app.db, ctx, opp.id);
     expect([out.postingState, out.postingStateDetail]).toEqual(['needs_review', 'no_board']);
+  });
+
+  it('a search for a board that could not finish is a check that did not, not "no board" (#866)', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const opp = await seedCaptured(app, ctx, { companyName: 'Vandelay Industries' });
+    const downFetch = (async () => ({
+      status: 503,
+      headers: new Headers(),
+      body: Buffer.from(''),
+    })) as unknown as typeof safeFetch;
+
+    await reconcilePosting(app.db, ctx, opp.id, { fetch: downFetch, log }, { board: noBoards });
+
+    expect(await getOpportunity(app.db, ctx, opp.id)).toMatchObject({
+      postingState: 'needs_review',
+      postingStateDetail: 'failed',
+      descriptionMd: CAPTURE,
+    });
+    const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+    expect(items.find((i) => i.title === 'Posting check failed')?.bodyMd).toBe(
+      "Couldn't read Vandelay Industries' board just now, so nothing was checked. Try Find posting again.",
+    );
+  });
+
+  it("a name ending in s takes an apostrophe alone in the check's note (#866)", async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    await createCompany(app.db, ctx, {
+      name: 'Vandelay Industries',
+      atsKind: 'ats_greenhouse',
+      atsRef: 'vandelay',
+      atsVerifiedAt: Date.now(),
+    });
+    const opp = await seedCaptured(app, ctx, { companyName: 'Vandelay Industries' });
+
+    await run(app, ctx, opp.id, noBoards);
+
+    const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+    expect(
+      items.find((i) => i.title === "Posting not found on the company's board")?.bodyMd,
+    ).toContain("Checked Vandelay Industries' board and found no posting");
   });
 
   it('refuses to overwrite a description the user edited after the capture', async () => {

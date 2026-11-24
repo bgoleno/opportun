@@ -34,6 +34,7 @@ import {
   networkContacts,
   nextSteps,
   opportunities,
+  SCHEMA_DIALECT,
 } from '../db/schema';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import type { Db, Exec, UserCtx } from './base';
@@ -61,6 +62,27 @@ export async function assertOpportunityOwned(
     .from(opportunities)
     .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
     .get();
+  if (row === undefined) throw notFound();
+}
+
+/**
+ * assertOpportunityOwned for a write that adds a row to the opportunity, in its transaction: it also
+ * keeps the opportunity there until the write commits. On Postgres a delete that has the row is
+ * waited for, and the row then read is gone (404), where the insert would have failed on its foreign
+ * key (#925). The lock is the one that foreign key takes, so adds don't wait for each other, nor for
+ * a save of the opportunity. SQLite's write gate runs the two one after the other.
+ */
+export async function holdOpportunity(
+  tx: Exec,
+  ctx: UserCtx,
+  opportunityId: string,
+): Promise<void> {
+  const lock = SCHEMA_DIALECT === 'postgres' ? sql` FOR KEY SHARE` : sql``;
+  const row = await rawGet(
+    tx,
+    sql`SELECT id FROM opportunities
+        WHERE ${ownedSql('user_id', ctx)} AND id = ${opportunityId}${lock}`,
+  );
   if (row === undefined) throw notFound();
 }
 
@@ -113,7 +135,7 @@ export async function createActivity(
   input: ActivityInput,
 ): Promise<ActivityRow> {
   return await withTransaction(db, async (tx) => {
-    await assertOpportunityOwned(tx, ctx, opportunityId);
+    await holdOpportunity(tx, ctx, opportunityId);
     const now = Date.now();
     const row = await tx
       .insert(activities)
@@ -194,7 +216,7 @@ export async function createReferral(
   input: { contactId: string; note?: string | null | undefined },
 ): Promise<ActivityRow> {
   return await withTransaction(db, async (tx) => {
-    await assertOpportunityOwned(tx, ctx, opportunityId);
+    await holdOpportunity(tx, ctx, opportunityId);
     const contact = await tx
       .select({ id: networkContacts.id, name: networkContacts.name })
       .from(networkContacts)
@@ -386,7 +408,7 @@ export async function createNextStep(
   input: NextStepInput,
 ): Promise<NextStepRow> {
   return await withTransaction(db, async (tx) => {
-    await assertOpportunityOwned(tx, ctx, opportunityId);
+    await holdOpportunity(tx, ctx, opportunityId);
     const now = Date.now();
     return await tx
       .insert(nextSteps)

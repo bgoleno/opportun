@@ -1,8 +1,10 @@
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { browserCloses, pressEscapeOn } from '@/test/dialog';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { DevicesCard, relativeTime } from './-devices';
+import { rereadTokens } from './-extensionSetup';
 
 const NOW = Date.UTC(2026, 9, 17, 12, 0, 0);
 const MIN = 60_000;
@@ -194,9 +196,13 @@ describe('DevicesCard', () => {
     });
     await user.click(within(shown).getByRole('button', { name: 'Copy token' }));
     expect(write).toHaveBeenCalledWith(TOKEN);
-    // Escape does not dismiss it: closing is only through the explicit confirmation.
-    await user.keyboard('{Escape}');
-    expect(screen.getByRole('dialog', { name: 'Copy your device token' })).toBeInTheDocument();
+    // Neither Escape nor a close the browser makes on its own dismisses it (#898): closing is only
+    // through the explicit confirmation.
+    pressEscapeOn(shown);
+    expect(screen.getByRole('dialog', { name: 'Copy your device token' })).toBe(shown);
+    browserCloses(shown);
+    expect(screen.getByRole('dialog', { name: 'Copy your device token' })).toBe(shown);
+    expect(within(shown).getByLabelText('Device token')).toHaveValue(TOKEN);
     await user.click(within(shown).getByRole('button', { name: 'I saved it' }));
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Copy your device token' })).toBeNull(),
@@ -208,6 +214,813 @@ describe('DevicesCard', () => {
     ).toBeInTheDocument();
     // Gone for good: the plaintext is nowhere on the page any more.
     expect(document.body.innerHTML).not.toContain(TOKEN);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/898: after an Escape on the first token's dialog, the
+  // next token was created and its dialog never showed.
+  it("shows the next token too, whatever was tried on the first one's dialog", async () => {
+    const user = userEvent.setup();
+    let made = 0;
+    mockApi({
+      'GET /device-tokens': { items: [] },
+      'GET /integrations/apple-mail': NOT_CONNECTED,
+      'POST /device-tokens': () => {
+        made += 1;
+        return { status: 201, body: { ...LAPTOP, id: `t${made}`, token: `odt_${made}` } };
+      },
+    });
+    renderWithProviders(<DevicesCard />);
+    const create = async () => {
+      await user.click(await screen.findByRole('button', { name: 'Create token' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
+      await user.type(within(dialog).getByLabelText('Name'), 'Mac');
+      await user.type(within(dialog).getByLabelText('Current password'), PW);
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      return screen.findByRole('dialog', { name: 'Copy your device token' });
+    };
+    const first = await create();
+    expect(within(first).getByLabelText('Device token')).toHaveValue('odt_1');
+    pressEscapeOn(first);
+    browserCloses(first);
+    await user.click(within(first).getByRole('button', { name: 'I saved it' }));
+
+    const second = await create();
+    expect(second).toBeVisible();
+    expect(within(second).getByLabelText('Device token')).toHaveValue('odt_2');
+  });
+
+  // https://github.com/bgoleno/opportun/issues/904: the server made the token and its answer never
+  // came, so nobody has seen the token's value, and the list did not show it to be revoked.
+  describe('a create whose answer is lost', () => {
+    const MADE: Meta = { ...LAPTOP, id: 't9', name: 'Work MacBook', lastUsedAt: null };
+    const SAYS =
+      'Could not confirm that "Work MacBook" was created. If it was, its value can no longer be shown: revoke what the list marks "Not shown here", and create another.';
+    const FOUND =
+      'A token named "Work MacBook" was created since then, and its value was not shown here. Unless you have it, revoke what the list marks "Not shown here" and create another.';
+    /** Once a create of that name has been answered: there is no other to create. */
+    const answered = (text: string) => text.replace(/,? and create another\.$/, '.');
+    const FOUND_AFTER = answered(FOUND);
+    /** The list was not read before the create, so nothing in it can be told to be the lost one. */
+    const UNKNOWN =
+      'Could not confirm that "Work MacBook" was created. If the list has one by that name whose value you do not have, it can no longer be shown: revoke it, and create another.';
+    const MARK = 'Not shown here';
+    const drop = (): never => {
+      throw new TypeError('Failed to fetch');
+    };
+    const FAILURES: [string, () => unknown][] = [
+      ['the connection drops', drop],
+      ['a proxy answers for the server', () => ({ status: 502 })],
+      ["a proxy's own refusal, which the server never gave", () => ({ status: 408 })],
+      [
+        'the server answers with an error after',
+        () => ({ status: 500, body: { error: { code: 'internal' } } }),
+      ],
+      ['the answer has no token in it', () => ({ status: 201, body: {} })],
+      ['the answer is empty', () => ({ status: 201 })],
+      // It opened the dialog that shows a token with nothing in it (qa on #918).
+      ['the token in the answer is empty', () => ({ status: 201, body: { ...MADE, token: '' } })],
+    ];
+
+    /** Opens Create, fills it in and presses Create; the server makes the token, then `answer`s. */
+    async function create(answer: () => unknown, made = true) {
+      const user = userEvent.setup();
+      let items: Meta[] = [];
+      const { calls } = mockApi({
+        'GET /device-tokens': () => ({ items }),
+        'GET /integrations/apple-mail': NOT_CONNECTED,
+        'POST /device-tokens': () => {
+          if (made) items = [MADE];
+          return answer();
+        },
+        'DELETE /device-tokens/t9': () => {
+          items = [{ ...MADE, revokedAt: NOW }];
+          return { status: 204 };
+        },
+      });
+      renderWithProviders(<DevicesCard />);
+      await user.click(await screen.findByRole('button', { name: 'Create token' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
+      await user.type(within(dialog).getByLabelText('Name'), 'Work MacBook');
+      await user.type(within(dialog).getByLabelText('Current password'), PW);
+      await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+      return { user, dialog, calls };
+    }
+
+    it.each(FAILURES)(
+      '%s: it is listed, the page says so, and it can be revoked',
+      async (_w, answer) => {
+        const { user, dialog } = await create(answer);
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(SAYS);
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        // Still said on the page, with the token in the list and marked, and no token shown.
+        const row = await screen.findByRole('listitem', { name: 'Work MacBook' });
+        expect(await within(row).findByText(MARK)).toBeInTheDocument();
+        expect(screen.getByRole('alert')).toHaveTextContent(FOUND);
+        expect(screen.queryByRole('dialog', { name: 'Copy your device token' })).toBeNull();
+
+        await user.click(within(row).getByRole('button', { name: 'Revoke' }));
+        const sure = await screen.findByRole('dialog', { name: 'Revoke Work MacBook?' });
+        await user.click(within(sure).getByRole('button', { name: 'Revoke' }));
+        await waitFor(() => expect(screen.getByText('Revoked')).toBeInTheDocument());
+        // Revoked, so there is nothing left to say.
+        await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+        expect(screen.queryByText(MARK)).toBeNull();
+      },
+    );
+
+    it('closed while it was in flight: the page says so, and the next create starts clean', async () => {
+      let fail!: () => void;
+      const { user, dialog } = await create(
+        () =>
+          new Promise((_, reject) => {
+            fail = () => reject(new TypeError('Failed to fetch'));
+          }),
+      );
+      await within(dialog).findByRole('button', { name: 'Creating...' });
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      fail();
+      expect(await screen.findByRole('alert')).toBeInTheDocument();
+      expect(await screen.findByRole('listitem', { name: 'Work MacBook' })).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(FOUND));
+      await user.click(screen.getByRole('button', { name: 'Create token' }));
+      const again = await screen.findByRole('dialog', { name: 'Create a device token' });
+      expect(within(again).queryByRole('alert')).toBeNull();
+    });
+
+    const fill = async (user: ReturnType<typeof userEvent.setup>, name = 'Work MacBook') => {
+      await user.click(await screen.findByRole('button', { name: 'Create token' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Create a device token' });
+      const field = within(dialog).getByLabelText('Name');
+      await user.clear(field);
+      await user.type(field, name);
+      const password = within(dialog).getByLabelText('Current password');
+      await user.clear(password);
+      await user.type(password, PW);
+      return dialog;
+    };
+    const pressCreate = (user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement) =>
+      user.click(within(dialog).getByRole('button', { name: 'Create' }));
+    const rowsNamed = (name = 'Work MacBook') => screen.findAllByRole('listitem', { name });
+    const revokeRow = async (user: ReturnType<typeof userEvent.setup>, row: HTMLElement) => {
+      const name = row.getAttribute('aria-label')!;
+      await user.click(within(row).getByRole('button', { name: 'Revoke' }));
+      const sure = await screen.findByRole('dialog', { name: `Revoke ${name}?` });
+      await user.click(within(sure).getByRole('button', { name: 'Revoke' }));
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: `Revoke ${name}?` })).toBeNull(),
+      );
+    };
+    /** A server whose creates each make a token or not, and answer or not, as `plan` says. */
+    function server(
+      plan: ('made and lost' | 'lost' | 'answered')[],
+      start: Meta[] = [],
+      more: Record<string, unknown> = {},
+    ) {
+      const state = { items: start };
+      const made: Meta[] = [];
+      let n = 0;
+      const revokes = Object.fromEntries(
+        ['g0', 'g1', 'g2', 'g3', ...start.map((t) => t.id)].map((id) => [
+          `DELETE /device-tokens/${id}`,
+          () => {
+            state.items = state.items.map((t) => (t.id === id ? { ...t, revokedAt: NOW } : t));
+            return { status: 204 };
+          },
+        ]),
+      );
+      const { calls } = mockApi({
+        'GET /device-tokens': () => ({ items: state.items }),
+        'GET /integrations/apple-mail': NOT_CONNECTED,
+        'POST /device-tokens': (call: ApiCall) => {
+          const what = plan[n];
+          const token = { ...MADE, id: `g${n}`, name: (call.body as { name: string }).name };
+          n += 1;
+          if (what !== 'lost') {
+            state.items = [token, ...state.items];
+            made.push(token);
+          }
+          if (what !== 'answered') return drop();
+          return { status: 201, body: { ...token, token: `odt_${token.id}` } };
+        },
+        ...revokes,
+        ...more,
+      });
+      return { state, calls };
+    }
+    const saved = async (user: ReturnType<typeof userEvent.setup>) => {
+      const shown = await screen.findByRole('dialog', { name: 'Copy your device token' });
+      await user.click(within(shown).getByRole('button', { name: 'I saved it' }));
+    };
+    const marked = () => screen.queryAllByText(MARK).map((m) => m.closest('li[aria-label]'));
+
+    // tl on #918: pressing Create again in the same dialog is the natural next step.
+    it('a retry that works, when the first was never made: nothing is left to say', async () => {
+      const user = userEvent.setup();
+      server(['lost', 'answered']);
+      renderWithProviders(<DevicesCard />);
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(SAYS);
+      await pressCreate(user, dialog);
+      await saved(user);
+      expect(await rowsNamed()).toHaveLength(1);
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+      expect(marked()).toEqual([]);
+    });
+
+    // qa on #918: over a network the list takes longer than the dialog takes to close, and the
+    // dialog's own close reads the list again, which cancels the read still out.
+    describe('with a list that takes 100 ms to read', () => {
+      const SLOW = 100;
+      /** As `server`, and each list answer is what it held when it was asked for. */
+      const slow = (
+        plan: Parameters<typeof server>[0],
+        more: Record<string, unknown> = {},
+        failing: { now: boolean } = { now: false },
+      ) => {
+        const s = server(plan, [], {
+          'GET /device-tokens': async () => {
+            const items = s.state.items;
+            const fails = failing.now;
+            await new Promise((r) => setTimeout(r, SLOW));
+            return fails ? { status: 500 } : { items };
+          },
+          ...more,
+        });
+        return s;
+      };
+      /** The second create is answered; the browser then tells the page that its dialog closed. */
+      const answeredThenClosed = async (
+        user: ReturnType<typeof userEvent.setup>,
+        dialog: HTMLElement,
+      ) => {
+        await pressCreate(user, dialog);
+        await screen.findByRole('dialog', { name: 'Copy your device token' });
+        browserCloses(dialog);
+        await saved(user);
+      };
+
+      it('a retry that works, when the first was never made: nothing is left to say', async () => {
+        const user = userEvent.setup();
+        const { calls } = slow(['lost', 'answered']);
+        renderWithProviders(<DevicesCard />);
+        await screen.findByText('No device tokens yet.');
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(SAYS);
+        await new Promise((r) => setTimeout(r, 2 * SLOW));
+        const reads = () =>
+          calls.filter((c) => c.method === 'GET' && c.path === '/device-tokens').length;
+        const before = reads();
+        await answeredThenClosed(user, dialog);
+        expect(reads()).toBe(before + 2); // The instrument: the close did read it again.
+        expect(await rowsNamed()).toHaveLength(1);
+        await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+        expect(marked()).toEqual([]);
+      });
+
+      it('a retry that works, when the first was made: only the lost one is left to say', async () => {
+        const user = userEvent.setup();
+        slow(['made and lost', 'answered']);
+        renderWithProviders(<DevicesCard />);
+        await screen.findByText('No device tokens yet.');
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        await answeredThenClosed(user, dialog);
+        await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+        const [, lost] = await rowsNamed();
+        await waitFor(() => expect(marked()).toEqual([lost]));
+        await new Promise((r) => setTimeout(r, 3 * SLOW));
+        expect(screen.getByRole('alert')).toHaveTextContent(FOUND_AFTER);
+      });
+
+      // Settled by the answer, but every read it can be told by began before it.
+      it('a read that was out when the retry was answered settles nothing', async () => {
+        const user = userEvent.setup();
+        const { state } = slow(['lost', 'answered']);
+        const { queryClient } = renderWithProviders(<DevicesCard />);
+        await screen.findByText('No device tokens yet.');
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        await new Promise((r) => setTimeout(r, 2 * SLOW));
+        // A read of the list as it is now, still out when the retry is answered.
+        void queryClient.invalidateQueries({ queryKey: ['device-tokens'] });
+        // The lost create reaches the server only now.
+        state.items = [{ ...MADE, id: 'late' }];
+        await answeredThenClosed(user, dialog);
+        await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+        const [, lost] = await rowsNamed();
+        await waitFor(() => expect(marked()).toEqual([lost]));
+        expect(screen.getByRole('alert')).toHaveTextContent(FOUND_AFTER);
+      });
+
+      it('a read that failed after the retry keeps it said, and the next that works ends it', async () => {
+        const user = userEvent.setup();
+        const failing = { now: false };
+        slow(['lost', 'answered'], {}, failing);
+        const { queryClient } = renderWithProviders(<DevicesCard />);
+        await screen.findByText('No device tokens yet.');
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        await new Promise((r) => setTimeout(r, 2 * SLOW));
+        failing.now = true;
+        await answeredThenClosed(user, dialog);
+        await screen.findByText('Request failed (http_500).');
+        expect(screen.getAllByRole('alert').map((x) => x.textContent)).toContain(answered(SAYS));
+        failing.now = false;
+        await act(() => queryClient.invalidateQueries({ queryKey: ['device-tokens'] }));
+        await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+        expect(marked()).toEqual([]);
+      });
+    });
+
+    it('a retry that works, when the first was made: the page says which one to revoke', async () => {
+      const user = userEvent.setup();
+      server(['made and lost', 'answered']);
+      renderWithProviders(<DevicesCard />);
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      await within(dialog).findByRole('alert');
+      await pressCreate(user, dialog);
+      await saved(user);
+      await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+      // The newest first: the good one, shown just now, then the lost one.
+      const [good, lost] = await rowsNamed();
+      await waitFor(() => expect(marked()).toEqual([lost]));
+      expect(screen.getByRole('alert')).toHaveTextContent(FOUND_AFTER);
+      expect(screen.getByRole('alert')).not.toHaveTextContent('create another');
+      await revokeRow(user, lost!);
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+      expect(marked()).toEqual([]);
+      expect(within(good!).getByRole('button', { name: 'Revoke' })).toBeInTheDocument();
+    });
+
+    it('two lost in a row and then one that works: both lost ones are marked, the good one never', async () => {
+      const user = userEvent.setup();
+      server(['made and lost', 'made and lost', 'answered']);
+      renderWithProviders(<DevicesCard />);
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      await within(dialog).findByRole('alert');
+      // The list now holds the first lost one, so the second's own list is no baseline.
+      await waitFor(async () =>
+        expect(
+          await screen.findAllByRole('listitem', { name: 'Work MacBook', hidden: true }),
+        ).toHaveLength(1),
+      );
+      await pressCreate(user, dialog);
+      await waitFor(async () =>
+        expect(
+          await screen.findAllByRole('listitem', { name: 'Work MacBook', hidden: true }),
+        ).toHaveLength(2),
+      );
+      await pressCreate(user, dialog);
+      await saved(user);
+      await waitFor(async () => expect(await rowsNamed()).toHaveLength(3));
+      const [, second, first] = await rowsNamed();
+      await waitFor(() => expect(marked()).toEqual([second, first]));
+      await revokeRow(user, first!);
+      expect(screen.getByRole('alert')).toHaveTextContent(FOUND_AFTER);
+      await revokeRow(user, (await rowsNamed())[1]!);
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    });
+
+    it('one shown before the list was read again is never marked', async () => {
+      const user = userEvent.setup();
+      let reads = 0;
+      server(['answered', 'made and lost'], [], {
+        // The list as it was before the first create, until the second has failed.
+        'GET /device-tokens': () => {
+          reads += 1;
+          return {
+            items:
+              reads <= 2
+                ? []
+                : [
+                    { ...MADE, id: 'g1' },
+                    { ...MADE, id: 'g0' },
+                  ],
+          };
+        },
+      });
+      renderWithProviders(<DevicesCard />);
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      await saved(user);
+      const again = await fill(user);
+      await pressCreate(user, again);
+      await within(again).findByRole('alert');
+      await user.click(within(again).getByRole('button', { name: 'Cancel' }));
+      await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+      const [lost] = await rowsNamed();
+      expect(marked()).toEqual([lost]);
+    });
+
+    // The extension setup names every token after the browser and the person.
+    it('one of that name from before is never marked, and revoking it changes nothing', async () => {
+      const user = userEvent.setup();
+      const older = { ...MADE, id: 't8', lastUsedAt: NOW - 5 * MIN };
+      const { state } = server(['lost'], [older, { ...LAPTOP, id: 't7' }]);
+      renderWithProviders(<DevicesCard />);
+      await screen.findByRole('listitem', { name: 'Work MacBook' });
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      await within(dialog).findByRole('alert');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      expect(marked()).toEqual([]);
+      expect(screen.getByRole('alert')).toHaveTextContent(SAYS);
+      // The server got to it late: it is in the list the next time that is read.
+      state.items = [MADE, ...state.items];
+      await revokeRow(user, await screen.findByRole('listitem', { name: 'MacBook connector' }));
+      await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+      const [lost, old] = await rowsNamed();
+      expect(marked()).toEqual([lost]);
+      await revokeRow(user, old!);
+      expect(marked()).toHaveLength(1);
+      expect(screen.getByRole('alert')).toHaveTextContent(FOUND);
+    });
+
+    it('revoking another one leaves it said, when nothing of it is in the list yet', async () => {
+      const user = userEvent.setup();
+      server(['lost'], [{ ...LAPTOP, id: 't7' }]);
+      renderWithProviders(<DevicesCard />);
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      await within(dialog).findByRole('alert');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await revokeRow(user, await screen.findByRole('listitem', { name: 'MacBook connector' }));
+      await screen.findByText('Revoked');
+      expect(screen.getByRole('alert')).toHaveTextContent(SAYS);
+    });
+
+    it('two lost ones of different names are both said, and a retry settles only its own', async () => {
+      const user = userEvent.setup();
+      server(['made and lost', 'lost', 'answered']);
+      renderWithProviders(<DevicesCard />);
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      await within(dialog).findByRole('alert');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      const second = await fill(user, 'Phone');
+      await pressCreate(user, second);
+      await within(second).findByRole('alert');
+      await pressCreate(user, second);
+      await saved(user);
+      await rowsNamed('Phone');
+      await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(1));
+      expect(screen.getByRole('alert')).toHaveTextContent(FOUND);
+    });
+
+    it('a list that could not be read again after the retry keeps it said', async () => {
+      const user = userEvent.setup();
+      let fail = false;
+      const { state } = server(['lost', 'answered'], [], {
+        'GET /device-tokens': () => (fail ? { status: 500 } : { items: state.items }),
+      });
+      renderWithProviders(<DevicesCard />);
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      await within(dialog).findByRole('alert');
+      fail = true;
+      await pressCreate(user, dialog);
+      await saved(user);
+      await screen.findByText('Request failed (http_500).');
+      expect(screen.getAllByRole('alert').map((x) => x.textContent)).toContain(answered(SAYS));
+    });
+
+    // tl on #918: a list that was not read is not an empty one.
+    describe('when the list was not read before the create', () => {
+      const OLDER = { ...MADE, id: 't8' };
+      it.each(['failed', 'unfinished'] as const)(
+        'its read %s: nothing is marked, and no token is named',
+        async (how) => {
+          const user = userEvent.setup();
+          let read = false;
+          const { state } = server(['made and lost'], [{ ...OLDER, lastUsedAt: NOW - MIN }], {
+            'GET /device-tokens': () => {
+              if (read) return { items: state.items };
+              return how === 'failed' ? { status: 500 } : new Promise(() => undefined);
+            },
+          });
+          renderWithProviders(<DevicesCard />);
+          if (how === 'failed') await screen.findByText('Request failed (http_500).');
+          const dialog = await fill(user);
+          read = true;
+          await pressCreate(user, dialog);
+          // Said so in the dialog too, whose sentence is set as the create fails.
+          expect(await within(dialog).findByRole('alert')).toHaveTextContent(UNKNOWN);
+          await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+          await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+          expect(marked()).toEqual([]);
+          expect(screen.getByRole('alert')).toHaveTextContent(UNKNOWN);
+          expect(screen.getByRole('alert')).not.toHaveTextContent(MARK);
+        },
+      );
+
+      it('it was read once, and its last read failed', async () => {
+        const user = userEvent.setup();
+        let fail = false;
+        const { state } = server(['lost', 'made and lost'], [OLDER], {
+          'GET /device-tokens': () => (fail ? { status: 500 } : { items: state.items }),
+        });
+        const { queryClient } = renderWithProviders(<DevicesCard />);
+        await rowsNamed();
+        fail = true;
+        await act(() => queryClient.invalidateQueries({ queryKey: ['device-tokens'] }));
+        await screen.findByText('Request failed (http_500).');
+        fail = false;
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(UNKNOWN);
+      });
+
+      it('a list being read again counts as read, when its last finished read worked', async () => {
+        const user = userEvent.setup();
+        let hold = false;
+        let go: () => void = () => undefined;
+        const { state } = server(['made and lost'], [OLDER], {
+          'GET /device-tokens': () => {
+            if (!hold) return { items: state.items };
+            hold = false;
+            return new Promise((resolve) => {
+              go = () => resolve({ items: state.items });
+            });
+          },
+        });
+        const { queryClient } = renderWithProviders(<DevicesCard />);
+        await rowsNamed();
+        hold = true;
+        act(() => void queryClient.invalidateQueries({ queryKey: ['device-tokens'] }));
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(SAYS);
+        go();
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        await waitFor(async () => expect(await rowsNamed()).toHaveLength(2));
+        const [lost] = await rowsNamed();
+        await waitFor(() => expect(marked()).toEqual([lost]));
+      });
+
+      it('it stays so through a second lost create, in the dialog too', async () => {
+        const user = userEvent.setup();
+        let read = false;
+        const { state } = server(['lost', 'made and lost'], [OLDER], {
+          'GET /device-tokens': () => (read ? { items: state.items } : { status: 500 }),
+        });
+        renderWithProviders(<DevicesCard />);
+        await screen.findByText('Request failed (http_500).');
+        const dialog = await fill(user);
+        read = true;
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        await screen.findAllByRole('listitem', { name: 'Work MacBook', hidden: true });
+        await pressCreate(user, dialog);
+        await waitFor(async () =>
+          expect(
+            await screen.findAllByRole('listitem', { name: 'Work MacBook', hidden: true }),
+          ).toHaveLength(2),
+        );
+        expect(within(dialog).getByRole('alert')).toHaveTextContent(UNKNOWN);
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        expect(marked()).toEqual([]);
+        expect(screen.getByRole('alert')).toHaveTextContent(UNKNOWN);
+      });
+
+      it.each<[string, Meta[], boolean]>([
+        ['none of that name', [], false],
+        ['one that has been used', [{ ...OLDER, lastUsedAt: NOW - MIN }], false],
+        ['an old one never used, which might be it', [OLDER], true],
+      ])('after a retry that works, with %s in the list', async (_w, start, said) => {
+        const user = userEvent.setup();
+        let read = false;
+        const { state } = server(['lost', 'answered'], start, {
+          'GET /device-tokens': () => (read ? { items: state.items } : { status: 500 }),
+        });
+        renderWithProviders(<DevicesCard />);
+        await screen.findByText('Request failed (http_500).');
+        const dialog = await fill(user);
+        read = true;
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        await pressCreate(user, dialog);
+        await saved(user);
+        await waitFor(async () => expect(await rowsNamed()).toHaveLength(1 + start.length));
+        await waitFor(() =>
+          expect(screen.queryAllByRole('alert').map((x) => x.textContent)).toEqual(
+            said ? [answered(UNKNOWN)] : [],
+          ),
+        );
+        expect(marked()).toEqual([]);
+        if (said) await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+        await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+      });
+    });
+
+    it('one that has been used is not marked, and loses its mark when it is', async () => {
+      const user = userEvent.setup();
+      const { state } = server(['made and lost']);
+      const { queryClient } = renderWithProviders(<DevicesCard />);
+      await screen.findByText('No device tokens yet.');
+      const dialog = await fill(user);
+      await pressCreate(user, dialog);
+      await within(dialog).findByRole('alert');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(marked()).toHaveLength(1));
+      // Somebody has its value, so it is not the lost one.
+      state.items = state.items.map((t) => ({ ...t, lastUsedAt: NOW }));
+      await act(() => queryClient.invalidateQueries({ queryKey: ['device-tokens'] }));
+      await waitFor(() => expect(marked()).toEqual([]));
+      expect(screen.getByRole('alert')).toHaveTextContent(SAYS);
+    });
+
+    it.each(['Cancel', 'Dismiss'])(
+      '%s reads the list again, for one the server made late',
+      async (how) => {
+        const user = userEvent.setup();
+        const { state } = server(['lost']);
+        renderWithProviders(<DevicesCard />);
+        const dialog = await fill(user);
+        await pressCreate(user, dialog);
+        await within(dialog).findByRole('alert');
+        if (how === 'Dismiss') {
+          await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+          await screen.findByRole('alert');
+          await new Promise((r) => setTimeout(r, 0));
+        }
+        state.items = [MADE];
+        await user.click(
+          how === 'Cancel'
+            ? within(dialog).getByRole('button', { name: 'Cancel' })
+            : screen.getByRole('button', { name: 'Dismiss' }),
+        );
+        expect(await screen.findByRole('listitem', { name: 'Work MacBook' })).toBeInTheDocument();
+        expect(marked()).toHaveLength(how === 'Cancel' ? 1 : 0);
+      },
+    );
+
+    it('can be put away when the token was never made', async () => {
+      const { user, dialog } = await create(drop, false);
+      await within(dialog).findByRole('alert');
+      await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+      await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+      expect(screen.queryByText(SAYS)).toBeNull();
+      expect(screen.getByText('No device tokens yet.')).toBeInTheDocument();
+    });
+
+    it.each<[string, number, string, string]>([
+      ['a wrong password', 403, 'invalid_password', 'That is not your current password.'],
+      ['too many tokens', 409, 'too_many_tokens', 'Request failed (too_many_tokens).'],
+    ])(
+      'a refusal (%s) is said as before, and the list is read again',
+      async (_w, status, code, says) => {
+        const { user, dialog, calls } = await create(
+          () => ({ status, body: { error: { code } } }),
+          false,
+        );
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent(says);
+        const reads = () => calls.filter((c) => c.method === 'GET' && c.path === '/device-tokens');
+        await waitFor(() => expect(reads()).toHaveLength(2));
+        await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('alert')).toBeNull();
+        expect(screen.queryByText(/Could not confirm/)).toBeNull();
+      },
+    );
+
+    describe('of the extension setup', () => {
+      // The browser of its target, and whom the page says you are.
+      const NAME = 'Chrome · this browser';
+      const named = (text: string) => text.replace('Work MacBook', NAME);
+      const SETUP = {
+        'GET /auth/2fa': { enabled: false, recoveryCodesLeft: 0, hasPassword: true },
+        'GET /artifacts/extension': {
+          baseUrl: 'http://nas.local:8080',
+          buildCommand: 'pnpm build',
+          targets: [
+            {
+              id: 'chrome',
+              label: 'Chrome, Edge, Brave',
+              filename: 'opportun-chrome.zip',
+              available: true,
+              buildStamp: null,
+            },
+          ],
+        },
+      };
+      async function lose(plan: Parameters<typeof server>[0], start: Meta[] = []) {
+        const user = userEvent.setup();
+        server(plan, start, SETUP);
+        renderWithProviders(<DevicesCard />);
+        for (const t of start) await screen.findByRole('listitem', { name: t.name });
+        await user.click(await screen.findByRole('button', { name: 'Set up' }));
+        const setup = await screen.findByRole('dialog', { name: 'Set up the browser extension' });
+        await user.type(await within(setup).findByLabelText('Password'), PW);
+        await user.click(within(setup).getByRole('button', { name: 'Continue' }));
+        expect(await within(setup).findByRole('alert')).toHaveTextContent(named(SAYS));
+        return { user, setup };
+      }
+
+      it('a list that was not read: no token is named, in it or on the page', async () => {
+        const user = userEvent.setup();
+        let read = false;
+        const older = { ...MADE, id: 't8', name: NAME };
+        const { state } = server(['lost'], [older], {
+          ...SETUP,
+          'GET /device-tokens': () => (read ? { items: state.items } : { status: 500 }),
+        });
+        renderWithProviders(<DevicesCard />);
+        await screen.findByText('Request failed (http_500).');
+        await user.click(screen.getByRole('button', { name: 'Set up' }));
+        const setup = await screen.findByRole('dialog', { name: 'Set up the browser extension' });
+        await user.type(await within(setup).findByLabelText('Password'), PW);
+        read = true;
+        await user.click(within(setup).getByRole('button', { name: 'Continue' }));
+        expect(await within(setup).findByRole('alert')).toHaveTextContent(named(UNKNOWN));
+        await user.click(within(setup).getByRole('button', { name: 'Close' }));
+        await rowsNamed(NAME);
+        expect(marked()).toEqual([]);
+        expect(screen.getByRole('alert')).toHaveTextContent(named(UNKNOWN));
+      });
+
+      it('one of that name from before is not marked', async () => {
+        const older = { ...MADE, id: 't8', name: NAME, lastUsedAt: NOW - 5 * MIN };
+        const { user, setup } = await lose(['made and lost'], [older]);
+        await user.click(within(setup).getByRole('button', { name: 'Close' }));
+        await waitFor(async () => expect(await rowsNamed(NAME)).toHaveLength(2));
+        const [lost] = await rowsNamed(NAME);
+        await waitFor(() => expect(marked()).toEqual([lost]));
+      });
+
+      it('said in it and on the page, listed and marked', async () => {
+        const { user, setup } = await lose(['made and lost']);
+        await user.click(within(setup).getByRole('button', { name: 'Close' }));
+        const row = await screen.findByRole('listitem', { name: NAME });
+        expect(await within(row).findByText(MARK)).toBeInTheDocument();
+        expect(screen.getByRole('alert')).toHaveTextContent(named(FOUND));
+      });
+
+      // As the create dialog's (qa on #918): something else reads the list again meanwhile.
+      it.each<['lost' | 'made and lost', number]>([
+        ['lost', 0],
+        ['made and lost', 1],
+      ])(
+        'Continue again with a list that takes 100 ms, when the first was %s: %i marked',
+        async (first, n) => {
+          const user = userEvent.setup();
+          const { state } = server([first, 'answered'], [], {
+            ...SETUP,
+            'GET /device-tokens': async () => {
+              const items = state.items;
+              await new Promise((r) => setTimeout(r, 100));
+              return { items };
+            },
+          });
+          const { queryClient } = renderWithProviders(<DevicesCard />);
+          await screen.findByText('No device tokens yet.');
+          await user.click(await screen.findByRole('button', { name: 'Set up' }));
+          const setup = await screen.findByRole('dialog', { name: 'Set up the browser extension' });
+          await user.type(await within(setup).findByLabelText('Password'), PW);
+          await user.click(within(setup).getByRole('button', { name: 'Continue' }));
+          expect(await within(setup).findByRole('alert')).toHaveTextContent(named(SAYS));
+          await new Promise((r) => setTimeout(r, 200));
+          await user.click(within(setup).getByRole('button', { name: 'Continue' }));
+          expect(await within(setup).findByText('odt_g1')).toBeInTheDocument();
+          await act(() => rereadTokens(queryClient));
+          await user.click(within(setup).getByRole('button', { name: 'Close setup' }));
+          await user.click(await screen.findByRole('button', { name: 'Close anyway' }));
+          await waitFor(async () => expect(await rowsNamed(NAME)).toHaveLength(1 + n));
+          const [, lost] = await rowsNamed(NAME);
+          await waitFor(() => expect(marked()).toEqual(n === 0 ? [] : [lost]));
+          await waitFor(() =>
+            expect(screen.queryAllByRole('alert').map((x) => x.textContent)).toEqual(
+              n === 0 ? [] : [named(FOUND_AFTER)],
+            ),
+          );
+        },
+      );
+
+      it.each<['lost' | 'made and lost', number]>([
+        ['lost', 0],
+        ['made and lost', 1],
+      ])(
+        'Continue again, when the first was %s: %i marked, and never the good one',
+        async (first, n) => {
+          const { user, setup } = await lose([first, 'answered']);
+          await user.click(within(setup).getByRole('button', { name: 'Continue' }));
+          expect(await within(setup).findByText('odt_g1')).toBeInTheDocument();
+          await user.click(within(setup).getByRole('button', { name: 'Close setup' }));
+          await user.click(await screen.findByRole('button', { name: 'Close anyway' }));
+          await waitFor(async () => expect(await rowsNamed(NAME)).toHaveLength(1 + n));
+          const [, lost] = await rowsNamed(NAME);
+          await waitFor(() => expect(marked()).toEqual(n === 0 ? [] : [lost]));
+          expect(screen.queryAllByRole('alert').map((x) => x.textContent)).toEqual(
+            n === 0 ? [] : [named(FOUND_AFTER)],
+          );
+        },
+      );
+    });
   });
 
   it('validates the dialog: a name, at least one scope and the password are required', async () => {
