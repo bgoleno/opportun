@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { oauthProvidersQuery, oauthStartHref, providerLabel } from '@/lib/oauth';
 
-export function OAuthButtons() {
+export function OAuthButtons({ onPress }: { onPress: () => void }) {
   const providers = useQuery(oauthProvidersQuery);
   const list = providers.data ?? [];
   if (list.length === 0) return null;
@@ -18,7 +18,9 @@ export function OAuthButtons() {
         {list.map((p) => (
           <Button key={p} asChild variant="outline" className="w-full">
             {/* A full navigation: the server redirects to the provider. */}
-            <a href={oauthStartHref(p)}>Continue with {providerLabel(p)}</a>
+            <a href={oauthStartHref(p)} onClick={onPress}>
+              Continue with {providerLabel(p)}
+            </a>
           </Button>
         ))}
       </div>

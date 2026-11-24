@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
-import { useState } from 'react';
+import { createFileRoute, Link, useRouter } from '@tanstack/react-router';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { AuthLayout } from '@/components/AuthLayout';
@@ -12,13 +12,8 @@ import { FormField } from '@/components/FormField';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ApiError, errorMessage } from '@/lib/api';
-import {
-  login,
-  LoginSchema,
-  registrationOpenQuery,
-  safeRedirect,
-  type LoginInput,
-} from '@/lib/auth';
+import { login, LoginSchema, registrationOpenQuery, type LoginInput } from '@/lib/auth';
+import { goAfterSignIn, keepForProvider, settleLoginAddress } from '@/lib/loginRedirect';
 import { oauthFlashMessage, takePendingFromHash } from '@/lib/oauth';
 
 export const Route = createFileRoute('/login')({
@@ -38,9 +33,9 @@ function loginError(err: unknown): string {
 }
 
 function LoginPage() {
-  const { redirect, oauth } = Route.useSearch();
+  const { oauth } = Route.useSearch();
   const qc = useQueryClient();
-  const navigate = useNavigate();
+  const router = useRouter();
   const registrationOpen = useQuery(registrationOpenQuery);
   const [formError, setFormError] = useState<string | null>(() => oauthFlashMessage(oauth));
   /**
@@ -48,6 +43,8 @@ function LoginPage() {
    * form, or from an OAuth sign-in that landed here with the token in the fragment.
    */
   const [pendingToken, setPendingToken] = useState<string | null>(takePendingFromHash);
+  // The reason has been read, above: said once (#942).
+  useEffect(() => settleLoginAddress(router), [router]);
   const form = useForm<LoginInput>({
     resolver: zodResolver(LoginSchema),
     defaultValues: { email: '', password: '' },
@@ -62,7 +59,7 @@ function LoginPage() {
         setPendingToken(result.pendingToken);
         return;
       }
-      await navigate({ href: safeRedirect(redirect), replace: true });
+      await goAfterSignIn(router);
     } catch (err) {
       setFormError(loginError(err));
     }
@@ -85,7 +82,7 @@ function LoginPage() {
       >
         <TwoFactorStep
           pendingToken={pendingToken}
-          onSignedIn={() => navigate({ href: safeRedirect(redirect), replace: true })}
+          onSignedIn={() => goAfterSignIn(router)}
           onRestart={(message) => {
             setPendingToken(null);
             form.setValue('password', '');
@@ -139,7 +136,13 @@ function LoginPage() {
         </Button>
       </form>
       <div className="mt-4">
-        <OAuthButtons />
+        <OAuthButtons
+          onPress={() => {
+            // Gone before the page is left: a browser can show it again as it was, on Back.
+            setFormError(null);
+            keepForProvider(router);
+          }}
+        />
       </div>
     </AuthLayout>
   );

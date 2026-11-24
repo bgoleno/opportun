@@ -267,3 +267,126 @@ describe('DialogContent with guardClose', () => {
     expect(dialog).not.toHaveAttribute('open');
   });
 });
+
+// https://github.com/bgoleno/opportun/issues/1007: React passes an inner dialog's close and cancel up
+// the component tree, which the DOM does not. e2e/dialogNested.spec.ts drives it with a browser's own.
+describe('DialogContent with another one inside it', () => {
+  function setup(guard: boolean) {
+    const outer = {
+      onOpenChange: vi.fn(),
+      onClose: vi.fn(),
+      onCancel: vi.fn<(e: SyntheticEvent) => void>(),
+    };
+    const inner = { onOpenChange: vi.fn() };
+    render(
+      <Dialog open onOpenChange={outer.onOpenChange}>
+        <DialogContent guardClose={guard} onClose={outer.onClose} onCancel={outer.onCancel}>
+          <DialogTitle>Outer</DialogTitle>
+          <input aria-label="File" type="file" />
+          <Dialog open onOpenChange={inner.onOpenChange}>
+            <DialogContent>
+              <DialogTitle>Inner</DialogTitle>
+            </DialogContent>
+          </Dialog>
+        </DialogContent>
+      </Dialog>,
+    );
+    const dialog = (name: string) => screen.getByRole('dialog', { name });
+    return { outer, inner, innerDialog: dialog('Inner'), outerDialog: dialog('Outer') };
+  }
+
+  it.each([false, true])('the inner one’s close is its own (guardClose: %s)', (guard) => {
+    const { outer, inner, innerDialog, outerDialog } = setup(guard);
+    browserCloses(innerDialog);
+    expect(inner.onOpenChange).toHaveBeenCalledWith(false);
+    expect(outer.onOpenChange).not.toHaveBeenCalled();
+    expect(outer.onClose).not.toHaveBeenCalled();
+    expect(outerDialog).toHaveAttribute('open');
+  });
+
+  it('the inner one’s close, come when the outer one is closed too, is not the outer one’s', () => {
+    const { outer, innerDialog, outerDialog } = setup(false);
+    // The browser has closed both, and the outer one's own event has not come.
+    outerDialog.removeAttribute('open');
+    browserCloses(innerDialog);
+    expect(outer.onOpenChange).not.toHaveBeenCalled();
+    expect(outer.onClose).not.toHaveBeenCalled();
+    browserCloses(outerDialog);
+    expect(outer.onOpenChange).toHaveBeenCalledTimes(1);
+    expect(outer.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])('the inner one’s Escape is its own (guardClose: %s)', (guard) => {
+    const { outer, inner, innerDialog } = setup(guard);
+    expect(pressEscapeOn(innerDialog)).toBe(true);
+    expect(inner.onOpenChange).toHaveBeenCalledTimes(1);
+    expect(outer.onOpenChange).not.toHaveBeenCalled();
+    expect(outer.onCancel).not.toHaveBeenCalled();
+  });
+
+  it('the outer one’s close and Escape are the outer one’s, and reach its caller', () => {
+    const { outer, inner, outerDialog } = setup(false);
+    pressEscapeOn(outerDialog);
+    expect(outer.onCancel).toHaveBeenCalledTimes(1);
+    expect(outer.onOpenChange).toHaveBeenCalledTimes(1);
+    browserCloses(outerDialog);
+    expect(outer.onClose).toHaveBeenCalledTimes(1);
+    expect(outer.onOpenChange).toHaveBeenCalledTimes(2);
+    expect(inner.onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it('a file picker’s own cancel, which bubbles, does not reach the caller', () => {
+    const { outer } = setup(false);
+    fireEvent(screen.getByLabelText('File'), new Event('cancel', { bubbles: true }));
+    expect(outer.onCancel).not.toHaveBeenCalled();
+    expect(outer.onOpenChange).not.toHaveBeenCalled();
+  });
+
+  // The outer one's cleanup runs first, and what is inside it is closed there. jsdom has no close().
+  it.each([false, true])(
+    'taken out together, the inner one is closed first, each once, and no owner is asked (guardClose: %s)',
+    (guard) => {
+      const proto = HTMLDialogElement.prototype;
+      const closes: string[] = [];
+      const shows: string[] = [];
+      const name = (el: HTMLDialogElement) => el.querySelector('h2')?.textContent ?? '';
+      proto.close = function (this: HTMLDialogElement) {
+        closes.push(`${name(this)}, in the page: ${this.isConnected}`);
+        this.removeAttribute('open');
+      };
+      proto.showModal = function (this: HTMLDialogElement) {
+        shows.push(name(this));
+        this.setAttribute('open', '');
+      };
+      try {
+        const asked = vi.fn();
+        const at = (dialog: string) => (next: boolean) => asked(dialog, next);
+        const both = (
+          <Dialog open onOpenChange={at('outer')}>
+            <DialogContent guardClose={guard}>
+              <DialogTitle>Outer</DialogTitle>
+              <Dialog open onOpenChange={at('inner')}>
+                <DialogContent guardClose={guard}>
+                  <DialogTitle>Inner</DialogTitle>
+                </DialogContent>
+              </Dialog>
+            </DialogContent>
+          </Dialog>
+        );
+        const { rerender } = render(both);
+        const dialogs = [...document.querySelectorAll('dialog')];
+        expect(shows.length).toBe(2);
+        rerender(<p>Gone</p>);
+        expect(closes).toEqual(['Inner, in the page: true', 'Outer, in the page: true']);
+        // The close events, which come when both have gone.
+        for (const el of dialogs) fireEvent(el, new Event('close'));
+        expect(asked).not.toHaveBeenCalled();
+        expect(shows.length).toBe(2);
+        expect(document.querySelector('dialog')).toBeNull();
+      } finally {
+        Reflect.deleteProperty(proto, 'close');
+        Reflect.deleteProperty(proto, 'showModal');
+      }
+    },
+  );
+});
