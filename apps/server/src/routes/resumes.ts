@@ -7,6 +7,8 @@ import { z } from 'zod';
 import type { DocumentStore } from '../adapters/documentStore';
 import { docUrl, searchDriveDocuments } from '../adapters/googleDocs';
 import { readDocumentStorePref, readRrBaseUrl, rrResumeUrl } from '../adapters/reactiveResume';
+import { HttpError } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import { requireUser, type Db, type UserCtx } from '../repos/base';
 import { getOpportunity } from '../repos/opportunities';
 import { displayNameOf } from '../repos/users';
@@ -22,6 +24,7 @@ import {
 import {
   deleteResume,
   getResume,
+  insertCopiedResume,
   insertResume,
   listResumes,
   NAMING_VARIABLES,
@@ -214,6 +217,45 @@ const TemplateBody = z.object({
     }),
 });
 
+const copyFailed = () =>
+  new HttpError(
+    502,
+    'resume_copy_failed',
+    'The resume could not be copied. Try again.',
+    undefined,
+    { userFacing: true },
+  );
+
+/** Where a store's documents are, for the stores whose documents the user can see there. */
+const STORE_NAMES: Partial<Record<ResumeStore, string>> = {
+  google_doc: 'Google Docs',
+  reactive_resume: 'Reactive Resume',
+};
+
+/** The most of a copy's name that is said, so that the sentence it is in is never cut (#962). */
+const SAID_NAME_MAX = 80;
+/** Control characters, and those that make text display as something it is not. */
+const UNSAFE_IN_TEXT = /[\p{Cc}\p{Cs}\u200b-\u200f\u2028-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/gu;
+
+/**
+ * For a copy whose resume the database failed to write: whether it was written is not always known (a
+ * connection cut at the COMMIT), so the copy is never removed, and the user is told where it is. A local
+ * copy is nothing the user can see, and is not said.
+ */
+function notSaved(store: ResumeStore, asked: string): HttpError | undefined {
+  // eslint-disable-next-line security/detect-object-injection -- a resume store of the fixed list
+  const where = STORE_NAMES[store];
+  if (where === undefined) return undefined;
+  const name = [...asked].slice(0, SAID_NAME_MAX).join('').replace(UNSAFE_IN_TEXT, '');
+  return new HttpError(
+    500,
+    'resume_not_saved',
+    `The resume may not have been saved. Look in Resumes: if it is not there, the copy named "${name}" was left in ${where}.`,
+    undefined,
+    { userFacing: true },
+  );
+}
+
 export async function resumeRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
@@ -280,14 +322,28 @@ export async function resumeRoutes(app: FastifyInstance): Promise<void> {
         roleSlug: roleSlug(opportunity.title),
       });
       const meta = await docs.copyFrom(ctx, base.docRef, name);
-      const row = await insertResume(db, ctx, {
-        kind: 'tailored',
-        title: meta.title,
-        store: base.store,
-        docRef: meta.docRef,
-        opportunityId: opportunity.id,
-        parentResumeId: base.id,
-      });
+      // No copy was made: two resumes must never share one document, as an edit of one is the other's.
+      if (meta.docRef === base.docRef) throw copyFailed();
+      await racePoint('resumes.copied');
+      // Everything that can refuse this create is above: below, the copy has been made.
+      let row: ResumeRow;
+      try {
+        row = await insertCopiedResume(db, ctx, {
+          kind: 'tailored',
+          title: meta.title,
+          store: base.store,
+          docRef: meta.docRef,
+          opportunityId: opportunity.id,
+          parentResumeId: base.id,
+        });
+      } catch (err) {
+        // The name asked for, the user's own, and not what the store answered.
+        const said = notSaved(base.store, name);
+        if (said === undefined) throw err;
+        // As the error handler logs any other: this one it answers without a line.
+        req.log.error({ err }, 'unhandled error');
+        throw said;
+      }
       return reply.code(201).send(await resumeView(db, ctx, row));
     },
   );
