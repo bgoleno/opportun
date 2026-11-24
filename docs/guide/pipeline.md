@@ -136,7 +136,10 @@ five tabs.
 
 ### Timeline
 
-A running log: stage changes, attached postings, referral asks, and entries you add yourself
+A running log: stage changes, attached postings (**Also posted via ...**, with the location and the
+link: one you attached, or
+[another location Discovery found](discovery.md#a-job-already-in-your-pipeline)), referral asks, and
+entries you add yourself
 (Note, Meeting, Interview or Link, each with a title, details in Markdown and, for meetings
 and interviews, participants and a time). The **Next steps** panel holds dated to-dos; ones
 due within 7 days show on the dashboard.
