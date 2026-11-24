@@ -727,6 +727,22 @@ describe('#914: a saved capture whose step gave up a wait', () => {
     expect((await getOpportunity(app.db, ctxOf(a), id)).postingUrl).toBeNull();
   });
 
+  // An application was started on it at each try of the fill's save (#913).
+  it('a save that gave up starting over: saved, and not filled', async () => {
+    const { app, a, bearer, id } = await capture();
+    failAt('opportunities.update.locked', () => new HttpError(409, 'conflict', 'Try again.'));
+    const res = await push(app, bearer);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ opportunityId: id, stage: 'interested', filled: false });
+    expect((await getOpportunity(app.db, ctxOf(a), id)).postingUrl).toBeNull();
+  });
+
+  it('control: another refusal in the fill fails the capture', async () => {
+    const { app, bearer } = await capture();
+    failAt('opportunities.update.locked', () => new HttpError(409, 'other', 'No.'));
+    expect((await push(app, bearer)).statusCode).toBe(409);
+  });
+
   it('the step is logged by name, with nothing of the capture', async () => {
     const { app, a, id } = await capture();
     failAt('opportunities.update.locked', () => pgError('55P03'));

@@ -557,7 +557,7 @@ export async function updateOpportunity(
 }
 
 async function updateOnce(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   id: string,
   patch: UpdateOpportunityInput,

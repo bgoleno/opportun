@@ -1048,7 +1048,9 @@ export async function resolveCapture(
     try {
       return { value: await fn() };
     } catch (err) {
-      if (!isLockWaitEnded(err)) throw err;
+      // A save that started over for applications being started and gave up is one too (#913).
+      const gaveUpStarting = err instanceof HttpError && err.code === 'conflict';
+      if (!isLockWaitEnded(err) && !gaveUpStarting) throw err;
       input.log?.warn({ 'opportun.opportunity.id': opportunity.id }, gaveUp);
       return null;
     }
