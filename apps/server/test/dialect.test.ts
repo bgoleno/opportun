@@ -196,6 +196,7 @@ describe.runIf(sqliteOnly)('dialect helpers on SQLite', () => {
       payload: { n: 1 },
       attempts: 1,
       maxAttempts: 3,
+      lockedAt: 100,
       userId: null,
       traceContext: null,
     });
