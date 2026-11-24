@@ -29,7 +29,7 @@ async function draft(app: FastifyInstance, c: TestClient): Promise<string> {
   const ctx = { userId: c.userId, isAdmin: false };
   const opp = await createOpportunity(app.db, ctx, {
     companyName: 'Example Corp',
-    title: `Senior Example Engineer ${newId().slice(-6)}`,
+    title: `Senior Example Engineer ${newId()}`,
     sourceKind: 'manual',
   });
   await app.db
