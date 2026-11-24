@@ -65,8 +65,9 @@ const CandidateView = z.object({
 });
 
 /**
- * At `edited`, the description the user agreed to lose, named by its fingerprint (#858): text saved
- * since is not covered by that, so it is kept. Without it the description is always kept.
+ * The description the user agreed to lose, named by its fingerprint: text saved since is not covered
+ * by that, so it is kept. At `edited` (#858), and to a re-derive (#1010); without it, a description
+ * of the user's is always kept.
  */
 const DescriptionAgreed = z.string().regex(/^[0-9a-f]{64}$/);
 
@@ -127,7 +128,14 @@ const AttachBody = z
     message: 'send exactly one of posting, url or text',
   });
 
-const RederiveBody = z.object({ force: z.boolean().optional() }).strict();
+const RederiveBody = z
+  .object({
+    /** The user was asked, and said yes: the description (or their confirmation) may be lost. */
+    force: z.boolean().optional(),
+    /** The description they were asked about: no other is replaced (#1010). */
+    replaceDescription: DescriptionAgreed.optional(),
+  })
+  .strict();
 
 const RederiveResponse = z.object({
   outcome: z.enum(['merged', 'capture_only', 'no_description_found', 'left_alone']),
@@ -463,13 +471,16 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
     { schema: { params: IdParams, response: { 200: RederiveResponse } } },
     async (req) => {
       const ctx = app.requireUser(req);
-      const { force } = RederiveBody.parse(req.body ?? {});
+      const { force, replaceDescription } = RederiveBody.parse(req.body ?? {});
       const outcome = await rederivePosting(
         db,
         ctx,
         req.params.id,
         { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
-        { force },
+        {
+          force,
+          ...(replaceDescription === undefined ? {} : { replaceAgreed: replaceDescription }),
+        },
       );
       return outcome.kind === 'no_description_found'
         ? { outcome: outcome.kind }

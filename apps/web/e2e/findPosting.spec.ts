@@ -415,6 +415,43 @@ test.describe("the user's description survives the posting checks (#851, #856, #
     );
   });
 
+  test('saved in another tab, a re-derive from a page that has not seen it keeps it (#1010)', async ({
+    page,
+    playwright,
+    context,
+  }) => {
+    await registerUser(page);
+    const id = await captured(page, playwright, 'Senior Backend Engineer');
+    expect(await settled(page, id)).toMatchObject({ postingState: 'confirmed' });
+    await details(page, id);
+    await expect(page.getByText("Matched on the company's board.")).toBeVisible();
+    const other = await context.newPage();
+    await details(other, id);
+    await other.getByRole('button', { name: 'Edit description' }).click();
+    await other.getByLabel('Description').fill(TYPED);
+    await other.getByRole('button', { name: 'Save' }).click();
+    await expect(other.getByText(TYPED)).toBeVisible();
+
+    // The first tab still shows the board's copy, and its question names no edit.
+    const ask = page.getByRole('dialog', { name: 'Re-derive this description?' });
+    const rederive = async (asked: string) => {
+      await page.getByRole('button', { name: 'Re-derive from capture' }).click();
+      await expect(ask).toContainText(asked);
+      await ask.getByRole('button', { name: 'Re-derive' }).click();
+    };
+    await rederive('This replaces the current description');
+    await expect(
+      toasts(page).getByText("This opportunity's description changed since this page showed it"),
+    ).toBeVisible();
+    expect(await description(page, id)).toBe(TYPED);
+    await expect(page.getByText(TYPED)).toBeVisible();
+
+    // Asked again, about the edit: the user's to lose.
+    await rederive("You've edited this description by hand.");
+    await expect(toasts(page).getByText('Description re-derived from a board match')).toBeVisible();
+    expect(await description(page, id)).not.toContain(TYPED);
+  });
+
   test('from edited, replacing the description with the board copy asks first', async ({
     page,
     playwright,

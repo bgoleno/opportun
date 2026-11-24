@@ -374,10 +374,11 @@ export function useRederivePosting(id: string) {
   const qc = useQueryClient();
   const refresh = useRefresh(id);
   return useMutation({
-    mutationFn: (force: boolean) =>
+    // `replaceDescription`: the description the user was asked about (shownDescription, #1010).
+    mutationFn: (vars: { force: boolean; replaceDescription: string }) =>
       api<RederiveResult>(`/opportunities/${enc(id)}/posting/rederive`, {
         method: 'POST',
-        body: { force },
+        body: vars,
       }),
     onSuccess: (res) => {
       if (res.opportunity !== undefined) qc.setQueryData(qk.opportunity(id), res.opportunity);

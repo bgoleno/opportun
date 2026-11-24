@@ -6,15 +6,18 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import type { OpportunityView } from '@/lib/opportunities';
 
 /**
- * The fingerprint of the user's text that a posting would replace, or null when there is none to
- * ask about. Taken when the question is asked, and sent with the answer: text saved since then was
- * not asked about, and the server keeps it. (core's own SHA-256: `crypto.subtle` is missing on a
- * plain-http address other than localhost, where some instances run.)
+ * The fingerprint of the description a page shows. Taken when it asks to replace it, and sent with the
+ * answer: text saved since then was not asked about, and the server keeps it. (core's own SHA-256:
+ * `crypto.subtle` is missing on a plain-http address other than localhost, where some instances run.)
  */
+export const shownDescription = (opp: OpportunityView): string =>
+  sha256Hex(opp.descriptionMd ?? '');
+
+/** The same for the user's text that a posting would replace, or null when there is none to ask about. */
 export function descriptionAtStake(opp: OpportunityView): string | null {
   const edited = opp.postingState === 'needs_review' && opp.postingStateDetail === 'edited';
   if (!edited || !opp.descriptionIsUserWritten || opp.descriptionMd == null) return null;
-  return sha256Hex(opp.descriptionMd);
+  return shownDescription(opp);
 }
 
 const WHAT = {

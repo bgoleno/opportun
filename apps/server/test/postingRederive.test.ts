@@ -154,7 +154,7 @@ const run = (
   ctx: UserCtx,
   id: string,
   board: BoardLookup,
-  opts: { force?: boolean } = {},
+  opts: { force?: boolean; replaceAgreed?: string } = {},
 ) => rederivePosting(app.db, ctx, id, { fetch: missingFetch, log }, { ...opts, board });
 
 describe('rederivePosting', () => {
@@ -173,13 +173,16 @@ describe('rederivePosting', () => {
     expect(out.descriptionMd).toBe('my own notes');
   });
 
-  it('overwrites a user-written description when forced', async () => {
+  it('overwrites a user-written description when forced, over that text (#1010)', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     const opp = await seed(app, ctx);
     await updateOpportunity(app.db, ctx, opp.id, { descriptionMd: 'my own notes' });
 
-    const outcome = await run(app, ctx, opp.id, noBoards, { force: true });
+    const outcome = await run(app, ctx, opp.id, noBoards, {
+      force: true,
+      replaceAgreed: descriptionFingerprint('my own notes'),
+    });
 
     expect(outcome.kind).toBe('capture_only');
     const out = await getOpportunity(app.db, ctx, opp.id);
