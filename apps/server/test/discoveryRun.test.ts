@@ -38,6 +38,7 @@ import { createCompany } from '../src/repos/companies';
 import { createOpportunity, transitionOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { cpuMs } from './scaling';
 
 const boot = useApi();
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
@@ -159,9 +160,10 @@ describe('sanitizePosting (Review Focus 1)', () => {
 
   it('stays fast on hostile markup', () => {
     const nasty = `${'<script>'.repeat(20_000)}${'< '.repeat(50_000)}<${' '.repeat(100_000)}`;
-    const started = Date.now();
+    // CPU time, which a busy host does not add to (#948).
+    const started = cpuMs();
     sanitizePosting({ company: 'A', title: 'B', descriptionMd: nasty });
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(cpuMs() - started).toBeLessThan(1000);
   });
 });
 

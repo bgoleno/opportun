@@ -16,6 +16,7 @@ import {
   MAX_SCANNED_CHARS,
   privateContentSignal,
 } from '../src/lib/textSignals';
+import { cpuMs } from './scaling';
 
 describe('privateContentSignal', () => {
   it('names the medical signal it found', () => {
@@ -104,10 +105,11 @@ describe('scanning is bounded', () => {
   });
 
   it('returns in well under 250 ms on a 5 MB body', () => {
-    const started = performance.now();
+    // CPU time, which a busy host does not add to (#948).
+    const started = cpuMs();
     jobVocabularySignal(huge);
     privateContentSignal(huge);
-    expect(performance.now() - started).toBeLessThan(250);
+    expect(cpuMs() - started).toBeLessThan(250);
   });
 
   it('is capped at a size that still covers a real message', () => {

@@ -5,7 +5,7 @@
 // the response's text.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { SEND_TIMEOUT_MS, send } from '../src/obs/export/sender';
 
 const servers: Server[] = [];
@@ -108,10 +108,22 @@ describe('send (14.10 rule 4)', () => {
   });
 
   it('a destination that never answers times out, at the timeout given', async () => {
-    const { port } = await listen(() => undefined); // never responds
-    const started = Date.now();
-    expect(await send(post(`http://127.0.0.1:${port}/x`), { timeoutMs: 150 })).toBe('timeout');
-    expect(Date.now() - started).toBeLessThan(2_000);
+    let asked!: () => void;
+    const arrived = new Promise<void>((r) => (asked = r));
+    const { port } = await listen(() => asked()); // never responds
+    // The sender's timer, moved by the test once the request is there: no wall clock to be late by
+    // (#948). Sockets keep their own.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    onTestFinished(() => void vi.useRealTimers());
+    let outcome: string | undefined;
+    const sent = send(post(`http://127.0.0.1:${port}/x`), { timeoutMs: 150 }).then(
+      (o) => (outcome = o),
+    );
+    await arrived;
+    await vi.advanceTimersByTimeAsync(149);
+    expect(outcome).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await sent).toBe('timeout');
     expect(SEND_TIMEOUT_MS).toBe(10_000);
   });
 

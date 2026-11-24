@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { obsMetricPoints } from '../src/db/schema';
 import { flushNow, setCollecting } from '../src/obs';
 import { MINUTE_MS } from '../src/obs/metrics';
@@ -21,6 +21,7 @@ import { obsHttpPlugin, SPA_ASSET_ROUTE } from '../src/plugins/obsHttp';
 import { spaRoutes } from '../src/routes/spa';
 import { useApi } from './api';
 import { useInMemoryTracing } from './otelProvider';
+import { PATIENCE_MS } from './patience';
 
 const boot = useApi();
 const exporter = useInMemoryTracing();
@@ -106,9 +107,9 @@ describe('a request the client aborts is recorded and its span ended (#371)', ()
     client.end();
     await inHandler;
     client.destroy();
-    for (let i = 0; i < 100 && exporter.getFinishedSpans().length === 0; i += 1) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await vi.waitFor(() => expect(exporter.getFinishedSpans()).not.toEqual([]), {
+      timeout: PATIENCE_MS,
+    });
     release();
     const [span] = exporter.getFinishedSpans().filter((x) => x.name === 'GET /api/v1/slow/:id');
     expect(span).toBeDefined();
@@ -160,9 +161,9 @@ describe('a request the client aborts is recorded and its span ended (#371)', ()
     client.end(body);
     await inHandler;
     client.destroy();
-    for (let i = 0; i < 100 && exporter.getFinishedSpans().length === 0; i += 1) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await vi.waitFor(() => expect(exporter.getFinishedSpans()).not.toEqual([]), {
+      timeout: PATIENCE_MS,
+    });
     const [span] = exporter
       .getFinishedSpans()
       .filter((x) => x.name === 'POST /api/v1/slow-post/:id');

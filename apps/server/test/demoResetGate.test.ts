@@ -6,7 +6,7 @@ import { enqueue } from '../src/lib/jobQueue';
 import { randomBytes } from 'node:crypto';
 import { connect } from 'node:net';
 import { eq } from 'drizzle-orm';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { DEMO_SEED_ACK_KEY } from '../src/lib/demo/seed';
 import { DEMO_USERS } from '../src/lib/demo/fixture';
@@ -18,6 +18,7 @@ import { DemoResetGate, DemoResetGateTimeout } from '../src/lib/demoResetGate';
 import { racePoint, setRaceHook } from '../src/lib/racePoints';
 import { testApp } from './helpers';
 import { signIn, type TestClient } from './isolation';
+import { PATIENCE_MS } from './patience';
 
 afterEach(() => setRaceHook(undefined));
 
@@ -79,6 +80,16 @@ async function settled(p: Promise<unknown>): Promise<boolean> {
   await settle();
   return done;
 }
+
+/** Whether a promise that has nothing to wait for settles: a busy host may take its time (#948). */
+const settles = (p: Promise<unknown>): Promise<boolean> =>
+  Promise.race([
+    p.then(
+      () => true,
+      () => true,
+    ),
+    new Promise<boolean>((r) => setTimeout(() => r(false), PATIENCE_MS).unref()),
+  ]);
 
 /** A demo server, seeded, with demo-user1 signed in: a shared account. */
 async function seededDemo(limits?: { startMs?: number; holdMs?: number }) {
@@ -174,7 +185,7 @@ describe('DemoResetGate', () => {
       }, 20),
     ).rejects.toBeInstanceOf(DemoResetGateTimeout);
     expect(ran).toBe(false);
-    expect(await settled(gate.shared())).toBe(true);
+    expect(await settles(gate.shared())).toBe(true);
   });
 });
 
@@ -239,7 +250,7 @@ describe('the reset waits for a request already in, and a request that comes dur
       const reset = runDemoResetGated(app.db, env, gate);
       await park.arrived;
       const health = app.inject({ method: 'GET', url: '/healthz' });
-      expect(await settled(health)).toBe(true);
+      expect(await settles(health)).toBe(true);
       park.release();
       await reset;
     } finally {
@@ -401,7 +412,7 @@ describe('no request holds the gate past the reset, whatever its client does', (
       other.release();
       await reset;
       // It got its place after the reset and gave it straight back.
-      await expect.poll(() => gate.held, { timeout: 2_000 }).toBe(0);
+      await expect.poll(() => gate.held, { timeout: PATIENCE_MS }).toBe(0);
       await runDemoResetGated(app.db, env, gate, { timeoutMs: 500 });
     } finally {
       app.server.closeAllConnections();
@@ -439,6 +450,9 @@ describe('no request holds the gate past the reset, whatever its client does', (
   it('a request whose body never finishes arriving is ended, and a reset started meanwhile runs', async () => {
     const { app, env, gate, visitor } = await seededDemo({ startMs: 100 });
     try {
+      // Its hold, seen as it is taken: 100 ms later it is given back, and a poll for it on a busy host
+      // can look too late (#948).
+      const shared = vi.spyOn(gate, 'shared');
       const address = await app.listen({ port: 0, host: '127.0.0.1' });
       const { hostname, port } = new URL(address);
       // Headers and a promised body of 1000 bytes, of which only a few ever come.
@@ -457,9 +471,8 @@ describe('no request holds the gate past the reset, whatever its client does', (
           '{"name":',
         ].join('\r\n'),
       );
-      await expect.poll(() => gate.held, { timeout: 2_000 }).toBe(1);
-      const reset = runDemoResetGated(app.db, env, gate, { timeoutMs: 5_000 });
-      await reset;
+      await expect.poll(() => shared.mock.calls.length, { timeout: PATIENCE_MS }).toBe(1);
+      await runDemoResetGated(app.db, env, gate, { timeoutMs: PATIENCE_MS });
       await ended;
       expect(gate.held).toBe(0);
     } finally {
