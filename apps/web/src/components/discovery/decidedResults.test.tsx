@@ -86,6 +86,40 @@ describe('DecidedResults', () => {
     expect(calls.some((c) => c.search.includes('disposition=dismissed'))).toBe(true);
   });
 
+  it('says a result was linked to an opportunity already there, and leads to it (#971)', async () => {
+    const user = userEvent.setup();
+    const linked = result({
+      id: 'l1',
+      disposition: 'accepted',
+      opportunityId: 'opp-1',
+      aiScore: null,
+      rankSkipReason: 'linked',
+      posting: { company: 'Globex', title: 'Linked Role', location: 'Boston, MA' },
+    });
+    const accepted = result({
+      id: 'a1',
+      disposition: 'accepted',
+      opportunityId: 'opp-2',
+      posting: { company: 'Globex', title: 'Accepted Role' },
+    });
+    mockApi({ 'GET /discovery/results': queueHandler({ accepted: [linked, accepted] }) });
+    renderWithProviders(<DecidedResults />);
+    await user.click(await screen.findByRole('tab', { name: /^Accepted/ }));
+
+    const row = await screen.findByRole('listitem', { name: 'Linked Role at Globex' });
+    expect(row).toHaveTextContent('Linked to an opportunity already there');
+    // Nobody accepted it.
+    expect(row).toHaveTextContent(/Linked [A-Z][a-z]{2} \d/);
+    expect(row).not.toHaveTextContent('Accepted');
+    expect(within(row).getByRole('link', { name: 'View opportunity' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1',
+    );
+    const other = screen.getByRole('listitem', { name: 'Accepted Role at Globex' });
+    expect(other).not.toHaveTextContent('Linked');
+    expect(other).toHaveTextContent('Accepted');
+  });
+
   it('shows why a result was dismissed, naming the denied company for a denylist suppression (issue #199)', async () => {
     const manual = result({
       id: 'd1',

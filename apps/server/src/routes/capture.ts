@@ -264,12 +264,18 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
         const source = await ensureChannelSource(db, ctx, 'manual');
         // In the user's one capture slot, with a bounded wait for their ingest lock (#309), so
         // captures queued behind a slow holder cannot take every pool connection.
-        const { stats, inserted } = await withCaptureSlot(db, ctx.userId, () =>
+        const { stats, inserted, linked } = await withCaptureSlot(db, ctx.userId, () =>
           insertLeads(db, ctx, [posting], source.id, undefined, {
             lockTimeoutMs: CAPTURE_SLOT.lockTimeoutMs,
           }),
         );
         const result = inserted[0];
+        if (linked[0] !== undefined) {
+          // Another location of a job in the pipeline (#971): linked, and there is no card to show.
+          throw new HttpError(409, 'duplicate', undefined, {
+            existingId: linked[0].opportunityId ?? '',
+          });
+        }
         if (result === undefined) {
           throw new HttpError(
             stats.duplicates > 0 ? 409 : 422,

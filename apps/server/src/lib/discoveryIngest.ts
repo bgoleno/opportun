@@ -15,6 +15,7 @@ import {
   roleTargets,
 } from '../db/schema';
 import { loadDeniedCompanies, matchDeniedCompany, type DeniedCompany } from './deniedCompanies';
+import { capturedInto, recordAlsoPosted } from './openOpportunity';
 import { sanitizePosting } from './postingSanitize';
 import { prefilter, type PrefilterVerdict } from './prefilter';
 import { racePoint } from './racePoints';
@@ -31,6 +32,8 @@ import {
   setDisposition,
   setSourceStatus,
   type DiscoveryResultView,
+  type ResultInput,
+  findChainTarget,
   ingestScope,
 } from '../repos/discovery';
 import { DISCOVERY_RANK_KIND, LEAD_RESOLVE_KIND, MULTI_POSTED_PREFIX } from './jobKinds';
@@ -48,6 +51,8 @@ export interface RunStats {
   suppressed: number;
   /** Of `inserted`, those the pre-filter held: stored, and no ranking call (#218). */
   filtered: number;
+  /** Postings of a job already in the pipeline, linked to its opportunity: no card (#971). */
+  linked: number;
 }
 
 type DuplicateCheck = 'duplicate' | 'multi_posted' | 'new';
@@ -57,15 +62,17 @@ type DuplicateCheck = 'duplicate' | 'multi_posted' | 'new';
  * already decided on (accepted or dismissed), so an attached, force-accepted or merged-away
  * posting is not re-suggested on the next poll; a pending result with the key from this same
  * source; or any earlier result from this same source with the posting's externalId (a repost
- * whose title or location drifted). A pending result from another source makes it multi-posted.
+ * whose title or location drifted); or the very posting, by its id on its site, of an opportunity it
+ * was captured into (#971). A pending result from another source makes it multi-posted.
  */
 async function checkDuplicate(
   exec: Exec,
   ctx: UserCtx,
   key: string,
   sourceId: string,
-  externalId: string | null | undefined,
+  posting: NormalizedPosting,
 ): Promise<DuplicateCheck> {
+  const { externalId } = posting;
   const opp = await exec
     .select({ id: opportunities.id })
     .from(opportunities)
@@ -104,6 +111,7 @@ async function checkDuplicate(
       .get();
     if (same !== undefined) return 'duplicate';
   }
+  if ((await capturedInto(exec, ctx, posting)) !== undefined) return 'duplicate';
   return pending.length > 0 ? 'multi_posted' : 'new';
 }
 
@@ -184,6 +192,38 @@ export async function prefilterJudge(
   return (posting) => prefilter(posting, targets);
 }
 
+/**
+ * Links a posting to the open opportunity of its card (findChainTarget), when there is one: stored
+ * accepted into it, with a timeline entry, and nothing else on the opportunity changes (the owner's
+ * decision on https://github.com/bgoleno/opportun/issues/967). Null when there is none.
+ *
+ * Looked for before the user's lock, which a run would else take for every posting it stores, and
+ * again under it, as an Accept, a delete or a merge may have committed between. One that commits
+ * after the first look leaves a card, whose Accept or capture then links. Lock order:
+ * repos/submissionReview.ts submissionScope.
+ */
+async function linkToOpen(
+  tx: Exec,
+  ctx: UserCtx,
+  input: ResultInput & { dedupeKey: string },
+  lockTimeoutMs: number | undefined,
+): Promise<DiscoveryResultView | null> {
+  const look = () => findChainTarget(tx, ctx, input.dedupeKey, input.posting);
+  if ((await look()) === undefined) return null;
+  await racePoint('discovery.ingest.linking');
+  await lockScope(
+    tx,
+    `user:${ctx.userId}`,
+    lockTimeoutMs === undefined ? {} : { timeoutMs: lockTimeoutMs },
+  );
+  const opportunityId = await look();
+  if (opportunityId === undefined) return null;
+  const { id } = await insertResult(tx, ctx, { ...input, rankSkipReason: 'linked' });
+  const result = await setDisposition(tx, ctx, id, 'accepted', opportunityId);
+  await recordAlsoPosted(tx, ctx, opportunityId, result);
+  return result;
+}
+
 /** Stores one sanitized posting unless it is a duplicate, then immediately dismisses it if its
  *  company matched the user's denylist (`sourceCompanyId`: the source's own linked company,
  *  when it is a per-company board tracker; see deniedCompanies.ts for the full match order). */
@@ -209,16 +249,34 @@ async function ingest(
       ingestScope(ctx),
       lockTimeoutMs === undefined ? {} : { timeoutMs: lockTimeoutMs },
     );
-    const check = await checkDuplicate(tx, ctx, key, sourceId, posting.externalId);
+    const check = await checkDuplicate(tx, ctx, key, sourceId, posting);
     if (check === 'duplicate') return 'duplicate';
     await racePoint('discovery.ingest.locked');
     const partial = posting.descriptionMd == null || posting.descriptionMd === '';
+    const resolution = partial ? 'needs_capture' : 'full';
+    const denied = matchDeniedCompany(await loadDeniedCompanies(tx, ctx), sourceCompanyId, posting);
+    // Before the pre-filter and the first run's cut: neither holds a link back.
+    if (denied === undefined) {
+      const linked = await linkToOpen(
+        tx,
+        ctx,
+        {
+          runId,
+          posting,
+          dedupeKey: key,
+          resolution,
+          ...(sourceCommunicationId === undefined ? {} : { sourceCommunicationId }),
+        },
+        lockTimeoutMs,
+      );
+      if (linked !== null) return linked;
+    }
     const verdict = judge === null ? null : judge(posting);
     const result = await insertResult(tx, ctx, {
       runId,
       posting,
       dedupeKey: key,
-      resolution: partial ? 'needs_capture' : 'full',
+      resolution,
       aiRationale: check === 'multi_posted' ? MULTI_POSTED_PREFIX : null,
       // Filtered goes first: below the cut it would be sent by Rank these, and ranked unasked.
       rankSkipReason:
@@ -231,7 +289,6 @@ async function ingest(
       // Stored and measured either way (#217).
       prefilter: verdict,
     });
-    const denied = matchDeniedCompany(await loadDeniedCompanies(tx, ctx), sourceCompanyId, posting);
     return denied === undefined ? result : await suppressForDenylist(tx, ctx, result, denied);
   });
 }
@@ -294,8 +351,9 @@ export async function rankAnyway(db: Db, ctx: UserCtx, id: string): Promise<numb
 
 /**
  * The one path every posting takes into the queue, whatever its source: sanitize, re-validate,
- * dedupe, store, queue follow-ups. Updates `stats` and collects stored results in `inserted`. A
- * posting held below the cut is stored the same way and queues nothing yet.
+ * dedupe, store, queue follow-ups. Updates `stats`, collects the results to review in `inserted`, and
+ * returns what it stored, if anything. A posting held below the cut is stored the same way and queues
+ * nothing yet.
  */
 export async function ingestRaw(
   db: Db,
@@ -311,11 +369,11 @@ export async function ingestRaw(
   holdBelowCut: boolean,
   sourceCommunicationId?: string,
   lockTimeoutMs?: number,
-): Promise<void> {
+): Promise<DiscoveryResultView | null> {
   const parsed = NormalizedPostingSchema.safeParse(sanitizePosting(raw));
   if (!parsed.success) {
     stats.invalid += 1;
-    return;
+    return null;
   }
   const outcome = await ingest(
     db,
@@ -332,6 +390,11 @@ export async function ingestRaw(
   );
   if (outcome === 'duplicate') {
     stats.duplicates += 1;
+    return null;
+  }
+  if (outcome.rankSkipReason === 'linked') {
+    // Decided too, and not `inserted`: nothing ranks it, resolves it on a board or surfaces it.
+    stats.linked += 1;
   } else if (outcome.disposition === 'dismissed') {
     // Denylist-suppressed (issue #199): stored and auditable, but already decided, so it does
     // not join `inserted` (nothing downstream should rank or surface it) and does not queue
@@ -346,6 +409,7 @@ export async function ingestRaw(
       await enqueueFollowUps(db, ctx, outcome);
     }
   }
+  return outcome;
 }
 
 /**
@@ -370,7 +434,13 @@ export async function insertLeads(
    * alert mail keeps the usual wait.
    */
   opts: { lockTimeoutMs?: number } = {},
-): Promise<{ runId: string; stats: RunStats; inserted: DiscoveryResultView[] }> {
+): Promise<{
+  runId: string;
+  stats: RunStats;
+  inserted: DiscoveryResultView[];
+  /** Those linked to an opportunity already there (#971). */
+  linked: DiscoveryResultView[];
+}> {
   const run = await createRun(db, ctx, { sourceId });
   const source = await getSourceRow(db, ctx, sourceId);
   const stats: RunStats = {
@@ -380,12 +450,14 @@ export async function insertLeads(
     invalid: 0,
     suppressed: 0,
     filtered: 0,
+    linked: 0,
   };
   const inserted: DiscoveryResultView[] = [];
+  const linked: DiscoveryResultView[] = [];
   try {
     for (const posting of postings) {
       stats.fetched += 1;
-      await ingestRaw(
+      const stored = await ingestRaw(
         db,
         ctx,
         run.id,
@@ -402,6 +474,7 @@ export async function insertLeads(
         sourceCommunicationId,
         opts.lockTimeoutMs,
       );
+      if (stored?.rankSkipReason === 'linked') linked.push(stored);
     }
   } catch (err) {
     // The run ends with why, or the source's history would show it running for good: a capture
@@ -418,7 +491,7 @@ export async function insertLeads(
     await finishRun(tx, ctx, run.id, { stats: { ...stats } });
     await setSourceStatus(tx, ctx, sourceId, 'ok', null);
   });
-  return { runId: run.id, stats, inserted };
+  return { runId: run.id, stats, inserted, linked };
 }
 
 export function errorText(err: unknown): string {

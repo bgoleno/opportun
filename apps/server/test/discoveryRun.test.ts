@@ -194,6 +194,7 @@ describe('discovery.run job', () => {
       invalid: 0,
       suppressed: 0,
       filtered: 0,
+      linked: 0,
     });
     expect(run!.finishedAt).not.toBeNull();
     expect(run!.error).toBeNull();
@@ -212,6 +213,7 @@ describe('discovery.run job', () => {
       invalid: 0,
       suppressed: 0,
       filtered: 0,
+      linked: 0,
     });
   });
 
@@ -239,6 +241,7 @@ describe('discovery.run job', () => {
       invalid: 0,
       suppressed: 2,
       filtered: 0,
+      linked: 0,
     });
     const feedback = await app.db
       .select()
