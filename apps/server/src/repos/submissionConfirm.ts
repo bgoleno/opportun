@@ -19,7 +19,6 @@ import {
   nextSteps,
   opportunities,
 } from '../db/schema';
-import { WORKDAY_HOST } from '../adapters/discoverySource';
 import { atsJobRefOfUrl } from '../lib/atsJobRef';
 import { audit } from '../lib/audit';
 import { sameVisitor } from '../lib/demoOwnData';
@@ -38,7 +37,7 @@ import type { Db, Exec, UserCtx } from './base';
 import { ownedBy } from './base';
 import { submissionScope } from './submissionReview';
 import { getRow, notNow, owned, view, type SubmissionRow } from './submissions';
-import type { Submission } from '@opportun/core';
+import { WORKDAY_HOST, type Submission } from '@opportun/core';
 
 /** The attempts an email may confirm: submitted or with no confirmation seen. */
 const AWAITING = ['submitted', 'unknown'] as const;

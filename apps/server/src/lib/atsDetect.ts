@@ -5,14 +5,8 @@
 import { userCronProblem } from './jobQueue';
 import { and, eq, inArray, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
-import {
-  ATS_SOURCE_KINDS,
-  SourceConfigError,
-  type SourceContext,
-  type SourceKind,
-} from '../adapters/discoverySource';
+import { ATS_SOURCE_KINDS, type SourceContext, type SourceKind } from '../adapters/discoverySource';
 import { siteOfKind, SLUG_SITES } from '../sites';
-import { fetchWorkdayPage, workdayBoard } from '../adapters/sources/workday';
 import { withTransaction, type Db, type Exec } from '../db/client';
 import { companies, discoverySources } from '../db/schema';
 import {
@@ -132,30 +126,15 @@ export function scanCareersHtml(html: string): AtsBoard[] {
 
 type ProbeResult = 'yes' | 'no' | 'unknown';
 
-/**
- * A Workday board is verified by its CXS listing serving at least one posting. Only an unknown
- * site (404) or an empty one is a miss: the service window's redirects, 406, 422 and 5xx, and
- * anything else unexpected, are errors, so detection retries instead of concluding 'none'.
- */
-async function probeWorkday(sctx: SourceContext, board: AtsBoard): Promise<ProbeResult> {
-  let page;
-  try {
-    page = await fetchWorkdayPage(sctx, workdayBoard(boardConfig(board)), 0, 1);
-  } catch (err) {
-    if (err instanceof SourceConfigError) return 'no';
-    sctx.log.warn({ 'opportun.ats.kind': board.kind, err }, 'ats probe failed');
-    return 'unknown';
-  }
-  return page.jobPostings.length > 0 ? 'yes' : 'no';
-}
-
 async function probeBoard(sctx: SourceContext, board: AtsBoard): Promise<ProbeResult> {
-  if (board.kind === 'ats_workday') return probeWorkday(sctx, board);
   const site = siteOfKind(board.kind);
   const probe = site?.api?.probe;
-  return site === undefined || probe === undefined
-    ? 'no'
-    : probe(sctx, { site: site.identity.id, slug: board.slug });
+  if (site === undefined || probe === undefined) return 'no';
+  return probe(sctx, {
+    site: site.identity.id,
+    slug: board.slug,
+    ...(board.host === undefined ? {} : { host: board.host }),
+  });
 }
 
 export type CareersPageOutcome = 'absent' | 'blocked' | 'no_board_links' | 'links_unverified';

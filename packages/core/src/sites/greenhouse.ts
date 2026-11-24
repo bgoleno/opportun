@@ -2,7 +2,7 @@
 // module. Its network half is apps/server/src/sites/greenhouse.ts. The rules below are moved
 // unchanged from apps/server/src/lib/atsBoard.ts (boardFromUrl) and lib/atsJobRef.ts.
 import { greenhouseBoardJobUrl } from '../greenhouseJid';
-import { ATS_JOB_ID, ATS_SLUG, AtsOrgConfig } from './ats';
+import { ATS_JOB_ID, ATS_SLUG, AtsOrgConfig, orgBoards } from './ats';
 import {
   linkOnHost,
   segmentsOf,
@@ -69,6 +69,7 @@ export const greenhouse: SiteIdentity = {
   board: {
     fromUrl: boardFromUrl,
     configSchema: AtsOrgConfig,
+    ...orgBoards('greenhouse'),
     pageUrl(board) {
       if (!ATS_SLUG.test(board.slug)) throw new Error('not a Greenhouse board slug');
       return `https://boards.greenhouse.io/${board.slug}`;

@@ -16,7 +16,7 @@ import {
   PAGE_FETCH_PROHIBITED_HOSTS,
   type RawResponse,
 } from '../src/lib/safeFetch';
-import type { SourceContext } from '../src/adapters/discoverySource';
+import { SourceConfigError, type SourceContext } from '../src/adapters/discoverySource';
 import { SITE_MODULES, SLUG_SITES, siteOfKind, type SiteModule } from '../src/sites';
 import { INDEED_JOB } from './fixtures/capture/indeedPages';
 import { JOB as LINKEDIN_JOB, type CapturedPage } from './fixtures/capture/pages';
@@ -25,7 +25,7 @@ import { cpuMs } from './scaling';
 const fixture = (name: string): unknown =>
   JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures/ats', name), 'utf8'));
 
-/** Each site's recorded API answer, as the jobs its listing maps. A site with `api` needs one. */
+/** Each site's recorded API answer, as the jobs its listing maps. A site with `mapPosting` needs one. */
 const API_FIXTURES: Record<string, () => unknown[]> = {
   greenhouse: () => (fixture('greenhouse.json') as { jobs: unknown[] }).jobs,
   lever: () => fixture('lever.json') as unknown[],
@@ -49,11 +49,43 @@ const alertText = (name: string): string =>
 /** A host the rule names: the exact host, or the pattern's example. */
 const hostOf = (rule: HostRule): string => ('exact' in rule ? rule.exact : rule.example);
 
+/** What each pattern must refuse besides the shapes below, by its example. A pattern needs a line. */
+const PATTERN_REFUSES: Record<string, string[]> = {
+  'www.linkedin.com': ['m.linkedin.com', 'notlinkedin.com', 'evil-linkedin.com'],
+  'acme.wd5.myworkdayjobs.com': [
+    'myworkdayjobs.com',
+    'wd5.myworkdayjobs.com',
+    'acme.myworkdayjobs.com',
+    'acme.wd5.notmyworkdayjobs.com',
+    'acme.wd5555.myworkdayjobs.com',
+    'acme.wd5.myworkdayjobs.com.wd5.evil.example',
+  ],
+  'wd5.myworkdaysite.com': [
+    'myworkdaysite.com',
+    'acme.myworkdaysite.com',
+    'wd5.notmyworkdaysite.com',
+  ],
+};
+
 /** Hosts that look like the rule's but are not it (sec, #769 point 3). */
 const lookAlikes = (rule: HostRule): string[] => {
   const h = hostOf(rule);
-  return [`x.${h}`, `${h}.evil.example`, `evil-${h}`, `${h}x`];
+  const around = [`x.${h}`, `${h}.evil.example`, `${h}x`];
+  if ('exact' in rule) return [...around, `evil-${h}`];
+  const refused = PATTERN_REFUSES[rule.example];
+  if (refused === undefined) throw new Error(`no look-alikes for ${rule.example}`);
+  return [...around, ...refused];
 };
+
+/** Ways a host can be written that are not it (sec on #769). */
+const HOSTILE_HOSTS = (h: string): string[] => [
+  `a@${h}`,
+  `${h}:443`,
+  `${h} `,
+  `${h}\n`,
+  ` ${h}`,
+  '',
+];
 
 const HOSTILE = [
   'a/b',
@@ -216,7 +248,9 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
       for (const link of site.samples.boardUrls) {
         const board = site.board.fromUrl(new URL(link));
         expect(board, link).not.toBeNull();
-        expect(site.board.configSchema.safeParse({ org: board!.slug }).success).toBe(true);
+        const config = site.board.configOf(board!);
+        expect(site.board.configSchema.safeParse(config).success).toBe(true);
+        expect(site.board.fromConfig(config)).toEqual(board);
         const page = new URL(site.board.pageUrl(board!));
         expect(matchesAny(page.hostname, site.pageHosts), page.href).toBe(true);
         expect(site.board.fromUrl(page)).toEqual(board);
@@ -251,15 +285,74 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
       const urls = mod.api?.urls;
       if (urls === undefined) return;
       const board = site.board!.fromUrl(new URL(site.samples.boardUrls[0]!))!;
-      for (const bad of HOSTILE) {
+      // The whole slug, and the second part of one that has two (`<tenant>/<site>`).
+      const [first, second] = board.slug.split('/');
+      const slugs = [
+        ...HOSTILE,
+        ...(second === undefined ? [] : HOSTILE.map((b) => `${first}/${b}`)),
+      ];
+      for (const bad of slugs) {
         const named = { ...board, slug: bad };
         expect(() => urls.board(named), JSON.stringify(bad)).toThrow();
         if (urls.page !== undefined) expect(() => urls.page!(named, 0), bad).toThrow();
         if (urls.probe !== undefined) expect(() => urls.probe!(named), bad).toThrow();
         if (urls.job !== undefined) expect(() => urls.job!(board, bad), bad).toThrow();
+        expect(() => site.board!.configOf(named), JSON.stringify(bad)).toThrow();
+        expect(() => site.board!.pageUrl(named), JSON.stringify(bad)).toThrow();
       }
       for (const bad of HOSTILE) {
-        expect(site.board!.configSchema.safeParse({ org: bad }).success, bad).toBe(false);
+        expect(site.board!.fromConfig({ org: bad }), bad).toBeNull();
+        // Each part of a board that is more than one slug, in turn.
+        const config = site.board!.configOf(board);
+        for (const key of Object.keys(config)) {
+          const moved = { ...config, [key]: bad };
+          expect(site.board!.configSchema.safeParse(moved).success, `${key} ${bad}`).toBe(false);
+          expect(site.board!.fromConfig(moved), `${key} ${bad}`).toBeNull();
+        }
+      }
+    });
+
+    // A board on a host of its own (Workday): the host is the tenant's or it is no board.
+    it('makes no config, link or request of a board whose host is not its own', async () => {
+      const board = site.board?.fromUrl(new URL(site.samples.boardUrls[0]!));
+      if (board?.host === undefined) return;
+      const others = [
+        undefined,
+        `other.${board.host.split('.').slice(1).join('.')}`,
+        `x.${board.host}`,
+        `${board.host}.evil.example`,
+        ...HOSTILE_HOSTS(board.host),
+      ];
+      for (const host of others) {
+        const moved = { ...board, host };
+        expect(() => site.board!.configOf(moved), String(host)).toThrow();
+        expect(() => site.board!.pageUrl(moved), String(host)).toThrow();
+        expect(() => mod.api!.urls.board(moved), String(host)).toThrow();
+        const asked: unknown[] = [];
+        const sctx = {
+          fetch: async (url: unknown) => asked.push(url),
+          log: { warn: () => undefined },
+        } as unknown as SourceContext;
+        expect(await mod.api!.probe!(sctx, moved), String(host)).toBe('no');
+        const config = { ...site.board!.configOf(board), host };
+        const listing = mod.api!.listBoard!(sctx, config, null)[Symbol.asyncIterator]();
+        await expect(listing.next(), String(host)).rejects.toThrow(SourceConfigError);
+        expect(asked, String(host)).toEqual([]);
+      }
+    });
+
+    it('builds no job page from a path that could move it, or one of another job', () => {
+      const job = site.jobFromUrl(new URL(site.samples.jobUrls[0]!))!;
+      if (job.path === undefined) return;
+      for (const bad of HOSTILE) {
+        for (const path of [bad, `/job/${bad}`, `/job/x/${bad}`, `${job.path}/${bad}`]) {
+          expect(() => site.jobPageUrl({ ...job, path }), path).toThrow();
+        }
+      }
+      expect(() => site.jobPageUrl({ ...job, path: undefined })).toThrow();
+      expect(() => site.jobPageUrl({ ...job, id: 'ANOTHER-1' })).toThrow();
+      for (const host of [undefined, ...HOSTILE_HOSTS(job.host!)]) {
+        expect(() => site.jobPageUrl({ ...job, host }), String(host)).toThrow();
       }
     });
 
@@ -288,7 +381,14 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
       for (const rule of [...site.fetchHosts, ...site.pageHosts]) {
         expect(hostMatchesRule(hostOf(rule), rule)).toBe(true);
         expect(hostMatchesRule(hostOf(rule).toUpperCase(), rule)).toBe(true);
+        expect(hostMatchesRule(`${hostOf(rule)}.`, rule)).toBe(true);
         for (const fake of lookAlikes(rule)) expect(hostMatchesRule(fake, rule), fake).toBe(false);
+        if ('exact' in rule) continue;
+        expect(rule.pattern.flags).toBe('');
+        expect(rule.pattern.source.startsWith('^') && rule.pattern.source.endsWith('$')).toBe(true);
+        for (const fake of HOSTILE_HOSTS(hostOf(rule))) {
+          expect(rule.pattern.test(fake), JSON.stringify(fake)).toBe(false);
+        }
       }
     });
 
@@ -320,7 +420,11 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
         if (matchesAny(hostOf(rule), site.fetchHosts)) continue;
         expect(ATS_ALLOW_HOSTS, hostOf(rule)).not.toContain(hostOf(rule));
       }
-      for (const rule of site.fetchHosts) expect(ATS_ALLOW_HOSTS).toContain(hostOf(rule));
+      for (const rule of site.fetchHosts) {
+        // An exact host is in the list; a pattern puts nothing there (tl and sec on #769).
+        if ('exact' in rule) expect(ATS_ALLOW_HOSTS).toContain(rule.exact);
+        else expect(ATS_ALLOW_HOSTS.filter((h) => hostMatchesRule(h, rule))).toEqual([]);
+      }
     });
 
     // Each API call passes the site's own rules, so a redirect from a fetch host to one of its
@@ -348,7 +452,8 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
       const sctx: SourceContext = { fetch, log };
       if (network.listBoard !== undefined) {
         const run = async () => {
-          for await (const _ of network.listBoard!(sctx, { org: board.slug }, null)) void _;
+          const config = site.board!.configOf(board);
+          for await (const _ of network.listBoard!(sctx, config, null)) void _;
         };
         await expect(run()).rejects.toThrow();
       }
@@ -360,6 +465,46 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
       }
       expect(requested.length).toBeGreaterThan(0);
       for (const h of requested) expect(matchesAny(h, site.fetchHosts), h).toBe(true);
+    });
+
+    // The same for a module whose rule is a pattern (sec), which takes another tenant's host too. Its
+    // requests carry a body or headers, so the real safeFetch follows no redirect of theirs at all;
+    // what each one allows is asserted where it is made (workdayAdapter.test.ts).
+    it('follows no redirect off the one host a board is on', async () => {
+      const board = site.board?.fromUrl(new URL(site.samples.boardUrls[0]!));
+      if (board?.host === undefined) return;
+      const { host } = board;
+      const elsewhere = [
+        `other.${host.split('.').slice(1).join('.')}`,
+        `x.${host}`,
+        'wd5.myworkday.com',
+        'community.workday.com',
+        'myworkdayjobs.com',
+      ];
+      for (const to of elsewhere) {
+        const requested: string[] = [];
+        const fetch = createSafeFetch({
+          now: () => 0,
+          sleep: async () => undefined,
+          resolve: async () => ['93.184.216.34'],
+          request: async (target): Promise<RawResponse> => {
+            requested.push(target.url.hostname);
+            return {
+              status: 302,
+              headers: { location: `https://${to}${target.url.pathname}` },
+              body: (async function* () {})(),
+            };
+          },
+        });
+        const log = { warn: () => undefined } as unknown as SourceContext['log'];
+        expect(await mod.api!.probe!({ fetch, log }, board), to).toBe('unknown');
+        const run = async () => {
+          const config = site.board!.configOf(board);
+          for await (const _ of mod.api!.listBoard!({ fetch, log }, config, null)) void _;
+        };
+        await expect(run(), to).rejects.toThrow();
+        expect(new Set(requested), to).toEqual(new Set([host]));
+      }
     });
 
     it('recognizes its capture page as a job its own links name, and reads its description back', () => {
@@ -401,7 +546,8 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
 
     it('asks a board whether it is serving a posting, and says when it has no answer', async () => {
       const network = mod.api;
-      if (network?.probe === undefined) return;
+      // The service window's answers are Workday's own (workdayAdapter.test.ts).
+      if (network?.probe === undefined || network.slugAddressed !== true) return;
       const board = site.board!.fromUrl(new URL(site.samples.boardUrls[0]!))!;
       const answer = (status: number, body: string) =>
         ({

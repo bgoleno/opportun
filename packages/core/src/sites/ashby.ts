@@ -1,7 +1,7 @@
 // Ashby (https://github.com/bgoleno/opportun/issues/769): the identity half of its site module.
 // Its network half is apps/server/src/sites/ashby.ts. The rules below are moved unchanged from
 // apps/server/src/lib/atsBoard.ts (boardFromUrl) and lib/atsJobRef.ts.
-import { ATS_JOB_ID, ATS_SLUG, AtsOrgConfig } from './ats';
+import { ATS_JOB_ID, ATS_SLUG, AtsOrgConfig, orgBoards } from './ats';
 import {
   linkOnHost,
   segmentsOf,
@@ -54,6 +54,7 @@ export const ashby: SiteIdentity = {
   board: {
     fromUrl: boardFromUrl,
     configSchema: AtsOrgConfig,
+    ...orgBoards('ashby'),
     pageUrl(board) {
       if (!ATS_SLUG.test(board.slug)) throw new Error('not an Ashby board slug');
       return `https://jobs.ashbyhq.com/${board.slug}`;
