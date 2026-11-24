@@ -85,6 +85,15 @@ when the milestone's work was merged.
   waits and answers not found. Before, it could be answered OK and then be gone
   ([#920](https://github.com/bgoleno/opportun/issues/920); PR
   [#938](https://github.com/bgoleno/opportun/pull/938)).
+- **Postgres: merging or deleting an opportunity while an application or a resume is added to it
+  answers what happened instead of an internal error, and a very long reorder no longer holds up
+  a capture.** A resume sent, made or moved to the opportunity that goes, or an application started
+  on it, says not found with nothing written. An application started on the kept one while a merge
+  moves another's live one to it is the merge's own conflict (409), and nothing is merged. A
+  reorder is written in statements of 500, not one a card: 2,000 cards held the lock for 14.9 to
+  16.0 s with 5 ms a statement before, and 0.13 s after
+  ([#944](https://github.com/bgoleno/opportun/issues/944); PR
+  [#957](https://github.com/bgoleno/opportun/pull/957)).
 
 - **Capture: once a capture is recorded, no wait for a lock makes the answer an error, and a slow
   fill no longer answers one.** On Postgres, a fill, stage move or state write that gives up waiting
