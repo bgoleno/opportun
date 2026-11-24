@@ -889,12 +889,13 @@ function streamOf(client: unknown): Socket | undefined {
 
 /**
  * How long the connection may be silent, for a statement_timeout; 0, for as long as it likes, where
- * Postgres has no limit either, or one written in a way this does not read (a unit). `options=-c
- * statement_timeout=...` in the URL is not read, as the parameter beside it wins; nor is the limit of a
- * server behind a pooler that drops the parameter.
+ * Postgres has no limit either. Read as pg sends it: the number the value begins with, in milliseconds,
+ * so `120000ms` is that and `2min` is 2 ms, on the server too. `options=-c statement_timeout=...` in
+ * the URL is not read, as the parameter beside it wins; nor is the limit of a server behind a pooler
+ * that drops the parameter.
  */
 function silenceMs(statementTimeout: unknown): number {
-  const ms = Number(statementTimeout);
+  const ms = Number.parseInt(String(statementTimeout), 10);
   return ms > 0 ? ms + SILENCE_GRACE_MS : 0;
 }
 

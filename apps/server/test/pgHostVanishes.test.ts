@@ -428,15 +428,20 @@ describe.runIf(testDialect === 'postgres')('a Postgres host that vanishes (#981)
 
   // What the connection was really given: pg lets the URL's value win over the code's.
   it.each([
-    ['', 60_000],
-    ['?statement_timeout=120000', 150_000],
-    ['?statement_timeout=0', 0],
-    ['?statement_timeout=2min', 0], // a unit: Postgres reads it, this does not
-  ])('the bound of a connection whose URL ends %j', async (suffix, bound) => {
+    ['', 60_000, '30s'],
+    ['?statement_timeout=120000', 150_000, '2min'],
+    // pg sends the number a value begins with, so a unit says nothing.
+    ['?statement_timeout=120000ms', 150_000, '2min'],
+    ['?statement_timeout=90000min', 120_000, '90s'],
+    ['?statement_timeout=0', 0, '0'],
+  ])('the bound of a connection whose URL ends %j', async (suffix, bound, limit) => {
     const t = await database(suffix);
     shorten = (ms) => ms;
     const client = await t.pool.connect();
     cleanups.push(() => client.release(true));
+    expect((await client.query('SHOW statement_timeout')).rows).toEqual([
+      { statement_timeout: limit },
+    ]);
     const all = asked.filter((ms) => ms !== MIGRATION_LIMIT_MS + GRACE_MS || ms === bound);
     expect([...new Set(all)]).toEqual(bound === 0 ? [] : [bound]);
     expect(streamOf(client).timeout ?? 0).toBe(bound === 0 ? 0 : bound - GRACE_MS + TEST_GRACE_MS);
