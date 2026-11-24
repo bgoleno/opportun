@@ -951,14 +951,15 @@ describe('allowlists and linkedin.com (grep)', () => {
     // (ROOT plus wherever this checkout happens to live, e.g. a worktree directory someone
     // named after the thing being searched for) must never be part of what the linkedin check
     // below searches: that is the haystack the assertion is supposed to be independent of.
-    const allowlists: string[] = [];
+    const allowlists: { file: string; items: string[] }[] = [];
     const allowlistContents: string[] = [];
     for (const file of files) {
       const text = await readFile(file, 'utf8');
       // Every `..._ALLOW_HOSTS = [...]` / `allowHosts: [...]` literal, up to its closing bracket.
       const pattern = /(?:[A-Z_]*ALLOW_?HOSTS[^=\n]*=\s*\[|allowHosts\s*:\s*\[)([^\]]*)\]/g;
       for (const m of text.matchAll(pattern)) {
-        allowlists.push(`${file}: ${m[1]}`);
+        const items = (m[1] ?? '').split(',').map((s) => s.trim());
+        allowlists.push({ file, items });
         allowlistContents.push(m[1] ?? '');
       }
     }
@@ -966,9 +967,11 @@ describe('allowlists and linkedin.com (grep)', () => {
     // the registered sites' fetch hosts are not literals here (#769), and test/siteContract.test.ts
     // checks every one of those against the prohibited hosts, and the whole built list against
     // one written out in that test.
-    expect(
-      allowlists.some((l) => l.includes('safeFetch.ts') && l.includes('api.smartrecruiters.com')),
-    ).toBe(true);
+    // One item of the list, whole: a name inside a longer one is not it.
+    const safeFetchItems = allowlists
+      .filter((l) => l.file.endsWith('apps/server/src/lib/safeFetch.ts'))
+      .flatMap((l) => l.items);
+    expect(safeFetchItems).toContain("'api.smartrecruiters.com'");
     for (const content of allowlistContents)
       expect(content.toLowerCase()).not.toContain('linkedin');
     expect(ATS_ALLOW_HOSTS.some((h) => h.toLowerCase().includes('linkedin'))).toBe(false);
