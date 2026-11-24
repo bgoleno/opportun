@@ -135,7 +135,12 @@ export class Popup {
     await page.addInitScript((u) => {
       const { tabs } = (globalThis as unknown as { chrome: ChromeApi }).chrome;
       const all = tabs.query.bind(tabs);
-      tabs.query = async () => (await all({})).filter((t) => t.url === u);
+      // A host the extension may not read hides its address from a page opened as this one is; the
+      // click on the toolbar is what shows it to the real popup (activeTab).
+      tabs.query = async () => {
+        const shown = (await all({})).filter((t) => t.url === u);
+        return shown.length > 0 ? shown : [{ id: -1, url: u }];
+      };
     }, url);
     await page.goto(`chrome-extension://${this.id}/popup.html`);
     await expect(page.getByRole('button', { name: 'Capture this page' })).toBeVisible();
