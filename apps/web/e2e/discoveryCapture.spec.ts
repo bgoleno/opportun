@@ -4,259 +4,27 @@
 // W1 to W7; https://github.com/bgoleno/opportun/issues/970). Each test names the case of the list it
 // is (https://github.com/bgoleno/opportun/issues/967#issuecomment-7120097602). The pages are mocks
 // answered at the sites' own addresses: nothing leaves the machine.
-import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
-import { browserWithExtension, Popup, removeBuiltExtension } from './extension';
+import { expect, test, type Request } from '@playwright/test';
 import {
-  alertMail,
-  postingAddress,
-  postingPage,
-  type AlertCard,
-  type MockPosting,
-  type Site,
-} from './fixtures/postingPages';
-import { PASSWORD, registerUser, toasts } from './helpers';
+  ADDED,
+  atDesk,
+  COMPANY,
+  DESCRIPTION,
+  Desk,
+  LEAVES_WITHIN,
+  PLACE,
+  posting,
+  remaining,
+  type Opportunity,
+} from './captureDesk';
+import { removeBuiltExtension } from './extension';
+import { postingAddress, type AlertCard, type MockPosting } from './fixtures/postingPages';
+import { toasts } from './helpers';
 
 const SITES = ['linkedin', 'indeed'] as const;
-const COMPANY = 'Initech';
-const PLACE = 'United States';
-/** The card leaves within this of the capture's commit (W7, tl's ruling). */
-const LEAVES_WITHIN = 5_000;
-
-const ADDED = 'Added to your pipeline as Interested.';
-const DESCRIPTION = 'Initech needs somebody to own its TPS reports, from cover sheet to archive.';
-
-interface Opportunity {
-  id: string;
-  title: string;
-  stage: string;
-  location: string | null;
-  descriptionMd: string | null;
-}
-interface Result {
-  id: string;
-  disposition: string;
-  opportunityId: string | null;
-  aiScore: number | null;
-  posting: { title: string; externalId: string | null };
-}
-
-let ids = 0;
-/** A posting no other test has: its id is new, and of the site's own shape. */
-function posting(site: Site, title: string, over: Partial<MockPosting> = {}): MockPosting {
-  ids += 1;
-  const n = String(Date.now()).slice(-7) + String(ids).padStart(3, '0');
-  return {
-    site,
-    id: site === 'linkedin' ? `4${n}`.slice(0, 10) + String(ids).padStart(3, '0') : `abcdef${n}`,
-    title,
-    company: COMPANY,
-    description: DESCRIPTION,
-    ...over,
-  };
-}
-
-/** One user with the extension connected, and the mock sites. */
-class Desk {
-  popup!: Popup;
-  page!: Page;
-  private token = '';
-  private mails = 0;
-  private readonly postings = new Map<string, MockPosting>();
-
-  private constructor(readonly context: BrowserContext) {}
-
-  static async open(viewport = { width: 1280, height: 900 }): Promise<Desk> {
-    const desk = new Desk(await browserWithExtension(viewport));
-    await desk.context.route(
-      (url) => /(?:^|\.)(?:linkedin|indeed)\.com$/.test(url.hostname),
-      (route) => {
-        const url = new URL(route.request().url());
-        const found = [...desk.postings.values()].find(
-          (p) => url.pathname.includes(p.id) || [...url.searchParams.values()].includes(p.id),
-        );
-        return found === undefined
-          ? route.fulfill({ status: 404, contentType: 'text/html', body: 'no such page' })
-          : route.fulfill({ status: 200, contentType: 'text/html', body: postingPage(found) });
-      },
-    );
-    desk.page = await desk.context.newPage();
-    await registerUser(desk.page);
-    desk.token = (
-      await desk.api<{ token: string }>('POST', '/device-tokens', {
-        name: 'Chrome extension',
-        scopes: ['capture:push', 'mail:push'],
-        password: PASSWORD,
-      })
-    ).token;
-    desk.popup = await Popup.connected(desk.context, desk.token);
-    return desk;
-  }
-
-  async api<T>(method: string, path: string, data?: unknown): Promise<T> {
-    const csrf = (await this.context.cookies()).find((c) => c.name === 'opportun_csrf')?.value;
-    const res = await this.page.request.fetch(`/api/v1${path}`, {
-      method,
-      headers: { 'x-csrf-token': csrf ?? '' },
-      ...(data === undefined ? {} : { data }),
-    });
-    expect(res.ok(), `${method} ${path}: ${res.status()} ${await res.text()}`).toBe(true);
-    return (await res.json()) as T;
-  }
-
-  /** The mock sites show these postings. */
-  publish(...list: MockPosting[]): void {
-    for (const p of list) this.postings.set(p.id, p);
-  }
-
-  /** An alert email brings these cards, and each is ranked (unless `ranked` is false): the order has settled. */
-  async alert(site: Site, cards: AlertCard[], ranked = true): Promise<void> {
-    this.publish(...cards.map((c) => c.posting));
-    this.mails += 1;
-    const res = await this.context.request.post('/api/v1/connector/mail/batch', {
-      headers: { authorization: `Bearer ${this.token}` },
-      data: { messages: [alertMail(site, cards, `${site}-${this.mails}-${Date.now()}`)] },
-    });
-    expect(res.status(), await res.text()).toBe(200);
-    const wanted = cards.map((c) => c.posting.id);
-    await expect
-      .poll(
-        async () =>
-          (await this.results()).filter(
-            (r) => wanted.includes(r.posting.externalId ?? '') && (!ranked || r.aiScore !== null),
-          ).length,
-        { timeout: 45_000 },
-      )
-      .toBe(wanted.length);
-  }
-
-  async results(): Promise<Result[]> {
-    const all: Result[] = [];
-    for (;;) {
-      const page = await this.api<{ items: Result[]; total: number }>(
-        'GET',
-        `/discovery/results?limit=200&offset=${all.length}`,
-      );
-      all.push(...page.items);
-      if (all.length >= page.total || page.items.length === 0) return all;
-    }
-  }
-
-  async opportunities(title: string): Promise<Opportunity[]> {
-    const { items } = await this.api<{ items: Opportunity[] }>('GET', '/opportunities?limit=200');
-    return items.filter((o) => o.title === title);
-  }
-
-  /** The capture entries of an opportunity's timeline. */
-  async entries(id: string): Promise<{ title: string; externalUrl: string | null }[]> {
-    const { items } = await this.api<{ items: { title: string; externalUrl: string | null }[] }>(
-      'GET',
-      `/opportunities/${id}/activities?limit=200`,
-    );
-    return items;
-  }
-
-  async discovery(): Promise<void> {
-    await this.page.goto('/discovery');
-    await expect(this.page.getByText(/results? to review\.$|^Nothing to review/)).toBeVisible();
-  }
-
-  /** The cards: the list's own items, not the locations listed inside one. */
-  get cards() {
-    return this.page.getByRole('list', { name: 'Results to review' }).locator('> li');
-  }
-
-  row(title: string, company = COMPANY) {
-    return this.page
-      .getByRole('list', { name: 'Results to review' })
-      .getByRole('listitem', { name: `${title} at ${company}` });
-  }
-
-  /** The card's own Posting button: the job's tab, shown by the mock at its stored address. */
-  async openPosting(p: MockPosting): Promise<Page> {
-    const opened = this.context.waitForEvent('page');
-    await this.row(p.title)
-      .getByRole('link', { name: `Open posting for ${p.title} at ${p.company}` })
-      .click();
-    const tab = await opened;
-    await expect(tab).toHaveURL(postingAddress(p));
-    return tab;
-  }
-
-  /** The job's tab, reached without Discovery. */
-  async visit(p: MockPosting, address = postingAddress(p)): Promise<Page> {
-    const tab = await this.context.newPage();
-    await tab.goto(address);
-    return tab;
-  }
-
-  /** Captures the posting in its tab, with one click, and says what the popup said. */
-  async capture(p: MockPosting, address = postingAddress(p)): Promise<string> {
-    const tab = await this.visit(p, address);
-    const said = await this.popup.capture(address);
-    await tab.close();
-    return said;
-  }
-
-  /** Goes back to the Discovery tab, as switching to it does. */
-  async back(events: ('visibilitychange' | 'focus')[] = ['visibilitychange', 'focus']) {
-    await this.page.bringToFront();
-    await this.page.evaluate((list) => {
-      for (const e of list) {
-        (e === 'focus' ? window : document).dispatchEvent(new Event(e));
-      }
-    }, events);
-  }
-
-  /** W5 to W7: exactly one opportunity, at Interested, with the captured text; no card, no result left. */
-  async oneAtInterested(p: MockPosting, over: Partial<Opportunity> = {}): Promise<Opportunity> {
-    const list = await this.opportunities(p.title);
-    expect(list).toHaveLength(1);
-    const one = list[0] as Opportunity;
-    expect(one).toMatchObject({ stage: 'interested', ...over });
-    if (over.descriptionMd === undefined) expect(one.descriptionMd).toContain(DESCRIPTION);
-    const results = (await this.results()).filter((r) => r.posting.title === p.title);
-    expect(results.map((r) => [r.disposition, r.opportunityId])).toEqual(
-      results.map(() => ['accepted', one.id]),
-    );
-    return one;
-  }
-
-  /** The card leaves by itself: no reload, no action on it. */
-  async leaves(title: string, left: number): Promise<void> {
-    await expect(this.row(title)).toHaveCount(0, { timeout: LEAVES_WITHIN });
-    await expect(this.page.getByText(remaining(left))).toBeVisible();
-  }
-
-  /** Nothing asked and nothing failed: no dialog, no toast. */
-  async quiet(): Promise<void> {
-    await expect(this.page.getByRole('dialog')).toHaveCount(0);
-    await expect(toasts(this.page).getByRole('listitem')).toHaveCount(0);
-  }
-}
-
-const remaining = (n: number): string =>
-  n === 0
-    ? 'Nothing to review. New results appear here after your sources run.'
-    : n === 1
-      ? '1 result to review.'
-      : `${n} results to review.`;
-
 const isList = (r: Request): boolean =>
   r.method() === 'GET' && /\/discovery\/results\?disposition=pending/.test(r.url());
 const isDiscovery = (r: Request): boolean => /\/api\/v1\/discovery\//.test(r.url());
-
-/** Runs with a desk of its own, closed after it whatever happens. */
-async function atDesk(
-  run: (desk: Desk) => Promise<void>,
-  viewport?: { width: number; height: number },
-): Promise<void> {
-  const desk = await Desk.open(viewport);
-  try {
-    await run(desk);
-  } finally {
-    await desk.context.close();
-  }
-}
 
 test.afterAll(removeBuiltExtension);
 
@@ -506,47 +274,51 @@ test('W7, case 38: the asking ends 60 s after a return, and 10 minutes after a p
   });
 });
 
-test('W7, cases 39 and 41: selection, focus and place when the card leaves', async () => {
-  await atDesk(async (desk) => {
-    const list = Array.from({ length: 24 }, (_, i) =>
-      posting('linkedin', `Listed Role ${String(i + 1).padStart(2, '0')}`),
-    );
-    await desk.alert(
-      'linkedin',
-      list.map((x) => ({ posting: x, location: PLACE })),
-    );
-    await desk.discovery();
-    const rows = desk.cards;
-    await expect(rows).toHaveCount(24);
-    const names = await rows.evaluateAll((els) =>
-      els.map((e) => e.getAttribute('aria-label') ?? ''),
-    );
-    const at = 11;
-    const gone = list.find((p) => `${p.title} at ${COMPANY}` === names.at(at)) as MockPosting;
-    const next = names[at + 1] as string;
-    await rows.nth(at).focus();
-    const above = await rows.nth(at - 1).boundingBox();
+for (const width of [768, 1280, 1920])
+  test(`W7, cases 39 and 41: selection, focus and place when the card leaves (${width} px)`, async () => {
+    await atDesk(
+      async (desk) => {
+        const list = Array.from({ length: 24 }, (_, i) =>
+          posting('linkedin', `Listed Role ${String(i + 1).padStart(2, '0')}`),
+        );
+        await desk.alert(
+          'linkedin',
+          list.map((x) => ({ posting: x, location: PLACE })),
+        );
+        await desk.discovery();
+        const rows = desk.cards;
+        await expect(rows).toHaveCount(24);
+        const names = await rows.evaluateAll((els) =>
+          els.map((e) => e.getAttribute('aria-label') ?? ''),
+        );
+        const at = 11;
+        const gone = list.find((p) => `${p.title} at ${COMPANY}` === names.at(at)) as MockPosting;
+        const next = names[at + 1] as string;
+        await rows.nth(at).focus();
+        const above = await rows.nth(at - 1).boundingBox();
 
-    expect(await desk.capture(gone)).toContain(ADDED);
-    await desk.back();
-    await desk.leaves(gone.title, 23);
-    const after = desk.page.getByRole('listitem', { name: next, exact: true });
-    await expect(after).toHaveAttribute('aria-current', 'true');
-    await expect(after).toBeFocused();
-    const aboveNow = await desk.page
-      .getByRole('listitem', { name: names[at - 1] as string, exact: true })
-      .boundingBox();
-    expect(Math.abs((aboveNow?.y ?? 0) - (above?.y ?? 0))).toBeLessThanOrEqual(2);
+        expect(await desk.capture(gone)).toContain(ADDED);
+        await desk.back();
+        await desk.leaves(gone.title, 23);
+        const after = desk.page.getByRole('listitem', { name: next, exact: true });
+        await expect(after).toHaveAttribute('aria-current', 'true');
+        await expect(after).toBeFocused();
+        const aboveNow = await desk.page
+          .getByRole('listitem', { name: names[at - 1] as string, exact: true })
+          .boundingBox();
+        expect(Math.abs((aboveNow?.y ?? 0) - (above?.y ?? 0))).toBeLessThanOrEqual(2);
 
-    // The last of the list: the selection goes to the one before it.
-    const last = list.find((p) => `${p.title} at ${COMPANY}` === names.at(23)) as MockPosting;
-    await rows.last().focus();
-    expect(await desk.capture(last)).toContain(ADDED);
-    await desk.back();
-    await desk.leaves(last.title, 22);
-    await expect(rows.last()).toHaveAttribute('aria-current', 'true');
+        // The last of the list: the selection goes to the one before it.
+        const last = list.find((p) => `${p.title} at ${COMPANY}` === names.at(23)) as MockPosting;
+        await rows.last().focus();
+        expect(await desk.capture(last)).toContain(ADDED);
+        await desk.back();
+        await desk.leaves(last.title, 22);
+        await expect(rows.last()).toHaveAttribute('aria-current', 'true');
+      },
+      { width, height: 900 },
+    );
   });
-});
 
 test('W7, case 41: the only card, and the list is empty', async () => {
   await atDesk(async (desk) => {
@@ -751,6 +523,10 @@ async function leftBehind(desk: Desk, p: MockPosting): Promise<void> {
     route.request().method() === 'GET' ? route.abort() : route.continue(),
   );
   expect(await desk.capture(p)).toContain(ADDED);
+  // The posting check the capture queued writes to the opportunity too: let it, before comparing.
+  await expect
+    .poll(async () => (await desk.opportunities(p.title)).map((o) => o.postingState))
+    .not.toContain('searching');
   await expect(desk.row(p.title)).toBeVisible();
 }
 const caughtUp = (desk: Desk) => desk.page.unroute(/\/api\/v1\/discovery\/results\?/);
