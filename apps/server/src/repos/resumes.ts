@@ -7,7 +7,7 @@ import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import type { Db, Exec, UserCtx } from './base';
 import { ownedBy } from './base';
-import { assertOpportunityOwned } from './activities';
+import { holdOpportunity } from './activities';
 import { countWhere, type ListOpts, type Page } from './list';
 import { lockScope, withTransaction } from '../db/client';
 import { hasSend, resumeScope } from './resumeSends';
@@ -218,18 +218,22 @@ export type ResumeInsert = Pick<
 
 export async function insertResume(db: Db, ctx: UserCtx, input: ResumeInsert): Promise<ResumeRow> {
   const now = Date.now();
-  return await db
-    .insert(resumes)
-    .values({
-      ...input,
-      id: newId(),
-      userId: ctx.userId,
-      status: 'draft',
-      createdAt: now,
-      updatedAt: now,
-    })
-    .returning()
-    .get();
+  return await withTransaction(db, async (tx) => {
+    // Gone since the caller read it is not found (#944), as for anything added to one (#925).
+    if (input.opportunityId != null) await holdOpportunity(tx, ctx, input.opportunityId);
+    return await tx
+      .insert(resumes)
+      .values({
+        ...input,
+        id: newId(),
+        userId: ctx.userId,
+        status: 'draft',
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning()
+      .get();
+  });
 }
 
 export interface ResumePatch {
@@ -262,12 +266,30 @@ export async function updateResume(
   patch: ResumePatch,
 ): Promise<ResumeRow> {
   return await withTransaction(db, async (tx) => {
-    const row = await tx
-      .select()
-      .from(resumes)
-      .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
-      .get();
+    const read = () =>
+      tx
+        .select()
+        .from(resumes)
+        .where(and(ownedBy(resumes.userId, ctx), eq(resumes.id, id)))
+        .get();
+    let row = await read();
     if (row === undefined) throw notFound();
+    const relink = 'opportunityId' in patch;
+    if (relink && row.kind === 'base') throw new HttpError(422, 'base_cannot_attach');
+    // Matches the convention every other cross-table relink in this layer follows (e.g.
+    // communications.ts's reclassify): check ownership here too, rather than trusting the
+    // route layer alone to have done it first. Held before the resume's row is written (#944): a
+    // merge or a delete of it takes the two in that order. It can be waited for, so what is written
+    // below comes from a read after it: the status can have been saved meanwhile.
+    if (relink && patch.opportunityId != null) {
+      await holdOpportunity(tx, ctx, patch.opportunityId);
+      row = await read();
+      if (row === undefined) throw notFound();
+    }
+    const aboutStatus =
+      patch.status !== undefined ||
+      patch.submittedTo !== undefined ||
+      patch.submittedAt !== undefined;
     const status = patch.status ?? row.status;
     let submittedTo: string | null = null;
     let submittedAt: number | null = null;
@@ -278,21 +300,12 @@ export async function updateResume(
     } else if (patch.submittedTo !== undefined || patch.submittedAt !== undefined) {
       throw new HttpError(422, 'not_submitted');
     }
-    const relink = 'opportunityId' in patch;
-    if (relink && row.kind === 'base') throw new HttpError(422, 'base_cannot_attach');
-    // Matches the convention every other cross-table relink in this layer follows (e.g.
-    // communications.ts's reclassify): check ownership here too, rather than trusting the
-    // route layer alone to have done it first.
-    if (relink && patch.opportunityId != null) {
-      await assertOpportunityOwned(tx, ctx, patch.opportunityId);
-    }
     return await tx
       .update(resumes)
       .set({
         ...(patch.title === undefined ? {} : { title: patch.title }),
-        status,
-        submittedTo,
-        submittedAt,
+        // Only what the patch is about: another save can have changed the status since the read.
+        ...(aboutStatus ? { status, submittedTo, submittedAt } : {}),
         ...(relink ? { opportunityId: patch.opportunityId ?? null } : {}),
         updatedAt: Date.now(),
       })

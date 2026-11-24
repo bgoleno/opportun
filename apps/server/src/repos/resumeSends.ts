@@ -21,6 +21,7 @@ import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import type { Db, Exec, UserCtx } from './base';
 import { ownedBy } from './base';
+import { holdOpportunity } from './activities';
 import type { ResumeRow } from './resumes';
 
 export type ResumeSendRow = typeof resumeSends.$inferSelect;
@@ -237,7 +238,8 @@ export async function recordResumeSend(
         { userFacing: true },
       );
     }
-    await ownedOpportunity(tx, ctx, opportunityId);
+    // Held until this is done: one being deleted or merged away is waited for, and not found (#944).
+    await holdOpportunity(tx, ctx, opportunityId);
     await racePoint('resumeSends.record.locked');
     return await insertSend(tx, ctx, {
       opportunityId,
