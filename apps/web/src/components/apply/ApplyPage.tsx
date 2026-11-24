@@ -631,58 +631,63 @@ function DetailsStep({
                 ...(source === null ? [] : [sourceId]),
               ].join(' ');
               return (
-                <div key={f.key} className="grid gap-1.5">
+                // The label's row is the grid's, shared with the field beside it, so a label of two lines
+                // moves both controls down, and what is under one control leaves the other's place alone
+                // (https://github.com/bgoleno/opportun/issues/951).
+                <div key={f.key} className="row-span-2 grid grid-rows-subgrid items-start gap-1.5">
                   <Label id={`field-${f.key}-label`} htmlFor={`field-${f.key}`}>
                     {f.label}
                   </Label>
-                  <Input
-                    id={`field-${f.key}`}
-                    type={f.type}
-                    autoComplete={f.autoComplete}
-                    value={fields[f.key] ?? ''}
-                    disabled={!canEdit}
-                    aria-describedby={describedBy === '' ? undefined : describedBy}
-                    onChange={(e) => setFields((prev) => ({ ...prev, [f.key]: e.target.value }))}
-                  />
-                  {f.hint === undefined ? null : (
-                    <p id={hintId} className="text-xs text-muted-foreground">
-                      {f.hint}
-                    </p>
-                  )}
-                  {source === null ? null : (
-                    <p id={sourceId} className="text-xs text-muted-foreground">
-                      {source}
-                    </p>
-                  )}
-                  {diff === null ? null : (
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                      <span className="text-muted-foreground">
-                        {diff === 'missing' ? 'Not in your profile' : 'Differs from your profile'}
-                      </span>
-                      <span className="flex items-center gap-1.5">
-                        {/* Named for what it does; the field it belongs to is its description,
-                            so the field's own label names one control only (getByLabel, and a
-                            screen reader's list of form fields). */}
-                        <Checkbox
-                          id={`save-${f.key}`}
-                          aria-describedby={`field-${f.key}-label`}
-                          checked={ticked.has(f.key)}
-                          disabled={!canEdit}
-                          onCheckedChange={(v) =>
-                            setTicked((prev) => {
-                              const next = new Set(prev);
-                              if (v === true) next.add(f.key);
-                              else next.delete(f.key);
-                              return next;
-                            })
-                          }
-                        />
-                        <Label htmlFor={`save-${f.key}`} className="text-xs font-normal">
-                          {diff === 'removing' ? 'Remove from my profile' : 'Save to my profile'}
-                        </Label>
-                      </span>
-                    </div>
-                  )}
+                  <div className="grid gap-1.5">
+                    <Input
+                      id={`field-${f.key}`}
+                      type={f.type}
+                      autoComplete={f.autoComplete}
+                      value={fields[f.key] ?? ''}
+                      disabled={!canEdit}
+                      aria-describedby={describedBy === '' ? undefined : describedBy}
+                      onChange={(e) => setFields((prev) => ({ ...prev, [f.key]: e.target.value }))}
+                    />
+                    {f.hint === undefined ? null : (
+                      <p id={hintId} className="text-xs text-muted-foreground">
+                        {f.hint}
+                      </p>
+                    )}
+                    {source === null ? null : (
+                      <p id={sourceId} className="text-xs text-muted-foreground">
+                        {source}
+                      </p>
+                    )}
+                    {diff === null ? null : (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                        <span className="text-muted-foreground">
+                          {diff === 'missing' ? 'Not in your profile' : 'Differs from your profile'}
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          {/* Named for what it does; the field it belongs to is its description,
+                              so the field's own label names one control only (getByLabel, and a
+                              screen reader's list of form fields). */}
+                          <Checkbox
+                            id={`save-${f.key}`}
+                            aria-describedby={`field-${f.key}-label`}
+                            checked={ticked.has(f.key)}
+                            disabled={!canEdit}
+                            onCheckedChange={(v) =>
+                              setTicked((prev) => {
+                                const next = new Set(prev);
+                                if (v === true) next.add(f.key);
+                                else next.delete(f.key);
+                                return next;
+                              })
+                            }
+                          />
+                          <Label htmlFor={`save-${f.key}`} className="text-xs font-normal">
+                            {diff === 'removing' ? 'Remove from my profile' : 'Save to my profile'}
+                          </Label>
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}
