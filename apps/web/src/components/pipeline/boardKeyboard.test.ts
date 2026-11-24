@@ -366,4 +366,101 @@ describe('the board keyboard drag on a board narrower than its columns (#886)', 
     step.column = 'offer';
     expect(keyboardFirst(step, own)(placed)).toEqual(boardCollision(placed));
   });
+
+  // A chain column scrolled past the area's end lies behind the pinned columns, under the pointer
+  // too, and a drop there moved the card to it.
+  describe('what a pointer drag is over (#960)', () => {
+    // At 150 px: new to 238, interested 250 to 538, preparing from 550, cut at 700; offer, at 850,
+    // is out of sight; the pinned rail is 712 to 768.
+    type Extra = { id: string; at: ClientRect; pinned?: true };
+    const over = (
+      pointer: { x: number; y: number } | null,
+      dragged: ClientRect,
+      ...extras: Extra[]
+    ) => {
+      const b = narrowBoard(150);
+      for (const { id, at: place, pinned } of extras) {
+        const node = document.createElement('article');
+        (pinned === true ? document.body : b.area).append(node);
+        b.rects.set(id, place);
+        b.droppables.set(id, { id, node: { current: node } } as unknown as DroppableContainer);
+      }
+      return boardCollision(
+        at({
+          collisionRect: dragged,
+          droppableRects: b.rects,
+          droppableContainers: [...b.droppables.values()],
+          pointerCoordinates: pointer,
+        }),
+      ).map((c) => c.id);
+    };
+    const hiddenCard = (place: ClientRect): Extra => ({ id: 'hidden card', at: place });
+    const anywhere = rect(600, 140, 272, 96);
+
+    it('a column or a card is under the pointer only where it is on screen', () => {
+      expect(over({ x: 740, y: 150 }, anywhere, hiddenCard(rect(705, 140, 60, 30)))).toEqual([
+        'closed',
+      ]);
+      expect(over({ x: 740, y: 150 }, anywhere)).toEqual(['closed']);
+      // The part of a column that is on screen still is.
+      expect(over({ x: 690, y: 150 }, anywhere)).toEqual(['preparing']);
+    });
+
+    describe('in a gap between columns: the nearest, as if the pointer were in it', () => {
+      // The dragged card's centre is far off, over the rail.
+      const far = rect(604, 140, 272, 96);
+      const rail: Extra = { id: 'second rail', at: rect(780, 100, 56, 600), pinned: true };
+      const cards: Extra[] = [
+        { id: 'first', at: rect(258, 140, 272, 96) },
+        { id: 'second', at: rect(258, 250, 272, 96) },
+      ];
+
+      it('in the chain, the column on either side, the left one half way', () => {
+        // New ends at 238, interested starts at 250.
+        expect(over({ x: 240, y: 500 }, far)).toEqual(['new']);
+        expect(over({ x: 244, y: 500 }, far)).toEqual(['new']);
+        expect(over({ x: 246, y: 500 }, far)).toEqual(['interested']);
+      });
+
+      it('between the chain and the rails, and between two rails', () => {
+        // Preparing is cut at 700, the rail starts at 712; the second starts at 780, after 768.
+        expect(over({ x: 703, y: 500 }, far, rail)).toEqual(['preparing']);
+        expect(over({ x: 709, y: 500 }, far, rail)).toEqual(['closed']);
+        expect(over({ x: 770, y: 500 }, far, rail)).toEqual(['closed']);
+        expect(over({ x: 778, y: 500 }, far, rail)).toEqual(['second rail']);
+      });
+
+      it('at a card’s height, that card; below the last, the column', () => {
+        expect(over({ x: 246, y: 280 }, far, ...cards)).toEqual(['second', 'interested']);
+        expect(over({ x: 246, y: 500 }, far, ...cards)).toEqual(['interested']);
+      });
+
+      it('is a gap only beside a column, at its height', () => {
+        // Above every column: where the card's centre is.
+        expect(over({ x: 244, y: 90 }, rect(314, 80, 272, 96))).toEqual(['interested']);
+        // Past the last rail by more than a gap.
+        expect(over({ x: 800, y: 500 }, rect(314, 140, 272, 96))).toEqual(['interested']);
+      });
+    });
+
+    it('with neither, the most overlap with what is on screen', () => {
+      // Just under the columns, which end at 700.
+      const under = rect(460, 690, 272, 96);
+      expect(over({ x: 500, y: 720 }, under, hiddenCard(rect(705, 680, 24, 20)))).toEqual([
+        'preparing',
+        'interested',
+        'closed',
+      ]);
+    });
+
+    it('touching nothing on screen, nothing', () => {
+      expect(over({ x: 150, y: 740 }, rect(100, 720, 272, 96))).toEqual([]);
+      // Over offer, all of it out of sight.
+      expect(over({ x: 960, y: 320 }, rect(900, 300, 272, 96))).toEqual([]);
+    });
+
+    it('a drag with no pointer keeps its own last step', () => {
+      expect(over(null, rect(900, 300, 272, 96))).toEqual(['offer']);
+    });
+  });
 });
