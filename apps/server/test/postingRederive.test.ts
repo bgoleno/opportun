@@ -7,7 +7,7 @@
 import type { NormalizedPosting, PostingStateDetail } from '@opportun/core';
 import { runStructured } from '@opportun/ai';
 import type { FastifyInstance } from 'fastify';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rederivePosting } from '../src/lib/postingRederive';
 import { descriptionFingerprint } from '../src/lib/postingFingerprint';
 import type { BoardLookup } from '../src/lib/postingSearch';
@@ -16,13 +16,18 @@ import { createActivity, listActivities } from '../src/repos/activities';
 import { createCompany } from '../src/repos/companies';
 import {
   createOpportunity,
+  deleteOpportunity,
   getOpportunity,
   setPostingState,
   updateOpportunity,
 } from '../src/repos/opportunities';
 import type { UserCtx } from '../src/repos/base';
+import { setRaceHook } from '../src/lib/racePoints';
+import { onSlowTransaction } from '../src/db/gate';
 import { useApi } from './api';
+import { testDialect } from './db';
 import type { TestClient } from './isolation';
+import { pauseAt, whileParked } from './race';
 
 vi.mock('@opportun/ai', async (orig) => ({
   ...(await orig<typeof import('@opportun/ai')>()),
@@ -30,6 +35,7 @@ vi.mock('@opportun/ai', async (orig) => ({
 }));
 
 const boot = useApi();
+afterEach(() => setRaceHook(undefined));
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
 
 const TITLE = 'Staff Product Manager';
@@ -366,5 +372,148 @@ describe('rederivePosting', () => {
     expect(outcome).toEqual({ kind: 'no_description_found' });
     const out = await getOpportunity(app.db, ctx, opp.id);
     expect(out.descriptionMd).toBe(opp.descriptionMd);
+  });
+
+  // #858: the search can take seconds, and a description the user saves meanwhile is theirs, forced
+  // or not. A user who confirmed the posting themselves keeps that too, whichever write was refused.
+  describe('a description saved while the board is read (#858)', () => {
+    const SAVED = 'Saved during the re-derive.';
+    const KEPT_NOTE = 'Posting check: description kept';
+
+    /** A forced re-derive that waits on its board, with `SAVED` saved meanwhile. */
+    async function savedMeanwhile(
+      postings: NormalizedPosting[],
+      state: {
+        postingState: 'confirmed' | 'needs_review';
+        postingStateDetail: PostingStateDetail | null;
+      },
+    ) {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+      const opp = await seed(app, ctx, state);
+      let release: () => void = () => undefined;
+      const held = new Promise<void>((r) => (release = r));
+      let reading: () => void = () => undefined;
+      const started = new Promise<void>((r) => (reading = r));
+      const board: BoardLookup = async () => {
+        reading();
+        await held;
+        return postings;
+      };
+      const rederive = run(app, ctx, opp.id, board, { force: true });
+      let saved;
+      try {
+        await started;
+        saved = await a.request({
+          method: 'PATCH',
+          url: `/api/v1/opportunities/${opp.id}`,
+          payload: { descriptionMd: SAVED },
+        });
+      } finally {
+        release();
+      }
+      expect(saved.statusCode, saved.body).toBe(200);
+      const outcome = await rederive;
+      const { items } = await listActivities(app.db, ctx, opp.id, { limit: 50, offset: 0 });
+      return {
+        outcome,
+        before: opp,
+        after: await getOpportunity(app.db, ctx, opp.id),
+        notes: items.filter((n) => n.kind === 'note'),
+      };
+    }
+
+    const STATES = [
+      ['confirmed', null],
+      ['confirmed', 'user_confirmed'],
+      ['needs_review', 'edited'],
+      ['needs_review', 'none_found'],
+    ] as const;
+
+    it.each(STATES)(
+      'with no match on the board, at %s / %s, it is kept, and so is the state',
+      async (postingState, postingStateDetail) => {
+        const { outcome, before, after, notes } = await savedMeanwhile([], {
+          postingState,
+          postingStateDetail,
+        });
+        expect(outcome).toMatchObject({
+          kind: 'left_alone',
+          opportunity: { descriptionMd: SAVED },
+        });
+        expect(after).toMatchObject({
+          descriptionMd: SAVED,
+          descriptionFingerprint: before.descriptionFingerprint,
+          descriptionIsUserWritten: true,
+          postingState,
+          postingStateDetail,
+        });
+        expect(notes.map((n) => [n.title, n.bodyMd])).toEqual([
+          [
+            KEPT_NOTE,
+            'The description changed while it was being re-derived from the capture, so it was left as it is.',
+          ],
+        ]);
+      },
+    );
+
+    it.each(STATES)(
+      'with a match on the board, at %s / %s, it is kept, and the note says so',
+      async (postingState, postingStateDetail) => {
+        const { outcome, before, after, notes } = await savedMeanwhile([atsPosting()], {
+          postingState,
+          postingStateDetail,
+        });
+        expect(outcome).toMatchObject({ kind: 'left_alone' });
+        expect(after).toMatchObject({
+          descriptionMd: SAVED,
+          postingUrl: before.postingUrl,
+          location: before.location,
+          // What the user settled, or was already asked about, stays; a flag says the rest.
+          ...(postingState === 'confirmed'
+            ? { postingState, postingStateDetail }
+            : { postingState: 'needs_review', postingStateDetail: 'edited' }),
+        });
+        expect(notes.map((n) => [n.title, n.bodyMd])).toEqual([
+          [
+            KEPT_NOTE,
+            'The description changed while the board was being checked, so the board search left it as it is.',
+          ],
+        ]);
+      },
+    );
+
+    it('a write that fails for another reason is that failure', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const opp = await seed(app, ctx);
+      setRaceHook((point) => {
+        if (point === 'opportunities.update.locked') throw new Error('the disk is full');
+      });
+      await expect(run(app, ctx, opp.id, noBoards, { force: true })).rejects.toThrow(
+        'the disk is full',
+      );
+      expect((await getOpportunity(app.db, ctx, opp.id)).descriptionMd).toBe(opp.descriptionMd);
+    });
+
+    // Deleted between the write's read and its UPDATE, which finds no row. On SQLite the gate holds
+    // the delete back until the write is done.
+    it.runIf(testDialect === 'postgres')(
+      'an opportunity deleted meanwhile is not found',
+      async () => {
+        const { app, a } = await boot();
+        const ctx = ctxOf(a);
+        const opp = await seed(app, ctx);
+        onSlowTransaction(() => undefined);
+        const pause = pauseAt('opportunities.update.locked');
+        const outcome = run(app, ctx, opp.id, noBoards, { force: true }).then(
+          () => null,
+          (err: unknown) => err,
+        );
+        await whileParked(pause, () => deleteOpportunity(app.db, ctx, opp.id));
+        expect(await outcome).toMatchObject({ statusCode: 404 });
+      },
+    );
   });
 });

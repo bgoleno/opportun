@@ -224,7 +224,7 @@ export interface FindPostingResult {
   unchanged?: true;
   /** What a Refetch changed (#866): absent on a first attach, and when `unchanged`. */
   changed?: ('link' | 'job' | 'description' | 'location' | 'remote' | 'compensation')[];
-  /** 'attached' with the user's own description left as it was, not compared (#866). */
+  /** The posting was confirmed, with the user's own description left as it was, not compared (#866). */
   keptDescription?: true;
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity?: OpportunityView;
@@ -241,7 +241,11 @@ export interface FindPostingResult {
   note?: string;
 }
 
-export type AttachPostingVars = { posting: NormalizedPosting } | { url: string } | { text: string };
+export type AttachPostingVars = (
+  { posting: NormalizedPosting } | { url: string } | { text: string }
+) & {
+  replaceDescription?: string;
+};
 
 /**
  * Looks the opportunity's posting up: a job id in a linked message first, then the company's
@@ -253,9 +257,10 @@ export function useFindPosting(id: string) {
   return useMutation({
     // `seen`: the posting state the page showed (#852): a posting a background check confirmed
     // since is answered as it is ('already_confirmed'), never searched again.
-    mutationFn: (seen: string = 'none') =>
+    // `replaceDescription`: the description the user agreed to lose (descriptionAtStake).
+    mutationFn: (vars: { seen: string; replaceDescription?: string }) =>
       api<FindPostingResult>(
-        `/opportunities/${enc(id)}/find-posting?seen=${encodeURIComponent(seen)}`,
+        `/opportunities/${enc(id)}/find-posting?${new URLSearchParams(vars).toString()}`,
         { method: 'POST' },
       ),
     onSuccess: (res) => {

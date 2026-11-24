@@ -68,6 +68,7 @@ export function usableResumes(resumes: Resume[], opportunityId: string): Resume[
  * never a silent button (#893). An answer added without one does not compile.
  */
 function findSaid(result: FindPostingResult): string {
+  const kept = result.keptDescription === true ? ' Your own description was kept.' : '';
   switch (result.outcome) {
     case 'attached':
       // A posting confirmed already was read again (#866): what that did, as the Details tab says.
@@ -77,12 +78,10 @@ function findSaid(result: FindPostingResult): string {
           ? 'Nothing changed. Your own description was kept.'
           : "Nothing changed: the posting matches the company's board.";
       }
-      if (result.changed === undefined) return 'Posting attached.';
-      return result.keptDescription === true
-        ? 'Posting updated from the board. Your own description was kept.'
-        : 'Posting updated from the board.';
+      if (result.changed === undefined) return `Posting attached.${kept}`;
+      return `Posting updated from the board.${kept}`;
     case 'identified':
-      return 'Recognised on Greenhouse.';
+      return `Recognised on Greenhouse.${kept}`;
     case 'already_confirmed':
       return 'This posting was confirmed already. This page is up to date now.';
     case 'candidates':
@@ -368,13 +367,18 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                   disabled={find.isPending}
                   onClick={() => {
                     setFoundAt(checksEnded);
-                    find.mutate(opp.postingState ?? 'none', {
-                      onError: (err) => {
-                        if (!isPostingSearching(err) || !checkOver()) return;
-                        find.reset();
-                        toast(CHECK_ENDED);
+                    // Never `replaceDescription` (#858): this recognises the job, and the user's
+                    // description is kept.
+                    find.mutate(
+                      { seen: opp.postingState ?? 'none' },
+                      {
+                        onError: (err) => {
+                          if (!isPostingSearching(err) || !checkOver()) return;
+                          find.reset();
+                          toast(CHECK_ENDED);
+                        },
                       },
-                    });
+                    );
                   }}
                 >
                   {find.isPending ? 'Searching...' : 'Find posting'}

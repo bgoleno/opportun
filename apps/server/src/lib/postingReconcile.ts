@@ -36,7 +36,8 @@ import {
 export const noBodies: BodyReader = async () => '';
 
 export interface ReconcileOutcome {
-  status: 'confirmed' | 'needs_review';
+  /** 'left_alone' (#858): the description changed meanwhile, and the state is as it was too. */
+  status: 'confirmed' | 'needs_review' | 'left_alone';
   detail: PostingStateDetail | null;
 }
 
@@ -119,10 +120,17 @@ const RECONCILE_NOTE_TITLES: Record<ReconcileOutcomeKind, string> = {
   ambiguous: 'Posting search found more than one candidate',
   none_found: "Posting not found on the company's board",
   no_board: 'No ATS board detected for this company',
-  edited: 'Posting check skipped: description already edited',
+  edited: 'Posting check: description kept',
   failed: 'Posting check failed',
 };
-const KNOWN_RECONCILE_TITLES = new Set(Object.values(RECONCILE_NOTE_TITLES));
+/** The outcome a marker's title names. A title an outcome had before still names it. */
+const RECONCILE_OUTCOME_OF_TITLE = new Map<string, ReconcileOutcomeKind>([
+  // The description is kept whether or not the board was read, so nothing was skipped (#858).
+  ['Posting check skipped: description already edited', 'edited'],
+  ...Object.entries(RECONCILE_NOTE_TITLES).map(
+    ([kind, title]) => [title, kind as ReconcileOutcomeKind] as const,
+  ),
+]);
 
 /**
  * Writes or refreshes this opportunity's reconcile marker, immediately after the state change
@@ -146,9 +154,9 @@ export async function writeReconcileNote(
   const title = RECONCILE_NOTE_TITLES[outcomeKind];
   // Newest first (listActivities' own default sort): the first match is the most recent one.
   const { items } = await listActivities(db, ctx, opportunityId, { limit: 50, offset: 0 });
-  const marker = items.find((a) => a.kind === 'note' && KNOWN_RECONCILE_TITLES.has(a.title));
-  if (marker !== undefined && marker.title === title) {
-    await updateActivity(db, ctx, marker.id, { bodyMd: body, occurredAt: Date.now() });
+  const marker = items.find((a) => a.kind === 'note' && RECONCILE_OUTCOME_OF_TITLE.has(a.title));
+  if (marker !== undefined && RECONCILE_OUTCOME_OF_TITLE.get(marker.title) === outcomeKind) {
+    await updateActivity(db, ctx, marker.id, { title, bodyMd: body, occurredAt: Date.now() });
     return;
   }
   await createActivity(db, ctx, opportunityId, {
@@ -178,15 +186,18 @@ export async function flag(
   return { status: 'needs_review', detail };
 }
 
-/** A description that changed while the board was read stays as it is, and the timeline says so. */
+/**
+ * A description that changed while the board was read stays as it is, and the timeline says so. A
+ * posting confirmed already stays confirmed, by the user or not (#858): a write refused for the
+ * description says nothing against that.
+ */
 async function leaveEdited(db: Db, ctx: UserCtx, opportunityId: string): Promise<ReconcileOutcome> {
-  return await flag(
-    db,
-    ctx,
-    opportunityId,
-    'edited',
-    'The description changed while the board was being checked, so the board search left it as it is.',
-  );
+  const body =
+    'The description changed while the board was being checked, so the board search left it as it is.';
+  const now = await getOpportunity(db, ctx, opportunityId);
+  if (now.postingState !== 'confirmed') return await flag(db, ctx, opportunityId, 'edited', body);
+  await writeReconcileNote(db, ctx, opportunityId, 'edited', body);
+  return { status: 'left_alone', detail: now.postingStateDetail };
 }
 
 type OpportunityPatch = Parameters<typeof updateOpportunity>[3];

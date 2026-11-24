@@ -1,10 +1,12 @@
 // Find posting (Task 6, FR-O1): the Description card offers to look the posting up, one
 // confident match lands without a dialog, several open the picker, and a company with no board
 // falls back to pasting. Candidate text from a board is rendered as text, never as markup.
+import { sha256Hex } from '@opportun/core';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { qk, type OpportunityView } from '@/lib/opportunities';
+import { browserCloses, pressEscapeOn } from '@/test/dialog';
 import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import { useOpportunity } from './api';
 import { DetailsPanel } from './DetailsPanel';
@@ -844,5 +846,247 @@ describe('Find posting', () => {
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(/no close match/i)).toBeInTheDocument();
     expect(within(dialog).getByText('Staff Product Manager - Data Products')).toBeInTheDocument();
+  });
+
+  // #858: at `edited` the board's copy can replace what the user wrote, so they are asked first, and
+  // the request names the text they agreed to lose.
+  describe('from edited, replacing the description asks first (#858)', () => {
+    const MINE = 'my own notes: café, 東京 🚀';
+    const EDITED = {
+      ...BARE,
+      descriptionMd: MINE,
+      descriptionIsUserWritten: true,
+      postingState: 'needs_review',
+      postingStateDetail: 'edited',
+    } as OpportunityView;
+    const ASK = 'Replace your description?';
+    const ROW = CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003');
+    const REPLACED = {
+      ...EDITED,
+      descriptionMd: 'What We Do: cybercrime is growing.',
+      descriptionIsUserWritten: false,
+      postingState: 'confirmed',
+      postingStateDetail: null,
+    } as OpportunityView;
+    const CANDIDATES = { outcome: 'candidates', candidates: [ROW], board: [ROW] };
+
+    const searches = (calls: ApiCall[]) =>
+      calls.filter((c) => c.path === '/opportunities/opp-1/find-posting');
+    const attaches = (calls: ApiCall[]) =>
+      calls.filter((c) => c.path === '/opportunities/opp-1/posting');
+    const agreed = (c: ApiCall | undefined) =>
+      new URLSearchParams(c?.search).get('replaceDescription');
+    const click = async (name: string) =>
+      await userEvent.click(await screen.findByRole('button', { name }));
+    const answer = async (name: string) =>
+      await userEvent.click(
+        within(await screen.findByRole('dialog', { name: ASK })).getByRole('button', { name }),
+      );
+
+    describe.each(['Review board copy', 'Find posting'])('%s', (action) => {
+      it('asks, naming that the edit will be lost; Cancel sends nothing', async () => {
+        const { calls } = setup({});
+        renderWithProviders(<DetailsPanel opp={EDITED} />);
+        await click(action);
+        const ask = await screen.findByRole('dialog', { name: ASK });
+        expect(ask).toHaveTextContent(/edited this description by hand/i);
+        expect(ask).toHaveTextContent(/your edit can't be recovered afterward/i);
+        expect(searches(calls)).toEqual([]);
+        await answer('Cancel');
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+        expect(searches(calls)).toEqual([]);
+      });
+
+      it('agreed, it searches, naming the text to be lost', async () => {
+        const { calls } = setup({
+          'POST /opportunities/opp-1/find-posting': {
+            outcome: 'attached',
+            opportunity: REPLACED,
+            candidate: ROW,
+          },
+        });
+        renderWithProviders(<DetailsPanel opp={EDITED} />);
+        await click(action);
+        await answer('Find and replace');
+        expect(await screen.findByText(ROW.posting.title)).toBeInTheDocument();
+        expect(searches(calls)).toHaveLength(1);
+        expect(agreed(searches(calls)[0])).toBe(sha256Hex(MINE));
+        expect(new URLSearchParams(searches(calls)[0]?.search).get('seen')).toBe('needs_review');
+        expect(screen.queryByRole('dialog')).toBeNull();
+      });
+    });
+
+    // The answer is about the text that was there when it was asked, not about what came since.
+    it('text saved elsewhere while it asks is not what was agreed to', async () => {
+      let now = EDITED;
+      const { calls } = setup({
+        'GET /opportunities/opp-1': () => now,
+        'POST /opportunities/opp-1/find-posting': {
+          outcome: 'attached',
+          candidate: ROW,
+          keptDescription: true,
+        },
+      });
+      const { queryClient } = renderWithProviders(<Live />);
+      await click('Review board copy');
+      await screen.findByRole('dialog', { name: ASK });
+      now = { ...EDITED, descriptionMd: 'saved in another tab' };
+      await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+      expect(await screen.findByText('saved in another tab')).toBeInTheDocument();
+      await answer('Find and replace');
+      await waitFor(() => expect(searches(calls)).toHaveLength(1));
+      expect(agreed(searches(calls)[0])).toBe(sha256Hex(MINE));
+      // The server kept it, and it is said: they had agreed to have it replaced.
+      expect(
+        await screen.findByText('Staff Product Manager, SIEM. Your own description was kept.'),
+      ).toBeInTheDocument();
+    });
+
+    it('a job recognised with the description kept says both', async () => {
+      setup({
+        'POST /opportunities/opp-1/find-posting': { outcome: 'identified', keptDescription: true },
+      });
+      renderWithProviders(<DetailsPanel opp={{ ...EDITED, postingStateDetail: 'none_found' }} />);
+      await click('Find posting');
+      const said = await screen.findByText('Recognised on Greenhouse');
+      expect(said.closest('li')).toHaveTextContent('Your own description was kept.');
+    });
+
+    it('asked once each: the next search asks again', async () => {
+      const { calls } = setup({
+        'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' },
+      });
+      renderWithProviders(<DetailsPanel opp={EDITED} />);
+      await click('Find posting');
+      await answer('Find and replace');
+      await click('Try again');
+      expect(await screen.findByRole('dialog', { name: ASK })).toBeInTheDocument();
+      expect(searches(calls)).toHaveLength(1);
+    });
+
+    it.each([
+      ['a description of the system’s', { descriptionIsUserWritten: false }],
+      ['no description', { descriptionMd: null, descriptionIsUserWritten: false }],
+      ['another detail, where the description is kept', { postingStateDetail: 'none_found' }],
+    ] as const)('%s: nothing to ask, and nothing agreed', async (_what, over) => {
+      const { calls } = setup({
+        'POST /opportunities/opp-1/find-posting': { outcome: 'unreachable' },
+      });
+      renderWithProviders(<DetailsPanel opp={{ ...EDITED, ...over } as OpportunityView} />);
+      await click('Find posting');
+      await waitFor(() => expect(searches(calls)).toHaveLength(1));
+      expect(agreed(searches(calls)[0])).toBeNull();
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it('a row picked after an agreed search is not asked about again, and carries the agreement', async () => {
+      const { calls } = setup({
+        'POST /opportunities/opp-1/find-posting': CANDIDATES,
+        'POST /opportunities/opp-1/posting': REPLACED,
+      });
+      renderWithProviders(<DetailsPanel opp={EDITED} />);
+      await click('Review board copy');
+      await answer('Find and replace');
+      await click('Attach');
+      await waitFor(() => expect(attaches(calls)).toHaveLength(1));
+      expect(attaches(calls)[0]?.body).toEqual({
+        posting: ROW.posting,
+        replaceDescription: sha256Hex(MINE),
+      });
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    });
+
+    it('a row picked where nothing was agreed carries nothing, and says the description was kept', async () => {
+      const KEPT = {
+        ...EDITED,
+        postingStateDetail: 'none_found',
+        descriptionMd: MINE,
+      } as OpportunityView;
+      const { calls } = setup({
+        'POST /opportunities/opp-1/find-posting': CANDIDATES,
+        'POST /opportunities/opp-1/posting': { ...KEPT, postingState: 'confirmed' },
+      });
+      renderWithProviders(<DetailsPanel opp={KEPT} />);
+      await click('Find posting');
+      await click('Attach');
+      await waitFor(() => expect(attaches(calls)).toHaveLength(1));
+      expect(attaches(calls)[0]?.body).toEqual({ posting: ROW.posting });
+      expect(
+        await screen.findByText('Staff Product Manager, SIEM. Your own description was kept.'),
+      ).toBeInTheDocument();
+    });
+
+    describe.each([
+      ['pasted text', 'Pasted text', 'Posting description', 'Own the SIEM roadmap.', 'text'],
+      ['a pasted link', 'Link', 'Posting link', 'https://careers.example/jobs/1', 'url'],
+    ] as const)('%s', (_what, mode, field, value, key) => {
+      async function paste(opp: OpportunityView, then: unknown) {
+        const { calls } = setup({
+          'POST /opportunities/opp-1/find-posting': CANDIDATES,
+          'POST /opportunities/opp-1/posting': then,
+        });
+        renderWithProviders(<DetailsPanel opp={opp} />);
+        await click('Find posting');
+        if (opp === EDITED) await answer('Find and replace');
+        await userEvent.click(await screen.findByLabelText(mode));
+        await userEvent.type(screen.getByLabelText(field), value);
+        await click('Attach posting');
+        return calls;
+      }
+
+      it('asks, and Cancel sends nothing and keeps what was pasted', async () => {
+        const calls = await paste(EDITED, REPLACED);
+        const ask = await screen.findByRole('dialog', { name: ASK });
+        expect(ask).toHaveTextContent(/your edit can't be recovered afterward/i);
+        await answer('Cancel');
+        await waitFor(() => expect(screen.queryByRole('dialog', { name: ASK })).toBeNull());
+        expect(attaches(calls)).toEqual([]);
+        expect(screen.getByLabelText(field)).toHaveValue(value);
+      });
+
+      // Only the question closes, not the dialog under it with what was pasted into it.
+      it.each(['Escape', 'Cancel', 'Close'])('%s leaves the dialog under it open', async (how) => {
+        await paste(EDITED, REPLACED);
+        const ask = await screen.findByRole('dialog', { name: ASK });
+        if (how === 'Escape') pressEscapeOn(ask);
+        else await answer(how);
+        // What a browser sends once it has closed, and jsdom does not.
+        browserCloses(ask);
+        await waitFor(() => expect(screen.queryByRole('dialog', { name: ASK })).toBeNull());
+        expect(screen.getByRole('dialog', { name: 'Add the posting' })).toBeInTheDocument();
+        expect(screen.getByLabelText(field)).toHaveValue(value);
+      });
+
+      it('agreed, it is attached, naming the text to be lost', async () => {
+        const calls = await paste(EDITED, REPLACED);
+        await answer('Replace');
+        await waitFor(() => expect(attaches(calls)).toHaveLength(1));
+        expect(attaches(calls)[0]?.body).toEqual({
+          [key]: value,
+          replaceDescription: sha256Hex(MINE),
+        });
+        await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      });
+
+      it('refused, the refusal is shown where it was pasted', async () => {
+        await paste(EDITED, {
+          status: 409,
+          body: { error: { code: 'description_changed', message: 'It changed meanwhile.' } },
+        });
+        await answer('Replace');
+        const dialog = await screen.findByRole('dialog', { name: 'Add the posting' });
+        expect(await within(dialog).findByRole('alert')).toHaveTextContent('It changed meanwhile.');
+        expect(screen.queryByRole('dialog', { name: ASK })).toBeNull();
+      });
+
+      it('does not ask over a description that is not the user’s', async () => {
+        const calls = await paste(
+          { ...EDITED, descriptionIsUserWritten: false } as OpportunityView,
+          REPLACED,
+        );
+        await waitFor(() => expect(attaches(calls)).toHaveLength(1));
+        expect(attaches(calls)[0]?.body).toEqual({ [key]: value });
+      });
+    });
   });
 });
