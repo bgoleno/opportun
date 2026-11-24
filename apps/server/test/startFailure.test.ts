@@ -344,6 +344,17 @@ describe('why a start failed', () => {
   it.each<[string, unknown, StartFailureReason]>([
     ['a self-signed certificate', withCode('DEPTH_ZERO_SELF_SIGNED_CERT'), 'postgres_tls'],
     ['a wrong name on it', withCode('ERR_TLS_CERT_ALTNAME_INVALID'), 'postgres_tls'],
+    ['a secure connection that breaks off', withCode('EPROTO'), 'postgres_tls'],
+    [
+      'a password asked for, and none set',
+      new Error('SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string'),
+      'postgres_sign_in',
+    ],
+    [
+      'a password asked for, and an empty one set',
+      new Error('SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a non-empty string'),
+      'postgres_sign_in',
+    ],
     ['no route', withCode('EHOSTUNREACH'), 'postgres_unreachable'],
     [
       'no answer in time',

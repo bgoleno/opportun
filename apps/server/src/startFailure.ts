@@ -93,15 +93,21 @@ const TLS_TEXT = new Set([
   'The server does not support SSL connections',
   'There was an error establishing an SSL connection',
 ]);
-/** Node's certificate errors: OpenSSL's verification results, and Node's own. */
+/** Node's certificate errors (OpenSSL's verification results, and Node's own), and a failed handshake. */
 const TLS_CODE =
-  /^(?:ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|SELF_SIGNED_|DEPTH_ZERO_|HOSTNAME_MISMATCH$|INVALID_CA$)/;
+  /^(?:ERR_TLS_|ERR_SSL_|CERT_|UNABLE_TO_|SELF_SIGNED_|DEPTH_ZERO_|HOSTNAME_MISMATCH$|INVALID_CA$|EPROTO$)/;
+/** What node-postgres says, with no code, when Postgres asks for a password and there is none. */
+const SIGN_IN_TEXT = new Set([
+  'SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a string',
+  'SASL: SCRAM-SERVER-FIRST-MESSAGE: client password must be a non-empty string',
+]);
 
 function postgresReason(err: unknown): StartFailureReason | undefined {
   const code = codeOf(err);
   const text = messageOf(err);
   if (code === 'ERR_INVALID_URL' || err instanceof URIError) return 'postgres_url';
   if (TLS_CODE.test(code) || TLS_TEXT.has(text)) return 'postgres_tls';
+  if (SIGN_IN_TEXT.has(text)) return 'postgres_sign_in';
   if (UNREACHABLE.has(code) || UNREACHABLE_TEXT.has(text)) return 'postgres_unreachable';
   const connecting = (err as { syscall?: unknown } | null)?.syscall === 'connect';
   if (connecting && UNREACHABLE_SOCKET.has(code)) return 'postgres_unreachable';
