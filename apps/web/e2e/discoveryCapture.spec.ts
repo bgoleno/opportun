@@ -811,7 +811,7 @@ test('case 53: capturing the Senior posting leaves the Principal card', async ()
   });
 });
 
-test('case 55: a location that arrives after the capture is a card, and goes to the same opportunity', async () => {
+test('case 55: a location that arrives after the capture makes no card and is linked', async () => {
   await atDesk(async (desk) => {
     const p = posting('linkedin', 'Later Place Role');
     const late = posting('linkedin', 'Later Place Role');
@@ -819,15 +819,19 @@ test('case 55: a location that arrives after the capture is a card, and goes to 
     await desk.discovery();
     expect(await desk.capture(p)).toContain(ADDED);
     const one = await desk.oneAtInterested(p);
-    await desk.alert('linkedin', [{ posting: late, location: 'Denver' }]);
+    await desk.alert('linkedin', [{ posting: late, location: 'Denver' }], false);
+    const linked = async () =>
+      (await desk.entries(one.id)).filter((e) => e.externalUrl === postingAddress(late)).length;
+    await expect.poll(linked).toBe(1);
     await desk.discovery();
-    await expect(desk.row('Later Place Role')).toBeVisible();
-    await desk.openPosting(late);
-    expect
-      .soft(await desk.popup.capture(postingAddress(late)))
-      .toContain('Already in your pipeline');
-    expect((await desk.oneAtInterested(late)).id).toBe(one.id);
-    await desk.back();
-    await desk.leaves('Later Place Role', 0);
+    await expect(desk.row('Later Place Role')).toHaveCount(0);
+    expect(await desk.oneAtInterested(p)).toMatchObject({
+      id: one.id,
+      location: one.location,
+      descriptionMd: one.descriptionMd,
+    });
+
+    expect.soft(await desk.capture(late)).toContain('Already in your pipeline, at Interested.');
+    expect((await desk.oneAtInterested(p)).id).toBe(one.id);
   });
 });
