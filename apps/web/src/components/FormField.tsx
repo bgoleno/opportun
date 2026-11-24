@@ -27,7 +27,10 @@ export function FormField(props: {
     [props.error ? errorId : null, props.hint ? hintId : null].filter(Boolean).join(' ') ||
     undefined;
   return (
-    <div className={cn('grid gap-1.5', props.className)}>
+    // content-start: in a row of fields a grid stretches each to the tallest, and a grid's own rows
+    // would share the rest, so a field with no hint or error started its control lower than the one
+    // beside it that has one (https://github.com/bgoleno/opportun/issues/951).
+    <div className={cn('grid content-start gap-1.5', props.className)}>
       <Label htmlFor={id}>
         {props.label}
         {props.labelSuffix}
