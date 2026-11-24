@@ -939,20 +939,28 @@ describe.each(SITES)('a capture on %s of a role with a linked posting behind it'
     expect(await textOf(app, a)).toEqual([OWN]);
   });
 
-  it('one the user accepted with that text is: the page replaces it, as before', async () => {
-    const { app, a } = await boot();
-    const id = await byHand(app, a);
-    const cardId = await card(app, a, another(site, THERE, { descriptionMd: OWN }));
-    const res = await a.request({
-      method: 'POST',
-      url: `/api/v1/discovery/results/${cardId}/accept`,
-      payload: { attachTo: id },
-    });
-    expect(res.statusCode, res.body).toBe(200);
-    const captured = await capture(app, a, SECOND, THERE);
-    expect(captured.opportunityId).toBe(id);
-    expect(await textOf(app, a)).toEqual([PAGE]);
-  });
+  it.each([null, 'no_key'] as const)(
+    'one the user accepted with that text is (skip reason %s): the page replaces it',
+    async (rankSkipReason) => {
+      const { app, a } = await boot();
+      const id = await byHand(app, a);
+      const cardId = await card(app, a, another(site, THERE, { descriptionMd: OWN }));
+      const res = await a.request({
+        method: 'POST',
+        url: `/api/v1/discovery/results/${cardId}/accept`,
+        payload: { attachTo: id },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      await app.db
+        .update(discoveryResults)
+        .set({ rankSkipReason })
+        .where(eq(discoveryResults.id, cardId))
+        .run();
+      const captured = await capture(app, a, SECOND, THERE);
+      expect(captured.opportunityId).toBe(id);
+      expect(await textOf(app, a)).toEqual([PAGE]);
+    },
+  );
 });
 
 describe('a role renamed since', () => {
