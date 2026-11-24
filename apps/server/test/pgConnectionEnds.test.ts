@@ -694,21 +694,24 @@ describe.runIf(testDialect === 'postgres')('a Postgres connection that ends (#96
       }
     }, 60_000);
 
+    /** A demo server's gate, taken, and Postgres gone before the check that follows. */
+    const checkFails: Job = {
+      instance: true,
+      gate: (pg) => {
+        const gate = new DemoResetGate();
+        const shared = gate.shared.bind(gate);
+        gate.shared = async (opts) => {
+          gate.shared = shared;
+          const hold = await shared(opts);
+          await pg.leaves();
+          return hold;
+        };
+        return gate;
+      },
+    };
+
     it('one whose check before its handler failed goes back, its attempt not counted', async () => {
-      const t = await queued({
-        instance: true,
-        gate: (pg) => {
-          const gate = new DemoResetGate();
-          const shared = gate.shared.bind(gate);
-          gate.shared = async (opts) => {
-            gate.shared = shared;
-            const hold = await shared(opts);
-            await pg.leaves();
-            return hold;
-          };
-          return gate;
-        },
-      });
+      const t = await queued(checkFails);
       try {
         t.go();
         await until(() => t.said().length > 0);
@@ -870,6 +873,44 @@ describe.runIf(testDialect === 'postgres')('a Postgres connection that ends (#96
       },
       60_000,
     );
+
+    // The same in the writes of an end, and of one put back.
+    it.each<[string, Job]>([
+      ['done', {}],
+      ['dead', { body: inTransaction, maxAttempts: 1 }],
+    ])(
+      'a row no longer this claim’s is not made %s',
+      async (_to, job) => {
+        const t = await caught(job);
+        try {
+          await t.waiting();
+          await t.by.query('UPDATE jobs SET attempts = attempts + 1 WHERE id = $1', [t.id]);
+          const before = await t.whole();
+          await t.away.back();
+          await t.another();
+          expect(await t.whole()).toEqual(before);
+          expect([t.seen.errors, t.seen.dead]).toEqual([[], job.maxAttempts === 1 ? 1 : 0]);
+        } finally {
+          await t.ends();
+        }
+      },
+      60_000,
+    );
+
+    it('a row no longer this claim’s is not put back', async () => {
+      const t = await queued(checkFails);
+      try {
+        t.go();
+        await until(() => t.said().length > 0);
+        await t.by.query('UPDATE jobs SET attempts = attempts + 1 WHERE id = $1', [t.id]);
+        const before = await t.whole();
+        await t.away.back();
+        await t.another();
+        expect(await t.whole()).toEqual(before);
+      } finally {
+        await t.ends();
+      }
+    }, 60_000);
   });
 
   // The whole of it, in a process that an uncaught error would end.
