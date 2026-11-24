@@ -7,8 +7,8 @@
 //
 // What survives is the minimum that stops the next sync bringing it back — sender, date, and
 // the provider's id — plus the reason code. What goes is everything that says what the message
-// was about: subject, snippet, body, and the search-index rows that would otherwise keep the
-// text findable after the row stopped showing it.
+// was about, in the row and in its copies (repos/rejectedContent.ts), and the search-index rows
+// that would otherwise keep the text findable after the row stopped showing it.
 import { senderAddress } from '../lib/mailAddress';
 import { invalidateTriageContext } from '../lib/triageContext';
 import { newId, parseMailPattern } from '@opportun/core';
@@ -22,7 +22,7 @@ import { racePoint } from '../lib/racePoints';
 import { createRule, updateRule } from './mailFilters';
 import type { UserCtx } from './base';
 import { ownedBy } from './base';
-import { removeFromIndex } from './search';
+import { CLEARED_ON_REJECT, clearCopies } from './rejectedContent';
 
 export interface RejectInput {
   reason: RejectionReason;
@@ -125,15 +125,11 @@ export async function rejectCommunication(
       const updated = await tx
         .update(communications)
         .set({
-          subject: null,
-          snippet: null,
-          bodyRef: null,
-          rejectedAt: now,
-          rejectionReason: input.reason,
           // A rejected message is not a classification the user is correcting, so the
           // classifier's own verdict goes with the content it was about.
-          needsReview: false,
-          proposedTransition: null,
+          ...CLEARED_ON_REJECT,
+          rejectedAt: now,
+          rejectionReason: input.reason,
           updatedAt: now,
         })
         .where(
@@ -146,12 +142,18 @@ export async function rejectCommunication(
               : eq(communications.opportunityId, input.expectedOpportunityId),
           ),
         )
-        .returning({ id: communications.id })
+        .returning({
+          id: communications.id,
+          channel: communications.channel,
+          externalId: communications.externalId,
+          from: communications.from,
+          sentAt: communications.sentAt,
+        })
         .all();
-      if (updated.length === 0) return false;
-      // The row no longer carries the text, so an index entry for it would be a searchable
-      // copy of something the user asked to be rid of.
-      await removeFromIndex(tx, ctx, 'communication', id);
+      const [rejected] = updated;
+      if (rejected === undefined) return false;
+      // Erased, not yet committed: a delivery or a classification can arrive here.
+      await racePoint('reject.erased');
       await tx
         .insert(dismissalFeedback)
         .values({
@@ -166,6 +168,7 @@ export async function rejectCommunication(
           at: now,
         })
         .run();
+      await clearCopies(tx, ctx, rejected);
       return true;
     });
     if (!erased) {

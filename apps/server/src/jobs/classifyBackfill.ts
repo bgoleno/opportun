@@ -53,6 +53,7 @@ export async function backfillClassify(db: Db, ctx: UserCtx): Promise<number> {
         and(
           eq(communications.userId, ctx.userId),
           isNull(communications.classification),
+          isNull(communications.rejectedAt),
           // Stage 1 blocked these, so they have no classification and never will. Without this
           // they stay eligible forever and the next key add sends every blocked sender's From
           // header to the model: the body is gone, but "this user hears from a clinic" is

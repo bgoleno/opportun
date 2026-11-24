@@ -68,8 +68,10 @@ const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
  * claims its key, and updateOpportunity for a company, title, location or link, #889), then rows.
  * A transaction that writes or names two opportunities, or writes an opportunity's message and then
  * names that opportunity, takes the user's lock first (#920): createOpportunity and the saves above,
- * mergeOpportunities, reorderOpportunities, dismissPossibleDuplicate, reclassify and
- * rejectCommunication; and deleteOpportunity, whose cascade reaches those rows the other way. No
+ * mergeOpportunities, reorderOpportunities, dismissPossibleDuplicate, reclassify,
+ * rejectCommunication, applyClassification, acceptProposal (each of these also so that a message
+ * rejected meanwhile is seen as rejected); and deleteOpportunity, whose cascade reaches those rows the
+ * other way. No
  * order of rows would do, as a save of one naming the other, and a delete of the other, need them in
  * opposite orders. A decision on a discovery result (accept, attach, create anyway, dismiss, undo:
  * routes/discovery.ts decidePending, #968) takes it first too, before it reads the result. The rows
