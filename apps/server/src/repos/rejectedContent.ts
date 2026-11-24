@@ -1,8 +1,15 @@
 // What a rejected message loses (spec D4), in one place: the reject clears it, and so does the job
 // that tidies the messages rejected before it did (jobs/tidyRejected.ts), so the two cannot differ.
-import { and, eq, inArray, isNotNull, ne } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, ne } from 'drizzle-orm';
 import type { Exec } from '../db/client';
-import { activities, communications, dismissalFeedback, jobs, opportunities } from '../db/schema';
+import {
+  activities,
+  communications,
+  dismissalFeedback,
+  jobs,
+  opportunities,
+  stageHistory,
+} from '../db/schema';
 import { CLASSIFY_JOB_KIND, classifyDedupeKey } from '../lib/mailClassifyQueue';
 import type { UserCtx } from './base';
 import { ownedBy } from './base';
@@ -195,4 +202,38 @@ export async function clearCopies(
     entriesLeft: entries.mine.length - blanked.length + entries.unsure,
     notesCleared: notes.length,
   };
+}
+
+/**
+ * Takes a rejected message's subject out of the notes of the stage changes it suggested, whichever
+ * opportunity of the user's they are on (a merge moves them). A note holds no id of its message, so
+ * one that another message of theirs, not rejected, would have made stays. `subject` is the one the
+ * message had; in the reject's transaction, under the user's lock, the message's row written.
+ */
+export async function clearStageNotes(
+  tx: Exec,
+  ctx: UserCtx,
+  subject: string | null,
+): Promise<void> {
+  const said = stageNoteSubject(subject);
+  if (said === '') return;
+  const exactly = and(
+    ownedBy(stageHistory.userId, ctx),
+    eq(stageHistory.note, `${STAGE_NOTE}${said}`),
+  );
+  const notes = await tx.select({ id: stageHistory.id }).from(stageHistory).where(exactly).all();
+  if (notes.length === 0) return;
+  const there = await tx
+    .select({ subject: communications.subject })
+    .from(communications)
+    .where(
+      and(
+        ownedBy(communications.userId, ctx),
+        isNull(communications.rejectedAt),
+        isNotNull(communications.subject),
+      ),
+    )
+    .all();
+  if (there.some((m) => stageNoteSubject(m.subject) === said)) return;
+  await tx.update(stageHistory).set({ note: 'Proposed by a message' }).where(exactly).run();
 }

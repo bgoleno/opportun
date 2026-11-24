@@ -22,7 +22,7 @@ import { racePoint } from '../lib/racePoints';
 import { createRule, updateRule } from './mailFilters';
 import type { UserCtx } from './base';
 import { ownedBy } from './base';
-import { CLEARED_ON_REJECT, clearCopies } from './rejectedContent';
+import { CLEARED_ON_REJECT, clearCopies, clearStageNotes } from './rejectedContent';
 
 export interface RejectInput {
   reason: RejectionReason;
@@ -119,6 +119,12 @@ export async function rejectCommunication(
     const erased = await withTransaction(db, async (tx) => {
       // The user's lock first, as reclassify (#920; the rule is at submissionScope).
       await lockScope(tx, `user:${ctx.userId}`);
+      // The subject as it is now, for the notes it is in: the UPDATE answers with what it left.
+      const was = await tx
+        .select({ subject: communications.subject })
+        .from(communications)
+        .where(and(ownedBy(communications.userId, ctx), eq(communications.id, id)))
+        .get();
       // The condition is in the erasing UPDATE itself, not a read before it (tl on #666): a link
       // that commits first leaves this updating nothing, and on Postgres a concurrent one waits
       // on the row and the WHERE is checked again, so there is no window between check and erase.
@@ -168,6 +174,7 @@ export async function rejectCommunication(
           at: now,
         })
         .run();
+      await clearStageNotes(tx, ctx, was?.subject ?? null);
       await clearCopies(tx, ctx, rejected);
       return true;
     });
