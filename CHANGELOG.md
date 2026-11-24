@@ -95,6 +95,13 @@ when the milestone's work was merged.
   for a lock answers "busy" with no entry, so made again it is recorded once
   ([#914](https://github.com/bgoleno/opportun/issues/914); PR
   [#955](https://github.com/bgoleno/opportun/pull/955)).
+- **Find posting: a job you already track is refused with that opportunity named and linked.**
+  Attaching a posting whose job is another of your opportunities says "This job is already tracked
+  as <title> at <company>", with a link to it, instead of "That already exists." Only your own
+  opportunities are named. When that opportunity was deleted at that moment, the refusal reads as
+  before
+  ([#936](https://github.com/bgoleno/opportun/issues/936); PR
+  [#964](https://github.com/bgoleno/opportun/pull/964)).
 
 ### Sign-in and settings
 
@@ -125,6 +132,15 @@ when the milestone's work was merged.
   Find posting and Capture
   ([#921](https://github.com/bgoleno/opportun/issues/921); PR
   [#953](https://github.com/bgoleno/opportun/pull/953)).
+- **Refusals of unsuppress, a tailoring message, Sync now, unlink and link say what happened and
+  what to do, instead of a code, and what they were about is read again.** The lists, cards and
+  session behind them are refreshed. A sign-in whose provider was removed while the login page
+  was open goes back to the login page and says "That sign-in provider is no longer set up here.
+  Sign in another way, or ask the administrator." Unlinking a provider already unlinked says so.
+  Form limits and the two-factor setup have their own words, and the Inbox counts a filter's
+  characters as the server does. No message shows the AI key or any part of it
+  ([#896](https://github.com/bgoleno/opportun/issues/896); PR
+  [#933](https://github.com/bgoleno/opportun/pull/933)).
 
 ### Inbox
 
