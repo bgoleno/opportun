@@ -11,7 +11,14 @@ import { resolveCapture } from '../src/lib/captureResolve';
 import { descriptionFingerprint } from '../src/lib/postingFingerprint';
 import { setRaceHook } from '../src/lib/racePoints';
 import { listActivities } from '../src/repos/activities';
-import { createRun, ensureChannelSource, getResult, insertResult } from '../src/repos/discovery';
+import {
+  createRun,
+  createSource,
+  ensureChannelSource,
+  getResult,
+  insertResult,
+  setResolution,
+} from '../src/repos/discovery';
 import { createOpportunity, getOpportunity, updateOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
@@ -182,6 +189,57 @@ describe("text that is not this posting's", () => {
     expect(done.opportunityId).toBe(opp);
     await expectKept(app, a, opp, SNIPPET);
     expect(done.description).toBe('kept');
+  });
+
+  /** A board's posting of the job, accepted: its text is on the opportunity, with no fingerprint. */
+  async function acceptedFromBoard(app: FastifyInstance, c: TestClient): Promise<string> {
+    const source = await createSource(app.db, ctxOf(c), {
+      kind: 'ats_lever',
+      config: { org: 'initech' },
+    });
+    const run = await createRun(app.db, ctxOf(c), { sourceId: source.id });
+    const { id } = await insertResult(app.db, ctxOf(c), {
+      runId: run.id,
+      posting: {
+        ...JOB,
+        descriptionMd: SNIPPET,
+        postingUrl: 'https://jobs.lever.co/initech/5f1c2b9e-1111-4c2d-9a7e-0123456789ab',
+        externalId: 'lever-1',
+      },
+      dedupeKey: dedupeKey(JOB.company, JOB.title, JOB.location),
+      resolution: 'full',
+    });
+    return await accept(c, id);
+  }
+
+  it("the employer's own, when the captured lead was resolved on that board: kept", async () => {
+    const { app, a } = await boot();
+    const opp = await acceptedFromBoard(app, a);
+    const id = await card(app, a, LINKEDIN, { descriptionMd: SNIPPET }, 'resolved_ats');
+    const { resolvedSourceRef } = await setResolution(app.db, ctxOf(a), id, {
+      resolution: 'resolved_ats',
+      resolvedSourceRef: 'https://jobs.lever.co/initech',
+    });
+    const done = await capture(app, a, LINKEDIN);
+    expect(done).toMatchObject({ opportunityId: opp, resultId: id, description: 'kept' });
+    expect(await getResult(app.db, ctxOf(a), id)).toMatchObject({ resolvedSourceRef });
+    await expectKept(app, a, opp, SNIPPET);
+    // What it was stays known, so a later capture does not take it for a snippet either.
+    expect((await getResult(app.db, ctxOf(a), id)).resolution).toBe('resolved_ats');
+    expect((await capture(app, a, LINKEDIN)).description).toBe('kept');
+    expect((await getOpportunity(app.db, ctxOf(a), opp)).descriptionMd).toBe(SNIPPET);
+  });
+
+  it('the same with two alert leads resolved on one board posting', async () => {
+    const { app, a } = await boot();
+    const opp = await acceptedFromBoard(app, a);
+    await card(app, a, LINKEDIN, { descriptionMd: SNIPPET }, 'resolved_ats');
+    await card(app, a, INDEED, { descriptionMd: SNIPPET }, 'resolved_ats');
+    await capture(app, a, LINKEDIN);
+    expect((await getOpportunity(app.db, ctxOf(a), opp)).descriptionMd).toBe(SNIPPET);
+    const done = await capture(app, a, INDEED);
+    expect(done).toMatchObject({ opportunityId: opp, description: 'kept' });
+    expect((await getOpportunity(app.db, ctxOf(a), opp)).descriptionMd).toBe(SNIPPET);
   });
 
   it("the user's own, on an opportunity made by hand: kept", async () => {

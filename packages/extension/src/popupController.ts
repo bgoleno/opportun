@@ -551,7 +551,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       // A popup closed before its request has left sends nothing, and there is no background worker to
       // send it (manifest.ts): the user is told (#967).
       {
-        working: 'Capturing… Keep this window open until it says the job was added.',
+        working: 'Capturing… Keep this window open until it says what happened.',
         button: captureButton,
         writes: true,
       },

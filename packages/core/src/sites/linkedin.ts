@@ -18,7 +18,7 @@ const JOB_ID = /^\d{1,20}$/;
 /** After words: long enough that a title's year or level ("engineer-2024") is not read as an id. */
 const SLUG_JOB_ID = /^\d{6,20}$/;
 /** List views that name the posting open beside the list in `currentJobId`. */
-const JOBS_LIST_PATH = /^\/jobs\/(?:search|search-results|collections)(?:\/|$)/;
+const JOBS_LIST_PATH = /^\/jobs(?:\/(?:search|search-results|collections)(?:\/|$)|\/?$)/;
 
 /** The job id in a path, whatever the host, or null. */
 function idInPath(pathname: string): string | null {

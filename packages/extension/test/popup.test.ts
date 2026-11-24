@@ -111,7 +111,7 @@ async function click(el: HTMLElement, done: () => boolean) {
 }
 
 /** What the popup says while it captures: a popup closed before the request leaves sends nothing (#967). */
-const WORKING = 'Capturing… Keep this window open until it says the job was added.';
+const WORKING = 'Capturing… Keep this window open until it says what happened.';
 
 describe('popup settings', () => {
   it('saves the server and token, asking for the server origin only', async () => {

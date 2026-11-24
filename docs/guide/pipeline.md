@@ -99,10 +99,12 @@ in. It is kept apart instead when everything that opportunity came from (job ale
 accepted discovery results, earlier captures) is a different job on the same site, for
 example two LinkedIn jobs with different job ids. The capture then gets an opportunity of its
 own, and its timeline gets an entry, **Kept apart from a different LinkedIn posting**, naming
-the other job and, if it has a posting link, linking to it. The other locations of the Discovery
+the other job and, if it has a posting link, linking to it. An opportunity whose title is at another
+level (Staff against Principal) is another job too, whatever it came from: the entry is then **Kept apart
+from a job at another level**. The other locations of the Discovery
 card a capture completes are not kept apart: they are that opportunity's. An opportunity that came from
-none of these, such as one you created by hand, is filled in as usual, even if you gave it a
-posting link. A dismissed opportunity that a capture fills in comes back to Interested. If
+none of these, such as one you created by hand with the same title, is filled in as usual, even if you
+gave it a posting link. A dismissed opportunity that a capture fills in comes back to Interested. If
 the opportunity a capture is kept apart from is dismissed, the capture still gets its own
 opportunity and the timeline entry, but no flag.
 

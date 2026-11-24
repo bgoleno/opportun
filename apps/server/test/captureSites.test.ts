@@ -270,6 +270,8 @@ describe('the addresses of one posting', () => {
   it.each([
     [`https://www.linkedin.com/jobs/search/?currentJobId=${LI}&keywords=x`, `linkedin:${LI}`],
     [`https://www.linkedin.com/jobs/search-results/?currentJobId=${LI}`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs/?currentJobId=${LI}`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs?currentJobId=${LI}`, `linkedin:${LI}`],
     [`https://www.linkedin.com/jobs/collections/recommended/?currentJobId=${LI}`, `linkedin:${LI}`],
     [`https://www.indeed.com/m/viewjob?jk=${JK}`, `indeed:${JK}`],
     [`https://www.indeed.com/rc/clk?jk=${JK.toUpperCase()}&bb=x`, `indeed:${JK}`],
@@ -292,7 +294,6 @@ describe('the addresses of one posting', () => {
     'https://www.linkedin.com/jobs/view/a-1000000001/apply',
     'https://www.linkedin.com/x/jobs/view/1000000001',
     'https://www.linkedin.com/jobs/search/?currentJobId=not-an-id',
-    'https://www.linkedin.com/jobs/?currentJobId=1000000001',
     'https://www.linkedin.com/feed/?currentJobId=1000000001',
     'https://m.linkedin.com/jobs/view/1000000001',
     'https://www.indeed.com/pagead/clk?mo=r',

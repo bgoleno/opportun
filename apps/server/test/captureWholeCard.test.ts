@@ -22,7 +22,11 @@ import {
   insertResult,
   setDisposition,
 } from '../src/repos/discovery';
-import { createOpportunity, getOpportunity } from '../src/repos/opportunities';
+import {
+  createOpportunity,
+  getOpportunity,
+  transitionOpportunity,
+} from '../src/repos/opportunities';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { heldApart } from './race';
@@ -311,6 +315,325 @@ describe('the opportunity it goes into', () => {
     const done = await capture(app, a, 'linkedin', 2, { location: CITIES[0] });
     expect(done.createdOpportunity).toBe(true);
     expect(done.opportunityId).not.toBe(opportunityId);
+  });
+});
+
+// Levels are different jobs (the owner), and the stored key strips them: by key only the same whole
+// title counts, for a lead, an accepted result and an opportunity (tl's review of
+// https://github.com/bgoleno/opportun/pull/980).
+describe('another level under the same key', () => {
+  const PRINCIPAL = { title: 'Principal Platform Engineer' };
+  /** A board's result: its id says nothing of LinkedIn, so the key alone could match it. */
+  async function boardResult(app: FastifyInstance, c: TestClient, n: number, title: string) {
+    const source = await createSource(app.db, ctxOf(c), {
+      kind: 'ats_lever',
+      config: { org: 'initech' },
+    });
+    const run = await createRun(app.db, ctxOf(c), { sourceId: source.id });
+    const location = CITIES[n]!;
+    return (
+      await insertResult(app.db, ctxOf(c), {
+        runId: run.id,
+        posting: {
+          ...JOB,
+          title,
+          location,
+          descriptionMd: 'As the board has it.',
+          postingUrl: `https://boards.example.com/initech/${title.length}-${n}`,
+          externalId: `gh-${title.length}-${n}`,
+        },
+        dedupeKey: dedupeKey(JOB.company, title, location),
+        resolution: 'full',
+      })
+    ).id;
+  }
+  const noteOf = async (app: FastifyInstance, c: TestClient, id: string) =>
+    (await listActivities(app.db, ctxOf(c), id, { limit: 50, offset: 0 })).items
+      .map((i) => i.title)
+      .filter((t) => t.startsWith('Kept apart'));
+
+  it('pending, in two places: neither is taken', async () => {
+    const { app, a } = await boot();
+    const ids = [
+      await boardResult(app, a, 0, PRINCIPAL.title),
+      await boardResult(app, a, 1, PRINCIPAL.title),
+    ];
+    const done = await capture(app, a, 'linkedin', 0, { location: CITIES[0] });
+    expect(done).toMatchObject({ createdOpportunity: true, linkedLeadIds: [] });
+    for (const id of ids) {
+      expect((await getResult(app.db, ctxOf(a), id)).disposition).toBe('pending');
+    }
+    expect((await opportunitiesOf(app, a))[0]!.title).toBe(JOB.title);
+  });
+
+  it('older than the card: the one found by id is completed, and its own card goes with it', async () => {
+    const { app, a } = await boot();
+    const older = await boardResult(app, a, 0, PRINCIPAL.title);
+    const austin = await location(app, a, 'linkedin', 0);
+    const boston = await location(app, a, 'linkedin', 1);
+    const done = await capture(app, a, 'linkedin', 0, { location: CITIES[0] });
+    expect(done).toMatchObject({ resultId: austin, linkedLeadIds: [boston], linked: 1 });
+    expect((await opportunitiesOf(app, a)).map((o) => o.title)).toEqual([JOB.title]);
+    expect((await getResult(app.db, ctxOf(a), older)).disposition).toBe('pending');
+  });
+
+  it('a lead found by id comes before an older one of the same title found by key', async () => {
+    const { app, a } = await boot();
+    const older = await boardResult(app, a, 0, JOB.title);
+    const austin = await location(app, a, 'linkedin', 0);
+    // Not the one that needs a capture, which would come first whatever its match.
+    await app.db
+      .update(discoveryResults)
+      .set({ resolution: 'full' })
+      .where(eq(discoveryResults.id, austin))
+      .run();
+    const done = await capture(app, a, 'linkedin', 0, { location: CITIES[0] });
+    expect(done).toMatchObject({ resultId: austin, linkedLeadIds: [older] });
+  });
+
+  it('tracked, under another location of the card: the card gets its own', async () => {
+    const { app, a } = await boot();
+    const principal = await createOpportunity(app.db, ctxOf(a), {
+      companyName: JOB.company,
+      title: PRINCIPAL.title,
+      location: CITIES[1]!,
+      sourceKind: 'manual',
+    });
+    for (const n of [0, 1]) await location(app, a, 'linkedin', n);
+    const done = await capture(app, a, 'linkedin', 0);
+    expect(done).toMatchObject({ createdOpportunity: true, linked: 1 });
+    expect(done.opportunityId).not.toBe(principal.id);
+    expect((await getOpportunity(app.db, ctxOf(a), principal.id)).stage).toBe('discovered');
+  });
+
+  it.each([
+    ['made by hand', false],
+    ['accepted from a board', true],
+  ])(
+    'tracked, under its own key, %s: kept apart, flagged, and the note says why',
+    async (_w, fromBoard) => {
+      const { app, a } = await boot();
+      let there: string;
+      if (fromBoard) {
+        const id = await boardResult(app, a, 0, PRINCIPAL.title);
+        const res = await a.request({
+          method: 'POST',
+          url: `/api/v1/discovery/results/${id}/accept`,
+          payload: {},
+        });
+        there = res.json().opportunityId;
+      } else {
+        const opp = await createOpportunity(app.db, ctxOf(a), {
+          companyName: JOB.company,
+          title: PRINCIPAL.title,
+          location: CITIES[0]!,
+          sourceKind: 'manual',
+        });
+        there = opp.id;
+      }
+      const austin = await location(app, a, 'linkedin', 0);
+      const done = await capture(app, a, 'linkedin', 0, { location: CITIES[0] });
+      expect(done).toMatchObject({ createdOpportunity: true, resultId: austin });
+      const own = (await opportunitiesOf(app, a)).find((o) => o.id === done.opportunityId)!;
+      expect(own).toMatchObject({
+        title: JOB.title,
+        possibleDuplicateOf: there,
+        stage: 'interested',
+      });
+      expect(await noteOf(app, a, own.id)).toEqual(['Kept apart from a job at another level']);
+      expect((await getOpportunity(app.db, ctxOf(a), there)).stage).toBe('discovered');
+    },
+  );
+
+  it.each([
+    ['the same title', JOB.title],
+    ['the same, its level written short', 'Sr. Platform Engineer'],
+  ])(
+    '%s is not another level: the hand-made opportunity is filled, as before',
+    async (_w, title) => {
+      const { app, a } = await boot();
+      const there = await createOpportunity(app.db, ctxOf(a), {
+        companyName: JOB.company,
+        title,
+        location: CITIES[0]!,
+        sourceKind: 'manual',
+      });
+      await location(app, a, 'linkedin', 0);
+      const done = await capture(app, a, 'linkedin', 0, { location: CITIES[0] });
+      expect(done).toMatchObject({ opportunityId: there.id, createdOpportunity: false });
+    },
+  );
+
+  it('the same title on another site is still taken by its key', async () => {
+    const { app, a } = await boot();
+    const indeed = await location(app, a, 'indeed', 0);
+    const done = await capture(app, a, 'linkedin', 0, { location: CITIES[0] });
+    expect(done.resultId).toBe(indeed);
+  });
+});
+
+it('one just kept apart is not then found by another posting on the card', async () => {
+  const { app, a } = await boot();
+  const other = await location(app, a, 'linkedin', 2, { location: CITIES[0] });
+  const accepted = await a.request({
+    method: 'POST',
+    url: `/api/v1/discovery/results/${other}/accept`,
+    payload: {},
+  });
+  // Of the same card and key, with no id to contradict the tracked one.
+  const noId = await location(app, a, 'linkedin', 0, {
+    location: CITIES[0],
+    postingUrl: 'https://careers.example.com/1',
+    externalId: 'opaque-1',
+  });
+  const austin = await location(app, a, 'linkedin', 0);
+  const done = await capture(app, a, 'linkedin', 0, { location: CITIES[0] });
+  expect(done).toMatchObject({ createdOpportunity: true, resultId: austin, linkedLeadIds: [noId] });
+  expect(done.opportunityId).not.toBe(accepted.json().opportunityId);
+});
+
+describe('a holder of another location that is no longer open', () => {
+  it.each(['dismissed', 'closed'] as const)(
+    '%s: it is left, and the open one is taken',
+    async (stage) => {
+      const { app, a } = await boot();
+      const make = (n: number) =>
+        createOpportunity(app.db, ctxOf(a), {
+          companyName: JOB.company,
+          title: JOB.title,
+          location: CITIES[n]!,
+          sourceKind: 'manual',
+        });
+      const boston = await make(1);
+      const chicago = await make(2);
+      await transitionOpportunity(app.db, ctxOf(a), boston.id, {
+        to: stage,
+        ...(stage === 'closed' ? { closedReason: 'withdrawn' as const } : {}),
+      });
+      for (const [id, createdAt] of [
+        [boston.id, 1_000],
+        [chicago.id, 2_000],
+      ] as const) {
+        await app.db.update(opportunities).set({ createdAt }).where(eq(opportunities.id, id)).run();
+      }
+      for (const n of [0, 1, 2]) await location(app, a, 'linkedin', n);
+      expect((await capture(app, a, 'linkedin', 0)).opportunityId).toBe(chicago.id);
+      expect((await getOpportunity(app.db, ctxOf(a), boston.id)).stage).toBe(stage);
+    },
+  );
+
+  it.each(['dismissed', 'closed'] as const)('only one, %s: a new opportunity', async (stage) => {
+    const { app, a } = await boot();
+    const boston = await createOpportunity(app.db, ctxOf(a), {
+      companyName: JOB.company,
+      title: JOB.title,
+      location: CITIES[1]!,
+      sourceKind: 'manual',
+    });
+    await transitionOpportunity(app.db, ctxOf(a), boston.id, {
+      to: stage,
+      ...(stage === 'closed' ? { closedReason: 'withdrawn' as const } : {}),
+    });
+    for (const n of [0, 1]) await location(app, a, 'linkedin', n);
+    const done = await capture(app, a, 'linkedin', 0);
+    expect(done).toMatchObject({ createdOpportunity: true, linked: 1 });
+    expect((await getOpportunity(app.db, ctxOf(a), boston.id)).stage).toBe(stage);
+  });
+});
+
+// The lead's stored key is of its posting as it came; a board, or the capture, can have given it a
+// location since, and creating with that one met its holder: 409, each time the page was captured.
+describe('a lead that has been given a location since', () => {
+  const given = async (app: FastifyInstance, c: TestClient) => {
+    const id = await location(app, c, 'linkedin', 0, { location: null });
+    const posting = { ...(await getResult(app.db, ctxOf(c), id)).posting, location: CITIES[0]! };
+    await app.db.update(discoveryResults).set({ posting }).where(eq(discoveryResults.id, id)).run();
+    return id;
+  };
+  const holder = (app: FastifyInstance, c: TestClient, title = JOB.title) =>
+    createOpportunity(app.db, ctxOf(c), {
+      companyName: JOB.company,
+      title,
+      location: CITIES[0]!,
+      sourceKind: 'manual',
+    });
+
+  it('an open opportunity there, of the same title: it is the one', async () => {
+    const { app, a } = await boot();
+    const id = await given(app, a);
+    const there = await holder(app, a);
+    const done = await capture(app, a, 'linkedin', 0);
+    expect(done).toMatchObject({
+      resultId: id,
+      opportunityId: there.id,
+      createdOpportunity: false,
+    });
+    expect(await opportunitiesOf(app, a)).toHaveLength(1);
+  });
+
+  it('one that holds the key it was stored with: it is the one', async () => {
+    const { app, a } = await boot();
+    await given(app, a);
+    const there = await createOpportunity(app.db, ctxOf(a), {
+      companyName: JOB.company,
+      title: JOB.title,
+      sourceKind: 'manual',
+    });
+    const done = await capture(app, a, 'linkedin', 0, { location: CITIES[1] });
+    expect(done).toMatchObject({ opportunityId: there.id, createdOpportunity: false });
+  });
+
+  it('another level there: kept apart and flagged', async () => {
+    const { app, a } = await boot();
+    await given(app, a);
+    const there = await holder(app, a, 'Principal Platform Engineer');
+    const done = await capture(app, a, 'linkedin', 0);
+    expect(done.createdOpportunity).toBe(true);
+    const own = (await opportunitiesOf(app, a)).find((o) => o.id === done.opportunityId);
+    expect(own?.possibleDuplicateOf).toBe(there.id);
+    expect((await capture(app, a, 'linkedin', 0)).opportunityId).toBe(done.opportunityId);
+    expect(await opportunitiesOf(app, a)).toHaveLength(2);
+  });
+
+  // The posting's own key, so its holder is the opportunity at any stage, as for its other two.
+  it.each([
+    ['applied', 'applied'],
+    ['closed', 'closed'],
+    ['dismissed', 'interested'],
+  ] as const)(
+    'an opportunity there at %s, of the same title: it is the one, at %s',
+    async (stage, after) => {
+      const { app, a } = await boot();
+      const id = await given(app, a);
+      const there = await holder(app, a);
+      for (const to of stage === 'applied' ? (['interested', 'applied'] as const) : [stage]) {
+        await transitionOpportunity(app.db, ctxOf(a), there.id, {
+          to,
+          ...(to === 'closed' ? { closedReason: 'withdrawn' as const } : {}),
+        });
+      }
+      for (const result of [id, id]) {
+        const done = await capture(app, a, 'linkedin', 0);
+        expect(done).toMatchObject({ resultId: result, opportunityId: there.id });
+      }
+      expect((await getOpportunity(app.db, ctxOf(a), there.id)).stage).toBe(after);
+      expect(await opportunitiesOf(app, a)).toHaveLength(1);
+    },
+  );
+
+  it('one whose leads are another posting on the site: kept apart, once', async () => {
+    const { app, a } = await boot();
+    const other = await location(app, a, 'linkedin', 2, { location: CITIES[0] });
+    await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${other}/accept`,
+      payload: {},
+    });
+    await given(app, a);
+    const done = await capture(app, a, 'linkedin', 0);
+    expect(done.createdOpportunity).toBe(true);
+    expect((await capture(app, a, 'linkedin', 0)).opportunityId).toBe(done.opportunityId);
+    expect(await opportunitiesOf(app, a)).toHaveLength(2);
   });
 });
 

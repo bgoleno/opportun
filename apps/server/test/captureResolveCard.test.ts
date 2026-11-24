@@ -287,14 +287,59 @@ describe('a card with no id that can be read', () => {
     await expectLeft(app, a, id);
   });
 
-  it('a card found by id is taken first, and this one is left', async () => {
+  it('a card found by id is the one completed, and this one, a location of it, is linked', async () => {
     const { app, a } = await boot();
     const short = await card(app, a, { ...SHORT, location: 'Denver, CO' }, { kind: 'mcp' });
     const byId = await card(app, a, { postingUrl: SITES[0][2], externalId: LI });
-    const { resultId } = await capture(app, a);
-    expect(resultId).toBe(byId);
+    const done = await capture(app, a);
+    expect(done).toMatchObject({ resultId: byId, linkedLeadIds: [short] });
     const { results } = await rowsOf(app, a);
-    expect(results.find((r) => r.id === short)?.opportunityId).not.toBeUndefined();
+    expect(results.find((r) => r.id === short)).toMatchObject({
+      disposition: 'accepted',
+      opportunityId: done.opportunityId,
+    });
+  });
+
+  // Its link names another posting, at an address no rule reads: not a card with no id.
+  it.each([
+    `https://uk.indeed.com/viewjob?jk=${JK}`,
+    `https://www.indeed.co.uk/viewjob?jk=${JK}`,
+    `https://m.indeed.com/viewjob?jk=${JK}`,
+    'http://www.linkedin.com/jobs/view/2000000002',
+    'https://m.linkedin.com/jobs/view/2000000002',
+    'https://www.linkedin.com/jobs/?currentJobId=2000000002',
+    'https://boards.greenhouse.io/initech/jobs/1',
+    'https://jobs.lever.co/initech/5f1c2b9e-1111-4c2d-9a7e-0123456789ab',
+    'https://initech.wd5.myworkdayjobs.com/Careers/job/Austin/Engineer_R1',
+    'not a link',
+  ])('not taken: its link is %s', async (postingUrl) => {
+    const { app, a } = await boot();
+    const id = await card(app, a, { postingUrl, externalId: 'opaque-1' }, { kind: 'mcp' });
+    await capture(app, a, 'linkedin', { location: 'Boston, MA' });
+    await expectLeft(app, a, id);
+  });
+
+  it("the opportunity's link is the page's, not one nobody could read; the card's own stays on it", async () => {
+    const { app, a } = await boot();
+    const id = await card(app, a, SHORT, { kind: 'mcp' });
+    const { opportunityId } = await capture(app, a);
+    const { results, opportunities: opps } = await rowsOf(app, a);
+    expect(opps.find((o) => o.id === opportunityId)?.postingUrl).toBe(SITES[0][2]);
+    expect(results.find((r) => r.id === id)?.posting.postingUrl).toBe(SHORT.postingUrl);
+  });
+
+  it('a card found by its id, or by its key, keeps its own link', async () => {
+    const { app, a } = await boot();
+    const own = `https://www.linkedin.com/comm/jobs/view/${LI}/?trackingId=x`;
+    await card(app, a, { postingUrl: own }, { kind: 'mcp' });
+    await capture(app, a);
+    expect((await rowsOf(app, a)).opportunities[0]?.postingUrl).toBe(own);
+    const { app: app2, a: a2 } = await boot();
+    await card(app2, a2, { postingUrl: 'https://www.indeed.com/viewjob?jk=0000000000000b02' });
+    await capture(app2, a2, 'linkedin', { location: 'Austin, TX' });
+    expect((await rowsOf(app2, a2)).opportunities[0]?.postingUrl).toBe(
+      'https://www.indeed.com/viewjob?jk=0000000000000b02',
+    );
   });
 
   it('a posting captured again does not take one that came later', async () => {

@@ -65,8 +65,8 @@ never replaces your own words or the company's own posting. Either way the whole
 opportunity's timeline, and the popup says which it was.
 
 A different job that only looks like one you track is kept apart instead: for example a
-Principal role on the same site as the Staff role you track at that company and location,
-whose titles match once the seniority word is set aside. It gets its own opportunity, flagged as a possible
+Principal role where you track the Staff role at that company and location, or another posting
+on the same site with the same title and place. It gets its own opportunity, flagged as a possible
 duplicate, with a **Kept apart** entry on its timeline. See
 [Possible duplicates](pipeline.md#possible-duplicates) for exactly when that happens and what
 you can do about it.
@@ -181,8 +181,8 @@ is not.
 - **The popup says it was added to your pipeline, or that it is already there and at which
   stage**: that is where a captured job goes. It is not in the review queue. An older extension
   says less, or "review queue"; update it from Settings > Integrations > Extensions and Connectors.
-- **You closed the popup while it said "Capturing…"**: keep it open until it says the job was
-  added. Closed right after the click, nothing may have been sent; the card is then still in
+- **You closed the popup while it said "Capturing…"**: keep it open until it says what
+  happened. Closed right after the click, nothing may have been sent; the card is then still in
   Discovery, and capturing again is safe.
 - **"Opportun does not read this address"**: the tab is LinkedIn's or Indeed's mobile site or one of
   Indeed's country sites. Open the job on the site the popup names.
