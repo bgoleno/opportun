@@ -606,6 +606,32 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     expect([t.seen.runs, t.said(PUT_BACK).length]).toEqual([1, 0]);
   });
 
+  it('a job claimed again while the write of its first run is tried again is left alone', async () => {
+    let letGo!: () => void;
+    const held = new Promise<void>((r) => (letGo = r));
+    const t = await setUp({
+      body: (n) => (n === 1 ? Promise.reject(new Error('failed')) : held),
+    });
+    const id = await t.add();
+    let lost = 0;
+    t.on.statement = async (text, run) => {
+      const result = await run();
+      if (!endsJob(text) || lost > 0) return result;
+      lost += 1;
+      // Put back, and its answer lost only once the other worker has it.
+      t.seen.ahead = 60 * 60 * 1000;
+      await until(async () => (await t.rowOf(id)).attempts === 2);
+      throw new Error('Connection terminated unexpectedly');
+    };
+    t.start();
+    await until(() => t.seen.runs === 2);
+    await sweeps();
+    expect(await t.rowOf(id)).toMatchObject({ status: 'running', attempts: 2 });
+    letGo();
+    await until(async () => (await t.statusOf(id)) === 'done');
+    expect([lost, t.seen.runs, t.said(PUT_BACK).length]).toEqual([1, 2, 0]);
+  });
+
   it('a job of runDueJobs in the same process is left alone', async () => {
     const t = await setUp({ workerId: null });
     const id = await t.add();
