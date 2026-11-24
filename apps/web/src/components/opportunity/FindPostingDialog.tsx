@@ -73,9 +73,11 @@ function CandidateRow({
     <li className="grid gap-1 rounded-md border p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="grid gap-0.5">
-          <p className="text-sm font-medium">{posting.title}</p>
+          <p className="text-sm font-medium [overflow-wrap:anywhere]">{posting.title}</p>
           {where.length > 0 ? (
-            <p className="text-xs text-muted-foreground">{where.join(' / ')}</p>
+            <p className="text-xs [overflow-wrap:anywhere] text-muted-foreground">
+              {where.join(' / ')}
+            </p>
           ) : null}
         </div>
         <div className="flex items-center gap-2">
@@ -86,7 +88,7 @@ function CandidateRow({
         </div>
       </div>
       {posting.descriptionMd ? (
-        <p className="text-xs break-words text-muted-foreground">
+        <p className="text-xs [overflow-wrap:anywhere] text-muted-foreground">
           {posting.descriptionMd.slice(0, PREVIEW)}
         </p>
       ) : null}
@@ -201,9 +203,7 @@ export function FindPostingDialog({
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add the posting</DialogTitle>
-            <DialogDescription className="break-words">
-              {headline(result, opp.companyName)}
-            </DialogDescription>
+            <DialogDescription>{headline(result, opp.companyName)}</DialogDescription>
           </DialogHeader>
 
           {failure !== null ? <FormError message={failure} /> : null}
