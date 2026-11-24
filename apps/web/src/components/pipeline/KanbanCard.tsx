@@ -67,7 +67,9 @@ export function KanbanCard(props: {
         isDragging && 'border-dashed opacity-40',
       )}
     >
-      <div className="grid gap-0.5 pr-6">
+      {/* A name's words break anywhere: an end column can be 160 px wide, and one long word ran past
+          it, and past the page (#997). */}
+      <div className="grid gap-0.5 pr-6 [overflow-wrap:anywhere]">
         <CompanyLink
           name={opp.companyName}
           domain={opp.companyDomain}
