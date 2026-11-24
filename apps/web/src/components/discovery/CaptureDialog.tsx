@@ -183,7 +183,7 @@ export function CaptureDialog(props: {
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>{lead === null ? 'Capture posting' : 'Capture description'}</DialogTitle>
-          <DialogDescription className="break-words">
+          <DialogDescription>
             {lead === null
               ? 'Give a posting link or paste its text. It is added to the review queue.'
               : `Complete the lead for ${resultLabel(lead)} with its full description.`}
