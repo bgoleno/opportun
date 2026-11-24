@@ -327,6 +327,8 @@ describe('POST /discovery/results/:id/accept', () => {
       payload: { attachTo: bOpp },
     });
     expect(res.statusCode).toBe(404);
+    // The same answer as for one that does not exist.
+    expect(res.json()).toEqual({ error: { code: 'opportunity_not_found' } });
     expect(await app.db.select().from(activities).all()).toHaveLength(0);
   });
 
@@ -481,6 +483,21 @@ describe('deciding a result that is already decided (#968)', () => {
     expect(await written(app)).toEqual(before);
   });
 
+  it('a dismissed one that still has an opportunity (an old race made it) names none', async () => {
+    const { app, a } = await boot();
+    const { id, otherId } = await seed(app, a);
+    await setDisposition(app.db, ctxOf(a), id, 'dismissed', otherId);
+    const res = await post(a, `discovery/results/${id}/accept`);
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error).toEqual({
+      code: 'already_decided',
+      message: 'This result was already dismissed.',
+      disposition: 'dismissed',
+    });
+    const bulk = await post(a, 'discovery/results/bulk-accept', { ids: [id] });
+    expect(bulk.json().results).toEqual([{ id, outcome: 'already_decided' }]);
+  });
+
   it('attaching to an opportunity deleted meanwhile is a 404 and leaves the result pending', async () => {
     const { app, a } = await boot();
     const { id, otherId } = await seed(app, a);
@@ -488,7 +505,12 @@ describe('deciding a result that is already decided (#968)', () => {
     const before = await written(app);
     const res = await post(a, `discovery/results/${id}/accept`, { attachTo: otherId });
     expect(res.statusCode, res.body).toBe(404);
+    expect(res.json()).toEqual({ error: { code: 'opportunity_not_found' } });
     expect(await written(app)).toEqual(before);
+    // A result that is gone is another answer: the page says something else of it.
+    const gone = await post(a, 'discovery/results/not-a-real-id/accept', { attachTo: otherId });
+    expect(gone.statusCode, gone.body).toBe(404);
+    expect(gone.json()).toEqual({ error: { code: 'not_found' } });
   });
 });
 
@@ -791,6 +813,63 @@ describe('levels of one title are different jobs (#968)', () => {
     expect(sr.opportunityId).toBe(senior.opportunityId);
   });
 
+  it("bulk accept links a card's other locations to no other level's job, whatever the key says", async () => {
+    const { app, a } = await boot();
+    const senior = (await accept(a, await at(app, a, 'Senior Engineer', 'Austin, TX'))).json();
+    const there = await at(app, a, 'Principal Engineer', 'Austin, TX');
+    const boston = await at(app, a, 'Principal Engineer', 'Boston, MA');
+    const denver = await at(app, a, 'Principal Engineer', 'Denver, CO');
+    // The first one's key is the tracked Senior job's: the best scored, so the card's own answer.
+    await setRanking(app.db, ctxOf(a), there, { aiScore: 90, aiRationale: 'ok' });
+    const res = await a.request({
+      method: 'POST',
+      url: '/api/v1/discovery/results/bulk-accept',
+      payload: { ids: [there, boston, denver] },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const rows = await app.db.select().from(discoveryResults).all();
+    const own = rows.find((r) => r.id === boston)?.opportunityId;
+    expect(own).not.toBe(senior.opportunityId);
+    expect(res.json().results).toEqual([
+      { id: there, outcome: 'duplicate', existingId: senior.opportunityId },
+      { id: boston, outcome: 'accepted' },
+      { id: denver, outcome: 'attached', existingId: own },
+    ]);
+    expect(rows.find((r) => r.id === there)).toMatchObject({
+      disposition: 'pending',
+      opportunityId: null,
+    });
+    expect(await app.db.select().from(opportunities).all()).toHaveLength(2);
+  });
+
+  it('a job of the same title made by hand, found by its key, still takes the whole card', async () => {
+    const { app, a } = await boot();
+    const tracked = (
+      await a.request({
+        method: 'POST',
+        url: '/api/v1/opportunities',
+        payload: {
+          companyName: 'Initech',
+          title: 'Sr. Engineer',
+          location: 'Austin, TX',
+          sourceKind: 'manual',
+        },
+      })
+    ).json().id;
+    const there = await at(app, a, 'Senior Engineer', 'Austin, TX');
+    const boston = await at(app, a, 'Senior Engineer', 'Boston, MA');
+    await setRanking(app.db, ctxOf(a), there, { aiScore: 90, aiRationale: 'ok' });
+    const res = await a.request({
+      method: 'POST',
+      url: '/api/v1/discovery/results/bulk-accept',
+      payload: { ids: [there, boston] },
+    });
+    expect(res.json().results).toEqual([
+      { id: there, outcome: 'duplicate', existingId: tracked },
+      { id: boston, outcome: 'attached', existingId: tracked },
+    ]);
+  });
+
   it('another level at the same place still asks: the key is the same', async () => {
     const { app, a } = await boot();
     const senior = (await accept(a, await at(app, a, 'Senior Engineer', 'Austin, TX'))).json();
@@ -808,6 +887,25 @@ describe('levels of one title are different jobs (#968)', () => {
     expect(mine.statusCode, mine.body).toBe(200);
     expect(mine.json().opportunityId).not.toBe(theirs.opportunityId);
   });
+
+  it.each(['title', 'company'] as const)(
+    'an accepted one whose stored posting has no %s is passed over',
+    async (missing) => {
+      const { app, a } = await boot();
+      const old = await at(app, a, 'Senior Engineer', 'Austin, TX');
+      const first = (await accept(a, old)).json();
+      const posting: Record<string, unknown> = { ...POSTING, title: 'Senior Engineer' };
+      delete posting[missing];
+      await app.db
+        .update(discoveryResults)
+        .set({ posting })
+        .where(eq(discoveryResults.id, old))
+        .run();
+      const next = await accept(a, await at(app, a, 'Senior Engineer', 'Boston, MA'));
+      expect(next.statusCode, next.body).toBe(200);
+      expect(next.json().opportunityId).not.toBe(first.opportunityId);
+    },
+  );
 
   it('several of one level: the oldest is the one chained to', async () => {
     const { app, a } = await boot();

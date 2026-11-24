@@ -28,6 +28,8 @@ export function useQueueWatch(): () => void {
     let timer: ReturnType<typeof setTimeout> | undefined;
     /** The latest question; the answer to an earlier one is dropped. */
     let asking = 0;
+    /** A return's read not made yet: the question before it was slow, and a later one replaced it. */
+    let owed = false;
     /** The latest accepted result as last seen, undefined before the first answer. */
     let seen: string | undefined;
 
@@ -39,6 +41,7 @@ export function useQueueWatch(): () => void {
     /** Asks, then reads the list if something was accepted since the last answer (or `always`).
      *  In that order: an accept between the two is in the list, or a difference next time. */
     async function ask(always: boolean): Promise<void> {
+      owed ||= always;
       asking += 1;
       const mine = asking;
       clearTimeout(timer);
@@ -50,11 +53,16 @@ export function useQueueWatch(): () => void {
         seen = latest ?? seen;
         if (deciding()) {
           seen = undefined;
-        } else if (always || changed) {
+          owed = false;
+        } else if (owed || changed) {
+          owed = false;
           // The Decided view and the pipeline, opened next, have what was captured too.
           void qc.invalidateQueries({ queryKey: discoveryKeys.results });
           void qc.invalidateQueries({ queryKey: qk.opportunities });
         }
+      } else {
+        // The decision's own read is the return's.
+        owed = false;
       }
       next();
     }

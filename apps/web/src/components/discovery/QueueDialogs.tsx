@@ -251,6 +251,8 @@ export function BulkAcceptConfirmDialog(props: {
 export interface DuplicateState {
   result: DiscoveryResult;
   existingId: string;
+  /** The card's other locations, waiting to follow this one: its own, whatever else is in flight. */
+  rest: readonly DiscoveryResult[];
 }
 
 /**

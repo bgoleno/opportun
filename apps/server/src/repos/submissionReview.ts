@@ -71,7 +71,7 @@ const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
  * mergeOpportunities, reorderOpportunities, dismissPossibleDuplicate, reclassify and
  * rejectCommunication; and deleteOpportunity, whose cascade reaches those rows the other way. No
  * order of rows would do, as a save of one naming the other, and a delete of the other, need them in
- * opposite orders. A decision on a discovery result (accept, attach, create anyway, dismiss:
+ * opposite orders. A decision on a discovery result (accept, attach, create anyway, dismiss, undo:
  * routes/discovery.ts decidePending, #968) takes it first too, before it reads the result. The rows
  * after it: the opportunity's, its activities', the cascade, and the search rows last (#917). Nothing
  * outside the database runs under it.

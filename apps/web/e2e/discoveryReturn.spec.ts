@@ -66,7 +66,10 @@ async function capture(request: APIRequestContext, token: string, n: number): Pr
 
 /** Back on the page from another window. Playwright's pages never lose the focus, so it is told. */
 async function comeBack(page: Page): Promise<void> {
-  const read = page.waitForResponse((r) => r.url().includes('/api/v1/discovery/results?'));
+  // The list, not the question asked before it.
+  const read = page.waitForResponse((r) =>
+    r.url().includes('/discovery/results?disposition=pending'),
+  );
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await read;
 }

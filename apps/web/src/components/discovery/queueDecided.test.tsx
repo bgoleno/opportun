@@ -194,13 +194,40 @@ describe('the duplicate dialog', () => {
   );
 
   it('Attach to an opportunity deleted while it was open: it closes, says so, and the card stays', async () => {
-    asking(refusal(404, { code: 'not_found' }));
+    asking(refusal(404, { code: 'opportunity_not_found' }));
     const user = userEvent.setup();
     const dialog = await open(user);
     await user.click(within(dialog).getByRole('button', { name: 'Attach to existing' }));
     await said('Not attached: that opportunity has since been deleted.');
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(await screen.findByRole('listitem', { name: 'Role A at Initech' })).toBeInTheDocument();
+  });
+
+  it('Attach of a result that is gone does not say its opportunity was deleted', async () => {
+    asking(refusal(404, { code: 'not_found' }));
+    const user = userEvent.setup();
+    const dialog = await open(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Attach to existing' }));
+    expect(await toastRegion().findByText('Not accepted')).toBeInTheDocument();
+    expect(toastRegion().queryByText(/since been deleted/)).toBeNull();
+  });
+
+  it('another card accepted meanwhile does not close it', async () => {
+    let answer!: () => void;
+    const gate = new Promise<void>((r) => (answer = r));
+    queue([A, B], {
+      'POST /discovery/results/B/accept': async () => {
+        await gate;
+        return { ...B, disposition: 'accepted', opportunityId: 'o-7' };
+      },
+      'POST /discovery/results/A/accept': duplicate,
+    });
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'Accept Role B at Initech' }));
+    await open(user);
+    answer();
+    await said('Added to pipeline');
+    expect(screen.getByRole('dialog', { name: 'Already in your pipeline?' })).toBeInTheDocument();
   });
 
   it('any other error leaves it open', async () => {
@@ -324,12 +351,57 @@ describe('a card of several locations, some decided somewhere else', () => {
     expect(toast.queryByRole('button', { name: 'View opportunity' })).toBeNull();
   });
 
+  it("a card whose accept failed leaves nothing to the next card's Attach", async () => {
+    const duplicate = refusal(409, { code: 'duplicate', existingId: 'o-5' });
+    let n = 0;
+    const q = queue([...GROUP, A], {
+      'POST /discovery/results/g1/accept': refusal(500, { code: 'internal' }),
+      'POST /discovery/results/A/accept': () =>
+        n++ === 0 ? duplicate() : { ...A, disposition: 'accepted', opportunityId: 'o-5' },
+    });
+    const user = userEvent.setup();
+    await acceptAll(user);
+    expect(await toastRegion().findByText('Not accepted')).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: 'Accept Role A at Initech' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Already in your pipeline?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Attach to existing' }));
+    await said('Attached to the existing opportunity');
+    expect(posts(q.calls).map(([path]) => path)).toEqual([
+      '/discovery/results/g1/accept',
+      '/discovery/results/A/accept',
+      '/discovery/results/A/accept',
+    ]);
+  });
+
+  it("a card in flight does not lend its locations to another card's dialog", async () => {
+    const duplicate = refusal(409, { code: 'duplicate', existingId: 'o-5' });
+    let answer!: () => void;
+    const gate = new Promise<void>((r) => (answer = r));
+    let n = 0;
+    const q = queue([...GROUP, A], {
+      'POST /discovery/results/g1/accept': async () => {
+        await gate;
+        return refusal(500, { code: 'internal' })();
+      },
+      'POST /discovery/results/A/accept': () =>
+        n++ === 0 ? duplicate() : { ...A, disposition: 'accepted', opportunityId: 'o-5' },
+    });
+    const user = userEvent.setup();
+    await acceptAll(user);
+    await user.click(await screen.findByRole('button', { name: 'Accept Role A at Initech' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Already in your pipeline?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Attach to existing' }));
+    answer();
+    await said('Attached to the existing opportunity');
+    expect(posts(q.calls).some(([path]) => /g2|g3/.test(path))).toBe(false);
+  });
+
   it('Attach to a deleted opportunity ends it: the next duplicate is only its own card', async () => {
     const duplicate = refusal(409, { code: 'duplicate', existingId: 'o-5' });
     const n = { g1: 0, A: 0 };
     const q = queue([...GROUP, A], {
       'POST /discovery/results/g1/accept': () =>
-        n.g1++ === 0 ? duplicate() : refusal(404, { code: 'not_found' })(),
+        n.g1++ === 0 ? duplicate() : refusal(404, { code: 'opportunity_not_found' })(),
       'POST /discovery/results/A/accept': () =>
         n.A++ === 0 ? duplicate() : { ...A, disposition: 'accepted', opportunityId: 'o-5' },
     });
@@ -373,7 +445,7 @@ describe('bulk', () => {
       'Accept',
       'bulk-accept',
       'Accept 2',
-      '0 accepted; 1 linked to an opportunity already there; 1 already decided',
+      '0 accepted; 1 linked to an opportunity; 1 already decided',
     ],
     ['Dismiss', 'bulk-dismiss', 'Dismiss 2', '0 dismissed; 2 already decided'],
   ])('%s counts them, with no link', async (button, route, confirm, title) => {

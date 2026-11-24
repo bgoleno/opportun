@@ -436,6 +436,30 @@ describe('while a capture may still be finishing', () => {
     expect(q.questions()).toBeGreaterThan(asked);
   });
 
+  it("a return during a decision is the decision's own read, and no other", async () => {
+    let answer!: () => void;
+    const gate = new Promise<void>((r) => (answer = r));
+    const q = queue([A, B], {
+      'POST /discovery/results/A/accept': async () => {
+        await gate;
+        return { ...A, disposition: 'accepted', opportunityId: 'o-1' };
+      },
+    });
+    await screen.findByText('2 results to review.');
+    visible();
+    await waitFor(() => expect(q.reads()).toBe(2));
+    await pass(2000);
+    fireEvent.click(screen.getByRole('button', { name: 'Accept Role A at Initech' }));
+    await waitFor(() => expect(q.calls.some((c) => c.method === 'POST')).toBe(true));
+    visible();
+    await pass(100);
+    q.server.items = [B];
+    answer();
+    await waitFor(() => expect(q.reads()).toBe(3));
+    await pass(10_000);
+    expect(q.reads()).toBe(3);
+  });
+
   it('a question answered while a decision is in flight does not count as seen', async () => {
     const gate = () => {
       let open!: () => void;
@@ -492,6 +516,27 @@ describe('while a capture may still be finishing', () => {
     q.server.items = q.server.items.filter((r) => r.id !== 'A');
     answer();
     await pass(5000);
+    expect(screen.getByText('1 result to review.')).toBeInTheDocument();
+  });
+
+  it("a return's read is made although its question is slow and another is asked meanwhile", async () => {
+    const q = queue([linked, B]);
+    await screen.findByText('2 results to review.');
+    // Seen once, so the later question alone would find nothing new to read for.
+    visible();
+    await waitFor(() => expect(q.reads()).toBe(2));
+    let answer!: () => void;
+    q.server.holdQuestion = new Promise<void>((r) => (answer = r));
+    await pass(2000);
+    visible();
+    await waitFor(() => expect(q.questions()).toBe(2));
+    // Decided elsewhere without an accept, so only the return's own read can show it.
+    q.server.items = [B];
+    fireEvent.click(screen.getByRole('link', { name: 'Open posting for Role L at Initech' }));
+    q.server.holdQuestion = undefined;
+    await pass(5000);
+    answer();
+    await pass(500);
     expect(screen.getByText('1 result to review.')).toBeInTheDocument();
   });
 

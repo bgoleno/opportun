@@ -220,6 +220,22 @@ describe('a capture and a decision on one result (#968)', () => {
     expect(await opportunityIds(app, a)).toEqual([captured.opportunityId]);
   });
 
+  it('two undos with an Accept between them: the accepted row stays accepted', async () => {
+    const { app, a } = await boot();
+    const id = await card(app, a);
+    expect((await post(a, `${id}/dismiss`, { reason: 'stale' })).statusCode).toBe(200);
+    const undo = () => post(a, 'bulk-undo-dismiss', { ids: [id] });
+    const [first, second] = await heldApart(app, 'discovery.undo.locked', undo, async () => {
+      const again = await undo();
+      const accepted = await post(a, `${id}/accept`, {});
+      expect(accepted.statusCode, accepted.body).toBe(200);
+      return again;
+    });
+    expect(first.json().results).toEqual([{ id, outcome: 'restored' }]);
+    expect(second.json().results).toEqual([{ id, outcome: 'already_decided' }]);
+    expect((await getResult(app.db, ctxOf(a), id)).disposition).toBe('accepted');
+  });
+
   // Unparked, all at once: whatever the order, no request fails (a deadlock is a 500 here), and
   // each card ends decided once.
   it.each(WAYS)(

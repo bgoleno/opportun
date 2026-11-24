@@ -4,6 +4,7 @@ import { enqueue } from '../lib/jobQueue';
 import { rankAnyway, rankBelowCut } from '../lib/discoveryIngest';
 import {
   cardKey,
+  dedupeKey,
   DISCOVERY_SOURCE_KINDS,
   DISMISS_REASONS,
   DISPOSITIONS,
@@ -296,8 +297,11 @@ const RankBelowCutBody = z.object({ count: z.number().int().min(1).max(1_000_000
 function alreadyDecided(result: DiscoveryResultView): HttpError {
   const details = {
     disposition: result.disposition,
-    // None when it was dismissed, or when the opportunity has since been deleted.
-    ...(result.opportunityId === null ? {} : { existingId: result.opportunityId }),
+    // None when it was dismissed (an old race could leave one on the row), or when the opportunity has
+    // since been deleted.
+    ...(result.disposition !== 'accepted' || result.opportunityId === null
+      ? {}
+      : { existingId: result.opportunityId }),
   };
   return result.disposition === 'accepted'
     ? new HttpError(409, 'already_decided', 'This result was already accepted.', details, {
@@ -466,14 +470,20 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     return view;
   }
 
-  /** Attaches a result to an opportunity the caller names; another user's is a 404. */
+  /** Attaches a result to an opportunity the caller names; another user's is the 404 of a missing one. */
   async function attachTo(
     tx: Exec,
     ctx: UserCtx,
     result: DiscoveryResultView,
     opportunityId: string,
   ): Promise<DiscoveryResultView> {
-    const target = await getOpportunity(tx, ctx, opportunityId);
+    // Not the result's own 404: the page says which of the two is gone.
+    const target = await getOpportunity(tx, ctx, opportunityId).catch((err: unknown) => {
+      if (err instanceof HttpError && err.statusCode === 404) {
+        throw new HttpError(404, 'opportunity_not_found');
+      }
+      throw err;
+    });
     return await linkTo(tx, ctx, result, target.id);
   }
 
@@ -544,6 +554,14 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       return { item: { id, outcome: 'attached', existingId: view.opportunityId ?? undefined } };
     });
     return item;
+  }
+
+  /** Whether an opportunity, by its own company and title, is the job of this card. */
+  async function isOfCard(ctx: UserCtx, opportunityId: string, card: string): Promise<boolean> {
+    const opp = await getOpportunity(db, ctx, opportunityId).catch(() => null);
+    if (opp === null) return false;
+    const { companyName, title, location } = opp;
+    return cardKey(dedupeKey(companyName, title, location), companyName, title) === card;
   }
 
   /** One item of a bulk dismiss: `not_interested` (bulk's own reason, #184) is written like
@@ -618,9 +636,8 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       const byGroupKey = new Map<string, { id: string; result: DiscoveryResultView }[]>();
       for (const f of fetched) {
         if (f.result === undefined || f.result.disposition !== 'pending') continue;
-        const { dedupeKey, posting } = f.result;
-        const key =
-          dedupeKey === null ? `#${f.id}` : cardKey(dedupeKey, posting.company, posting.title);
+        const { dedupeKey: stored, posting } = f.result;
+        const key = stored === null ? `#${f.id}` : cardKey(stored, posting.company, posting.title);
         const existing = byGroupKey.get(key);
         if (existing === undefined) byGroupKey.set(key, [{ id: f.id, result: f.result }]);
         else existing.push({ id: f.id, result: f.result });
@@ -628,7 +645,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
 
       const results: BulkItemResult[] = [];
       const handled = new Set<string>();
-      for (const members of byGroupKey.values()) {
+      for (const [card, members] of byGroupKey) {
         // A singleton "group" (including the `#${id}` fallback for a keyless result) is just
         // an ordinary id: falls through to the independent accept loop below, unchanged from
         // today.
@@ -643,6 +660,20 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
         handled.add(primary.id);
         const { item, opportunityId } = await acceptResolving(ctx, primary.id);
         results.push(item);
+        // A duplicate names the holder of the primary's key, which strips levels, so it can be another
+        // level's job: the rest follow only into one of their own card, and are accepted on their own
+        // otherwise.
+        if (
+          item.outcome === 'duplicate' &&
+          opportunityId !== undefined &&
+          !(await isOfCard(ctx, opportunityId, card))
+        ) {
+          for (const member of sorted.slice(1)) {
+            handled.add(member.id);
+            results.push(await acceptOne(ctx, member.id));
+          }
+          continue;
+        }
         for (const member of sorted.slice(1)) {
           handled.add(member.id);
           results.push(
@@ -708,6 +739,8 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       for (const id of req.body.ids) {
         results.push(
           await withTransaction(db, async (tx) => {
+            // As decidePending: an Accept between this read and its write would be undone with it.
+            await lockScope(tx, `user:${ctx.userId}`);
             let result: DiscoveryResultView;
             try {
               result = await getResult(tx, ctx, id);
@@ -719,6 +752,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
             }
             if (result.disposition !== 'dismissed')
               return { id, outcome: 'already_decided' as const };
+            await racePoint('discovery.undo.locked');
             await tx
               .delete(dismissalFeedback)
               .where(

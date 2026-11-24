@@ -93,7 +93,7 @@ function summarize(
   for (const r of results) counts.set(r.outcome, (counts.get(r.outcome) ?? 0) + 1);
   const n = (outcome: string) => counts.get(outcome) ?? 0;
   const parts = [`${n(headline)} ${headline}`];
-  if (n('attached') > 0) parts.push(`${n('attached')} linked to an opportunity already there`);
+  if (n('attached') > 0) parts.push(`${n('attached')} linked to an opportunity`);
   if (n('duplicate') > 0) parts.push(`${n('duplicate')} already tracked`);
   if (n('already_decided') > 0) parts.push(`${n('already_decided')} already decided`);
   if (n('not_found') > 0) parts.push(`${n('not_found')} not found`);
@@ -116,11 +116,6 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
   const [dismissing, setDismissing] = useState<ResultGroup | null>(null);
   const [detail, setDetail] = useState<DiscoveryResult | null>(null);
   const [duplicate, setDuplicate] = useState<DuplicateState | null>(null);
-  /** The other locations waiting to attach once a group's primary member's accept resolves,
-   *  whether immediately or after a 409 is resolved through DuplicateAcceptDialog. */
-  const [groupContinuation, setGroupContinuation] = useState<readonly DiscoveryResult[] | null>(
-    null,
-  );
   /** Open capture dialog: lead null for a new posting, or the needs_capture lead to complete. */
   const [capture, setCapture] = useState<{ lead: DiscoveryResult | null } | null>(null);
   const [manualEntry, setManualEntry] = useState(false);
@@ -379,19 +374,23 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
   async function acceptOne(
     r: DiscoveryResult,
     extra: Omit<AcceptVars, 'id'> = {},
+    /** The card's other locations, for the dialog that may have to ask about this one. */
+    rest: readonly DiscoveryResult[] = [],
   ): Promise<AcceptOutcome> {
+    /** Only this result's own dialog: another card may be asking meanwhile. */
+    const closeDialog = () => setDuplicate((d) => (d?.result.id === r.id ? null : d));
     try {
       const accepted = await acceptM.mutateAsync({ id: r.id, ...extra });
-      setDuplicate(null);
+      closeDialog();
       return { kind: 'accepted', opportunityId: accepted.opportunityId };
     } catch (err) {
       const decided = decidedOf(err);
       if (decided !== null) {
-        setDuplicate(null);
+        closeDialog();
         return { kind: 'decided', decided };
       }
-      if (err instanceof ApiError && err.status === 404 && extra.attachTo !== undefined) {
-        setDuplicate(null);
+      if (err instanceof ApiError && err.code === 'opportunity_not_found') {
+        closeDialog();
         return { kind: 'gone' };
       }
       const existingId = err instanceof ApiError ? err.details.existingId : undefined;
@@ -402,7 +401,7 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
         extra.attachTo === undefined &&
         extra.force !== true
       ) {
-        setDuplicate({ result: r, existingId });
+        setDuplicate({ result: r, existingId, rest });
         return { kind: 'asked' };
       }
       toast({ title: 'Not accepted', description: errorMessage(err), variant: 'destructive' });
@@ -420,7 +419,6 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
     rest: readonly DiscoveryResult[],
     already = false,
   ) {
-    setGroupContinuation(null);
     if (opportunityId === null) {
       // Never actually null after an accept, but never assumed: report what happened rather
       // than silently dropping the rest of the group (design principle 6).
@@ -480,7 +478,6 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       await finishGroupContinuation(primary, decided.existingId, rest, true);
       return;
     }
-    setGroupContinuation(null);
     sayDecided(
       'accept',
       decided,
@@ -496,8 +493,7 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
     const [primary, ...rest] = g.members;
     if (primary === undefined) return;
     selectNeighbourGroup(rowKey(g));
-    if (rest.length > 0) setGroupContinuation(rest);
-    const outcome = await acceptOne(primary);
+    const outcome = await acceptOne(primary, {}, rest);
     if (outcome.kind === 'decided') {
       await primaryDecided(primary, outcome.decided, rest);
       return;
@@ -515,11 +511,10 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
   async function resolveDuplicate(s: DuplicateState, extra: Omit<AcceptVars, 'id'>) {
     const outcome = await acceptOne(s.result, extra);
     if (outcome.kind === 'decided') {
-      await primaryDecided(s.result, outcome.decided, groupContinuation ?? []);
+      await primaryDecided(s.result, outcome.decided, s.rest);
       return;
     }
     if (outcome.kind === 'gone') {
-      setGroupContinuation(null);
       toast({
         title: 'Not attached: that opportunity has since been deleted.',
         description: `${resultLabel(s.result)} is still here to review.`,
@@ -527,8 +522,8 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       return;
     }
     if (outcome.kind !== 'accepted') return;
-    if (groupContinuation !== null) {
-      await finishGroupContinuation(s.result, outcome.opportunityId, groupContinuation);
+    if (s.rest.length > 0) {
+      await finishGroupContinuation(s.result, outcome.opportunityId, s.rest);
       return;
     }
     toast({
@@ -922,10 +917,7 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
       <DuplicateAcceptDialog
         state={duplicate}
         busy={acceptM.isPending}
-        onCancel={() => {
-          setDuplicate(null);
-          setGroupContinuation(null);
-        }}
+        onCancel={() => setDuplicate(null)}
         onAttach={(s) => void resolveDuplicate(s, { attachTo: s.existingId })}
         onForce={(s) => void resolveDuplicate(s, { force: true })}
       />

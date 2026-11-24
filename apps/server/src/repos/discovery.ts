@@ -653,7 +653,10 @@ export async function findChainTarget(
     .select({
       opportunityId: discoveryResults.opportunityId,
       dedupeKey: discoveryResults.dedupeKey,
-      posting: discoveryResults.posting,
+      // Only what cardKey compares, not the posting: a description can be 50,000 characters, for
+      // each row found, under the user's lock (sec on #976).
+      company: jsonText(discoveryResults.posting, 'company'),
+      title: jsonText(discoveryResults.posting, 'title'),
     })
     .from(discoveryResults)
     .innerJoin(opportunities, eq(opportunities.id, discoveryResults.opportunityId))
@@ -666,10 +669,13 @@ export async function findChainTarget(
     )
     .orderBy(asc(opportunities.createdAt))
     .all();
-  const row = rows.find((r) => {
-    const p = r.posting as NormalizedPosting;
-    return r.dedupeKey !== null && cardKey(r.dedupeKey, p.company, p.title) === card;
-  });
+  const row = rows.find(
+    ({ dedupeKey, company, title }) =>
+      dedupeKey !== null &&
+      company !== null &&
+      title !== null &&
+      cardKey(dedupeKey, company, title) === card,
+  );
   return row?.opportunityId ?? undefined;
 }
 
