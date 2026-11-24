@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   cardKey,
+  sameTitle,
   companyMatchKey,
   dedupeGroupKey,
   dedupeKey,
@@ -258,5 +259,35 @@ describe('titleMatchKey and matchText', () => {
     expect(matchText('Your application: Senior Example Engineer at Example Corp.')).toContain(
       titleMatchKey('Sr. Example Engineer'),
     );
+  });
+});
+
+describe('sameTitle', () => {
+  it.each([
+    ['Senior Engineer', 'senior  engineer'],
+    ['Sr. Engineer', 'Senior Engineer'],
+    ['Engineer, Jr', 'Engineer Junior'],
+    ['Développeur', 'Developpeur'],
+    ['エンジニア', ' エンジニア '],
+  ])('%s is %s', (a, b) => {
+    expect(sameTitle(a, b)).toBe(true);
+  });
+
+  it.each([
+    ['Senior Engineer', 'Principal Engineer'],
+    ['Engineer', 'Senior Engineer'],
+    ['Lead Engineer', 'Engineer, Lead'],
+    ['プロダクトマネージャー', 'エンジニア'],
+  ])('%s is not %s', (a, b) => {
+    expect(sameTitle(a, b)).toBe(false);
+  });
+
+  it('agrees with cardKey on every pair', () => {
+    const titles = ['Engineer', 'Sr Engineer', 'Senior Engineer', 'Engineer, Staff', 'エンジニア'];
+    for (const a of titles) {
+      for (const b of titles) {
+        expect(sameTitle(a, b)).toBe(cardKey('k', 'c', a) === cardKey('k', 'c', b));
+      }
+    }
   });
 });

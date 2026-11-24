@@ -281,7 +281,9 @@ On any result:
 
 - **Accept** adds it to your pipeline in New. If it matches an opportunity you already
   track, you are asked to attach it there instead, or accept it anyway (see
-  [Pipeline](pipeline.md#possible-duplicates)).
+  [Pipeline](pipeline.md#possible-duplicates)). If it is another location of a role in your
+  pipeline, it is linked to that opportunity (see
+  [A job already in your pipeline](#a-job-already-in-your-pipeline)).
 - **Dismiss** asks for a reason (Seniority, Compensation, Location, Industry, Company,
   Stale, Other) and an optional note.
 - A role posted in several locations is one card, with **Accept all** and **Dismiss all**: accepting
@@ -368,10 +370,39 @@ sweep, without you doing anything. You can edit the list, and a list you save or
 you left it, even if a call was already running. A new name or title family replaces it with a
 fresh one, unless you edit the list in the same save.
 
+## A job already in your pipeline
+
+A posting that arrives for a job you already track makes no card, whatever its source (a board, a
+job alert, an MCP source, or **Capture posting**):
+
+- **The same company and the same title, at another location:** the posting is linked to the
+  opportunity, at any stage but Dismissed and Closed. Its timeline gets an entry, **Also posted
+  via ...**, with the location and the link. Its stage, description and everything else stay as
+  they are, and nothing is ranked. If several opportunities fit, it goes to the oldest.
+- **The very posting you captured** with the [browser extension](browser-extension.md) (the same
+  job id on the same site), even if its title or location has changed: nothing is added. This holds
+  for a Closed opportunity too.
+
+You get a card when the opportunity is Dismissed, when it is Closed and the posting is not the very
+one you captured, and for another level of the same title ("Principal" beside "Senior"), also at the
+very same place, another title or another company. Earlier versions dropped another level at the same
+place as a duplicate, so a board's next run can bring some of those. Accepting one asks, as it matches
+by everything but its level: **Create anyway** makes it. A company you denied is dismissed as always.
+
+A linked posting is listed under **Decided**, in the **Accepted** tab, as **Linked to an opportunity
+already there**, with **View opportunity**. The source's run history counts it as `linked`. It says
+nothing about what you accept, so it does not count in the pre-filter's figure or in company
+suggestions.
+
+A card that was in the queue before its job was in your pipeline stays there. **Accept** then links
+it to the opportunity instead of making a second one. **Create anyway** still makes a new one, where
+it is offered.
+
 ## Decided results
 
 Accepting or dismissing a result keeps a later sighting of the same job (same company, title
-and location, however it resurfaces) from showing up in the queue again, rather than treating
+and location, however it resurfaces; another level of the title, "Principal" beside "Senior", is
+another job) from showing up in the queue again, rather than treating
 it as new each time. **Decided**, with its own **Dismissed** and **Accepted** tabs, is where
 those settled results live.
 
@@ -393,6 +424,8 @@ company, title, location and description, and adds the result to the queue. If e
 cannot find the essentials, it tells you to create the opportunity by hand instead. It shares
 one limit with the browser extension, 60 captures per 15 minutes for your account; when that is
 reached, the dialog says when you can capture again.
+If the job is already in your pipeline at another location, the dialog says the posting was linked
+to that opportunity, with **View opportunity**.
 If another capture of yours is still being saved, the dialog says so and to wait a few
 seconds and press **Capture** again; that is not a limit.
 

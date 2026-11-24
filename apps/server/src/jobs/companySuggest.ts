@@ -19,7 +19,7 @@
 import { enqueue } from '../lib/jobQueue';
 import { AiUnavailableError, renderPrompt, runStructured, SuggestOutputSchema } from '@opportun/ai';
 import { isNaicsCode, naicsTitle, newId, type NaicsTier } from '@opportun/core';
-import { and, desc, eq, inArray, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { withTransaction, type Db } from '../db/client';
 import { companies, discoveryResults, networkContacts, users } from '../db/schema';
@@ -131,6 +131,8 @@ export async function pipelineText(db: Db, ctx: UserCtx): Promise<string> {
       and(
         eq(discoveryResults.userId, ctx.userId),
         inArray(discoveryResults.disposition, ['accepted', 'dismissed']),
+        // Linked by ingest (#971): the user decided nothing.
+        or(isNull(discoveryResults.rankSkipReason), ne(discoveryResults.rankSkipReason, 'linked')),
       ),
     )
     .orderBy(desc(discoveryResults.updatedAt), discoveryResults.id)

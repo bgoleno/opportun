@@ -894,6 +894,12 @@ describe('levels of one title are different jobs (#968)', () => {
       const { app, a } = await boot();
       const old = await at(app, a, 'Senior Engineer', 'Austin, TX');
       const first = (await accept(a, old)).json();
+      // Found by its result alone: its own title is another's (#971).
+      await app.db
+        .update(opportunities)
+        .set({ title: 'Renamed' })
+        .where(eq(opportunities.id, first.opportunityId))
+        .run();
       const posting: Record<string, unknown> = { ...POSTING, title: 'Senior Engineer' };
       delete posting[missing];
       await app.db

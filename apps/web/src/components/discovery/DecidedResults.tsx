@@ -164,6 +164,12 @@ function ResultList({ tab, label, empty }: { tab: DecidedTab; label: string; emp
   );
 }
 
+/** Who decided it: a linked result is nobody's accept (#971). */
+function decidedWord(r: DiscoveryResult): string {
+  if (r.disposition === 'dismissed') return 'Dismissed';
+  return r.rankSkipReason === 'linked' ? 'Linked' : 'Accepted';
+}
+
 function DecidedRow({
   result: r,
   selected,
@@ -203,13 +209,16 @@ function DecidedRow({
           <span className="min-w-0 truncate text-sm text-muted-foreground">{p.location}</span>
         ) : null}
         <span className="ml-auto text-xs text-muted-foreground">
-          {r.disposition === 'dismissed' ? 'Dismissed' : 'Accepted'} {formatDateTime(r.updatedAt)}
+          {decidedWord(r)} {formatDateTime(r.updatedAt)}
         </span>
       </div>
       <div className="grid gap-0.5">
         <span className="font-medium [overflow-wrap:anywhere]">{p.title}</span>
         <span className="text-sm [overflow-wrap:anywhere] text-muted-foreground">{p.company}</span>
       </div>
+      {r.rankSkipReason === 'linked' ? (
+        <p className="text-xs text-muted-foreground">Linked to an opportunity already there</p>
+      ) : null}
       {r.dismissReason !== null ? (
         <p className="text-xs [overflow-wrap:anywhere] text-muted-foreground">
           Dismissed: {dismissReasonLabel(r.dismissReason as DismissReason)}
