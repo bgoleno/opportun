@@ -458,7 +458,8 @@ The description is stored as text, so it survives the posting being taken down. 
 you wrote or edited yourself is not overwritten unless you agree to it; one Opportun wrote, such as
 the page text from a browser capture, is replaced by the posting it was standing in for. A description
 you save while Opportun is looking the posting up, attaching it, or re-deriving from the captured
-page is kept, and you are told.
+page is kept, and you are told. So is one you saved in another tab, when the page that asks to replace
+your description does not show it yet.
 
 An opportunity captured with the [browser extension](browser-extension.md) runs this search on
 its own, in the background. When it cannot settle the result it changes nothing and says so:

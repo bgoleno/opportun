@@ -428,9 +428,9 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
     }
   }
 
-  async function runRederive() {
+  async function runRederive(asked: string) {
     try {
-      const result = await rederive.mutateAsync(true);
+      const result = await rederive.mutateAsync({ force: true, replaceDescription: asked });
       const title =
         result.outcome === 'no_description_found'
           ? 'Nothing to re-derive'
@@ -518,7 +518,7 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
           <RederiveFromCaptureAction
             opp={opp}
             busy={rederive.isPending}
-            onRederive={() => void runRederive()}
+            onRederive={(asked) => void runRederive(asked)}
           />
           {editing === 'description' ? (
             <DescriptionEditor opp={opp} onDone={() => setEditing(null)} />

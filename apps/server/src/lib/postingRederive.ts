@@ -74,12 +74,21 @@ export type RederiveOutcome =
  * protects that same decision from an automatic background run, and a manual re-derive deserves
  * no less care, even though it is a person pressing a button rather than a job running on its
  * own schedule.
+ *
+ * For their own description, `force` is not enough (#1010): `agreed`, its fingerprint, says that
+ * this is the text they were asked about. A page can ask with another one on it, or with none.
  */
-function blockingReason(opp: OpportunityView): 'already_described' | 'user_confirmed' | null {
-  if (opp.postingState === 'confirmed' && opp.postingStateDetail === 'user_confirmed') {
+function blockingReason(
+  opp: OpportunityView,
+  force: boolean,
+  agreed: boolean,
+): 'already_described' | 'user_confirmed' | null {
+  if (!force && opp.postingState === 'confirmed' && opp.postingStateDetail === 'user_confirmed') {
     return 'user_confirmed';
   }
-  if (!isSystemWritten(opp.descriptionMd, opp.descriptionFingerprint)) return 'already_described';
+  if (!(force && agreed) && !isSystemWritten(opp.descriptionMd, opp.descriptionFingerprint)) {
+    return 'already_described';
+  }
   return null;
 }
 
@@ -99,11 +108,30 @@ export async function rederivePosting(
   ctx: UserCtx,
   opportunityId: string,
   sctx: SourceContext,
-  opts: { force?: boolean; board?: BoardLookup } = {},
+  opts: {
+    force?: boolean;
+    /** The fingerprint of the description the user was asked about ('' for none): see above. */
+    replaceAgreed?: string;
+    board?: BoardLookup;
+  } = {},
 ): Promise<RederiveOutcome> {
   const opp = await getOpportunity(db, ctx, opportunityId);
-  const reason = blockingReason(opp);
-  if (reason !== null && opts.force !== true) {
+  // Whoever wrote what is there now: it is not what was asked about, and the page shows something
+  // else. No fingerprint is an older page, or no question: a description of the user's is kept below.
+  if (
+    opts.replaceAgreed !== undefined &&
+    opts.replaceAgreed !== descriptionFingerprint(opp.descriptionMd ?? '')
+  ) {
+    throw new HttpError(
+      409,
+      'description_changed',
+      "This opportunity's description changed since this page showed it, so nothing was changed. Check the description, then try again.",
+      undefined,
+      { userFacing: true },
+    );
+  }
+  const reason = blockingReason(opp, opts.force === true, opts.replaceAgreed !== undefined);
+  if (reason !== null) {
     const message =
       reason === 'user_confirmed'
         ? 'You confirmed this posting yourself. Re-deriving would replace that decision.'
