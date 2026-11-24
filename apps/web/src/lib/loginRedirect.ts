@@ -4,6 +4,7 @@
 // redirects to. Nothing but this file reads it, and it is gone to as signInTarget gives it, by the router
 // alone: whoever goes there has only what has been checked.
 import type { AnyRouter } from '@tanstack/react-router';
+import { dropReason } from './oauth';
 
 /** Of an address, as long as a page of the app is ever asked for with. */
 const TARGET_MAX = 2000;
@@ -145,13 +146,11 @@ export function keepForProvider(router: AnyRouter): void {
  * brought it back without the page that was asked for, that is put there again.
  */
 export function settleLoginAddress(router: AnyRouter): void {
-  const { oauth, ...rest } = searchOf(router);
-  const kept = rest.redirect === undefined ? Kept.read() : undefined;
-  if (oauth === undefined && kept === undefined) return;
-  void router.navigate({
-    to: '/login',
-    search: kept === undefined ? rest : { ...rest, redirect: kept },
-    replace: true,
+  const kept = searchOf(router).redirect === undefined ? Kept.read() : undefined;
+  // Its hash is a sign-in's second step, which has been taken.
+  dropReason(router, {
+    ...(kept === undefined ? {} : { add: { redirect: kept } }),
+    keepHash: false,
   });
 }
 

@@ -124,6 +124,11 @@ test('sign in with GitHub: admin configures, member links, signs in, unlinks (FR
   await confirmLink.getByRole('button', { name: 'Continue' }).click();
   await page.waitForURL((url) => url.pathname === '/settings/security');
   await expect(page.getByText('Account linked. You can now sign in with it.')).toBeVisible();
+  // Said once: it is out of the address, and a reload has nothing to say (#1021).
+  await expect(page).toHaveURL(/\/settings\/security$/);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Unlink GitHub' })).toBeVisible();
+  await expect(page.getByText('Account linked. You can now sign in with it.')).toBeHidden();
   await expect(page.getByRole('button', { name: 'Unlink GitHub' })).toBeVisible();
 
   await page.getByRole('button', { name: /^Account:/ }).click();
