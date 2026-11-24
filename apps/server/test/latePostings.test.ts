@@ -451,19 +451,20 @@ describe('a captured posting found by its timeline entry alone', () => {
   });
 });
 
+/** A pending card that arrived before anything here could link it. */
+async function card(app: FastifyInstance, c: TestClient, posting: NormalizedPosting) {
+  const source = await ensureChannelSource(app.db, ctxOf(c), 'alert_email');
+  const run = await createRun(app.db, ctxOf(c), { sourceId: source.id });
+  const result = await insertResult(app.db, ctxOf(c), {
+    runId: run.id,
+    posting,
+    dedupeKey: dedupeKey(posting.company, posting.title, posting.location),
+    resolution: 'needs_capture',
+  });
+  return result.id;
+}
+
 describe('a card already there', () => {
-  /** A pending card that arrived before anything here could link it. */
-  async function card(app: FastifyInstance, c: TestClient, posting: NormalizedPosting) {
-    const source = await ensureChannelSource(app.db, ctxOf(c), 'alert_email');
-    const run = await createRun(app.db, ctxOf(c), { sourceId: source.id });
-    const result = await insertResult(app.db, ctxOf(c), {
-      runId: run.id,
-      posting,
-      dedupeKey: dedupeKey(posting.company, posting.title, posting.location),
-      resolution: 'needs_capture',
-    });
-    return result.id;
-  }
   const accept = (c: TestClient, id: string, payload: Record<string, unknown> = {}) =>
     c.request({ method: 'POST', url: `/api/v1/discovery/results/${id}/accept`, payload });
 
@@ -629,6 +630,26 @@ describe('another level of the title at the very same place', () => {
     expect((await arrive(app, a, [same], 'mcp')).stats).toMatchObject({ duplicates: 1 });
   });
 
+  it('beside a decided result stored without a title: a duplicate, as today', async () => {
+    const { app, a } = await boot();
+    const { inserted } = await arrive(app, a, [alertOf(LINKEDIN, HERE)]);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${inserted[0]!.id}/dismiss`,
+      payload: { reason: 'stale' },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const posting: Record<string, unknown> = { company: JOB.company };
+    await app.db
+      .update(discoveryResults)
+      .set({ posting: posting as NormalizedPosting })
+      .where(eq(discoveryResults.id, inserted[0]!.id))
+      .run();
+    expect((await arrive(app, a, [principal()], 'ats_lever')).stats).toMatchObject({
+      duplicates: 1,
+    });
+  });
+
   it('beside a pending card of the same source: another card', async () => {
     const { app, a } = await boot();
     await arrive(app, a, [alertOf(LINKEDIN, HERE)]);
@@ -714,6 +735,139 @@ describe('another level of the title at the very same place', () => {
     const res = await accept(a, card!.id);
     expect([res.statusCode, res.json().opportunityId]).toEqual([200, boston]);
     expect(await opportunitiesOf(app, a)).toHaveLength(2);
+  });
+});
+
+// Criterion 6 (tl on https://github.com/bgoleno/opportun/pull/980): as Accept does, with the same end.
+describe.each(SITES)('a card on %s captured, another level tracked in its city', (...site) => {
+  const SENIOR = `Senior ${JOB.title}`;
+  const make = async (c: TestClient, title: string, location: string) => {
+    const res = await c.request({
+      method: 'POST',
+      url: '/api/v1/opportunities',
+      payload: { companyName: JOB.company, title, location, sourceKind: 'manual' },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+    return res.json<{ id: string }>().id;
+  };
+  /** The open role in Boston: accepted from a result, or made by hand. */
+  const IN_BOSTON = {
+    async accepted(app: FastifyInstance, c: TestClient): Promise<string> {
+      const id = await card(app, c, another(site, THERE, { title: SENIOR }));
+      const res = await c.request({
+        method: 'POST',
+        url: `/api/v1/discovery/results/${id}/accept`,
+        payload: {},
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return res.json<{ opportunityId: string }>().opportunityId;
+    },
+    'made by hand': (_app: FastifyInstance, c: TestClient) => make(c, SENIOR, THERE),
+  };
+
+  it.each(['accepted', 'made by hand'] as const)(
+    'its own level open in another city, %s: goes to that one',
+    async (how) => {
+      const { app, a } = await boot();
+      const principal = await make(a, `Principal ${JOB.title}`, HERE);
+      const boston = await IN_BOSTON[how](app, a);
+      const cardId = await card(app, a, alertOf(site, HERE, { title: SENIOR }));
+      const captured = await capture(app, a, site, HERE, { title: SENIOR });
+      expect([captured.opportunityId, captured.resultId]).toEqual([boston, cardId]);
+      expect((await opportunitiesOf(app, a)).map((o) => o.id).sort()).toEqual(
+        [principal, boston].sort(),
+      );
+      expect(await pendingOf(app, a)).toEqual([]);
+    },
+  );
+
+  it('its own level closed in the other city: its own, kept apart from the other level', async () => {
+    const { app, a } = await boot();
+    const principal = await make(a, `Principal ${JOB.title}`, HERE);
+    const boston = await IN_BOSTON.accepted(app, a);
+    await move(app, boston, 'closed');
+    await card(app, a, alertOf(site, HERE, { title: SENIOR }));
+    const captured = await capture(app, a, site, HERE, { title: SENIOR });
+    expect([principal, boston]).not.toContain(captured.opportunityId);
+    expect(await opportunitiesOf(app, a)).toHaveLength(3);
+  });
+
+  it('its own level attached by hand to the other level’s: that one refuses itself', async () => {
+    const { app, a } = await boot();
+    const principal = await make(a, `Principal ${JOB.title}`, HERE);
+    const boston = await card(app, a, another(site, THERE, { title: SENIOR }));
+    const attached = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${boston}/accept`,
+      payload: { attachTo: principal },
+    });
+    expect(attached.statusCode, attached.body).toBe(200);
+    await card(app, a, alertOf(site, HERE, { title: SENIOR }));
+    const captured = await capture(app, a, site, HERE, { title: SENIOR });
+    expect(captured.opportunityId).not.toBe(principal);
+  });
+
+  // The kept-apart holder is what #73 says: another posting on the site, under the card's own key.
+  it('kept apart as another posting: not chained, as before', async () => {
+    const { app, a } = await boot();
+    const boston = await IN_BOSTON['made by hand'](app, a);
+    const holder = (await capture(app, a, site, HERE, { title: SENIOR, location: HERE }))
+      .opportunityId;
+    expect(holder).not.toBe(boston);
+    await card(app, a, another(site, HERE, { title: SENIOR }));
+    const [siteId, , , otherId, otherUrl] = site;
+    const captured = await capture(app, a, [siteId, otherId, otherUrl, '', ''], HERE, {
+      title: SENIOR,
+    });
+    expect([boston, holder]).not.toContain(captured.opportunityId);
+    expect(await opportunitiesOf(app, a)).toHaveLength(3);
+  });
+});
+
+// tl on #985: a lead of another location says nothing of who holds this one's key.
+describe.each(SITES)('a capture on %s of a role with another location on it', (...site) => {
+  it.each(['linked', 'accepted'] as const)('%s: goes to the role, no second one', async (how) => {
+    const { app, a } = await boot();
+    const id = await ORIGINS['made by hand'](app, a);
+    if (how === 'linked') {
+      expect((await arrive(app, a, [another(site, THERE)])).stats.linked).toBe(1);
+    } else {
+      const cardId = await card(app, a, another(site, THERE));
+      const res = await a.request({
+        method: 'POST',
+        url: `/api/v1/discovery/results/${cardId}/accept`,
+        payload: {},
+      });
+      expect(res.json<{ opportunityId: string }>().opportunityId).toBe(id);
+    }
+    const captured = await capture(app, a, site, HERE);
+    expect(captured.opportunityId).toBe(id);
+    expect(await opportunitiesOf(app, a)).toHaveLength(1);
+  });
+
+  it.each([
+    ['without a location', null, 'own'],
+    ['under this very key', HERE, 'own'],
+    ['with its key released', THERE, 'released'],
+  ] as const)('a lead %s still keeps it apart (#73)', async (_what, location, key) => {
+    const { app, a } = await boot();
+    const id = await ORIGINS['made by hand'](app, a);
+    const cardId = await card(app, a, another(site, location));
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${cardId}/accept`,
+      payload: { attachTo: id },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    if (key === 'released') {
+      await app.db
+        .update(discoveryResults)
+        .set({ dedupeKey: null })
+        .where(eq(discoveryResults.id, cardId))
+        .run();
+    }
+    const captured = await capture(app, a, site, HERE);
+    expect(captured.opportunityId).not.toBe(id);
   });
 });
 
