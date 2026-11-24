@@ -44,6 +44,8 @@ export function SetPasswordCard(props: {
   email?: string;
   /** ?oauth=... on the Security page: setpw_ready after a successful confirmation. */
   flash?: string | undefined;
+  /** The confirmation has been used, or has run out. */
+  onSpent?: () => void;
   /** Leaves for the provider (tests replace it; jsdom cannot navigate). */
   navigate?: (url: string) => void;
 }) {
@@ -92,6 +94,7 @@ export function SetPasswordCard(props: {
     setFormError(null);
     try {
       await api('/auth/password', { method: 'POST', body: { next } });
+      props.onSpent?.();
       form.reset();
       void qc.invalidateQueries({ queryKey: twoFactorQuery.queryKey });
       void qc.invalidateQueries({ queryKey: linkedAccountsQuery.queryKey });
@@ -102,6 +105,7 @@ export function SetPasswordCard(props: {
       });
     } catch (err) {
       if (err instanceof ApiError && err.code === 'reauth_required') {
+        props.onSpent?.();
         form.reset();
         setReady(false);
         setNotice(EXPIRED);
