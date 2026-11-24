@@ -8,6 +8,7 @@ import { greenhouseJidOf } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { postingErrorMessage } from '@/components/opportunity/AlreadyTracked';
 import {
   CHECK_ENDED,
   isPostingSearching,
@@ -35,7 +36,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { toast } from '@/components/ui/toast';
-import { ApiError, errorMessage } from '@/lib/api';
+import { ApiError } from '@/lib/api';
 import { formatDate, formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import {
   appliedAttempt,
@@ -388,7 +389,7 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                   </p>
                 ) : find.isError && !refusalOver ? (
                   <p role="alert" className="text-sm text-destructive">
-                    {errorMessage(find.error)}
+                    {postingErrorMessage(find.error)}
                   </p>
                 ) : null}
               </>

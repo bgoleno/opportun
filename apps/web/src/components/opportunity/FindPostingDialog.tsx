@@ -6,7 +6,7 @@
 // as generic as "Staff Product Manager" can rank the wrong req first and bury the right one.
 import { possessive } from '@opportun/core';
 import { AlertTriangle, ExternalLink } from 'lucide-react';
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent, type ReactNode } from 'react';
 import { FormError } from '@/components/FormError';
 import { FormField } from '@/components/FormField';
 import { Button } from '@/components/ui/button';
@@ -21,8 +21,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/components/ui/toast';
-import { errorMessage } from '@/lib/api';
 import { safeHttpUrl, type OpportunityView } from '@/lib/opportunities';
+import { postingErrorMessage } from './AlreadyTracked';
 import {
   useAttachPosting,
   type AttachPostingVars,
@@ -121,7 +121,7 @@ export function FindPostingDialog({
   const [url, setUrl] = useState('');
   const [text, setText] = useState('');
   const [fieldError, setFieldError] = useState<string | undefined>(undefined);
-  const [failure, setFailure] = useState<string | null>(null);
+  const [failure, setFailure] = useState<ReactNode>(null);
 
   const confident = result.candidates ?? [];
   const all = result.board ?? result.candidates ?? [];
@@ -140,7 +140,7 @@ export function FindPostingDialog({
       toast({ title: 'Posting attached', description: title, variant: 'success' });
       onClose();
     } catch (err) {
-      setFailure(errorMessage(err));
+      setFailure(postingErrorMessage(err));
     }
   }
 

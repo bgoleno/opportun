@@ -1,6 +1,6 @@
 import { SharedDemoNotice } from '@/components/SharedDemoNotice';
 import { Download, ExternalLink, Paperclip, Trash2 } from 'lucide-react';
-import { useRef, useState, type ChangeEvent } from 'react';
+import { useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { useOpportunitySubmissions } from '@/components/apply/api';
 import { MainWithRail } from '@/components/MainWithRail';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -37,6 +37,7 @@ import {
   useUploadAttachment,
   type FindPostingResult,
 } from './api';
+import { postingErrorMessage } from './AlreadyTracked';
 import { FindPostingDialog } from './FindPostingDialog';
 import {
   PostingConfirmedStatus,
@@ -304,7 +305,9 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   const checksEnded = useChecksEnded(opp.postingState);
   const checkOver = useCheckOver(opp.id);
   /** `untilCheck`: the refusal for a running check, true only until that check ends (#870). */
-  const [findError, setFindError] = useState<{ message: string; untilCheck?: number } | null>(null);
+  const [findError, setFindError] = useState<{ message: ReactNode; untilCheck?: number } | null>(
+    null,
+  );
   /**
    * The board could not be read (#835): said as such, with a retry, not as "no match". Kept as
    * `checksEnded` when Find posting was pressed: a check that ends since has its own result to
@@ -383,7 +386,7 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         return;
       }
       setFindError({
-        message: errorMessage(err),
+        message: postingErrorMessage(err),
         ...(isPostingSearching(err) ? { untilCheck: checksEnded } : {}),
       });
     }
