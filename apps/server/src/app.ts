@@ -342,7 +342,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   await app.register(securityPlugin, { hsts: cfg.baseUrl.startsWith('https:') });
 
   const dbHandle = await connectDatabase(cfg, {
-    onIdleError: (err) => app.log.error({ err }, 'postgres idle connection error'),
+    onConnectionEnd: (err) => app.log.error({ err }, 'postgres connection ended'),
   });
   if (dbHandle.dialect === 'postgres') {
     // The warning's own text names the collation; the fixed message points at the fix.

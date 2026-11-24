@@ -5,10 +5,11 @@
 // expression) into the next pending job for that kind.
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { USER_CONTEXT_KEY } from '@opportun/ai';
 import { ROOT_CONTEXT } from '@opentelemetry/api';
-import { and, eq, gte, sql } from 'drizzle-orm';
-import { isUniqueViolation, type Db } from '../db/client';
+import { and, eq, gte, sql, type SQL } from 'drizzle-orm';
+import { isStatementError, isUniqueViolation, type Db } from '../db/client';
 import { claimNextJob, type ClaimedJob } from '../db/dialect';
 import { SHARED_DEMO_IDS } from '../lib/demoAccounts';
 import { runWithHoldStop } from '../lib/demoResetGate';
@@ -23,6 +24,7 @@ import {
   scheduleDedupeKey,
 } from '../lib/jobQueue';
 import { keyedFetch } from '../lib/safeFetch';
+import { truncateText } from '../lib/safeText';
 import { contextFromTraceparent, isCollecting, obs } from '../obs';
 import { OTHER } from '../obs/catalog';
 import { errorType } from '../obs/outbound';
@@ -46,6 +48,15 @@ const MAX_JITTER_MS = 10_000;
 const MAX_DELAY_MS = 3_600_000;
 const MAX_ERROR_LENGTH = 2000;
 const DEFAULT_INTERVAL_MS = 1000;
+/** How long a write that puts a job's row right is tried again, and how often (writeRow). */
+export interface RowRetry {
+  /** Before the second try; then doubled, up to maxMs. */
+  firstMs: number;
+  maxMs: number;
+  /** In all. An error that is not an outage must not hold a worker for ever. */
+  limitMs: number;
+}
+const ROW_RETRY: RowRetry = { firstMs: 1000, maxMs: 30_000, limitMs: 300_000 };
 /** Upper bound on jobs one drain processes, so a runaway enqueue loop cannot spin forever. */
 const MAX_DRAIN = 10_000;
 /** Jobs run in parallel; OPPORTUN_JOB_WORKERS overrides, 1 restores serial behaviour. */
@@ -105,6 +116,13 @@ export interface RunOptions {
   stopping?: () => boolean;
   /** Failures outside a handler (e.g. the database went away). */
   onError?: (err: unknown) => void;
+  /**
+   * startRunner's: a write that puts a job's row right is tried again (writeRow) until this says to
+   * give up. Without it, one that fails throws at once.
+   */
+  giveUp?: AbortSignal;
+  /** ROW_RETRY unless a test sets another. */
+  rowRetry?: RowRetry;
 }
 
 const defaultWorkerId = `${hostname()}:${process.pid}:${randomBytes(4).toString('hex')}`;
@@ -154,6 +172,7 @@ async function finish(
   now: number,
   error?: string,
   payload?: unknown,
+  own?: SQL,
 ): Promise<void> {
   await db
     .update(jobs)
@@ -168,11 +187,57 @@ async function finish(
         ? status === 'done'
           ? { lastError: null }
           : {}
-        : { lastError: error.slice(0, MAX_ERROR_LENGTH) }),
+        : { lastError: truncateText(error, MAX_ERROR_LENGTH) }),
       ...(payload === undefined ? {} : { payload }),
     })
-    .where(eq(jobs.id, id))
+    .where(and(eq(jobs.id, id), own))
     .run();
+}
+
+/**
+ * Writes what a claimed job came to, and tries again when that fails, until opts.giveUp or the limit:
+ * then it throws, and the row is the next start's to recover. A write refused for what it says is not
+ * tried again: it would be refused each time, and hold the worker. In a restart of Postgres the write that
+ * ends the job the restart caught fails too, and the row stayed `running`: never run again, its dedupe
+ * key held (tl on https://github.com/bgoleno/opportun/issues/963). The worker waits here meanwhile.
+ *
+ * A write whose answer was lost may have been made, and the row since claimed again, by this worker
+ * too. So from the second try `write` gets `own`, which only this claim's run matches, and a row that
+ * does not match it any more is left alone: it has been written.
+ */
+async function writeRow(
+  job: ClaimedJob,
+  opts: RunOptions,
+  write: (own?: SQL) => Promise<void>,
+): Promise<void> {
+  const { firstMs, maxMs, limitMs } = opts.rowRetry ?? ROW_RETRY;
+  const { giveUp } = opts;
+  // Not the clock a test pins.
+  const until = performance.now() + limitMs;
+  let own: SQL | undefined;
+  for (let delay = firstMs; ; delay = Math.min(delay * 2, maxMs)) {
+    try {
+      await write(own);
+      return;
+    } catch (err) {
+      if (giveUp === undefined || giveUp.aborted || isStatementError(err)) throw err;
+      if (own === undefined) {
+        opts.services?.log?.warn(
+          { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind, err },
+          "a job's row could not be written; trying again",
+        );
+      }
+      own = and(
+        eq(jobs.status, 'running'),
+        eq(jobs.lockedBy, opts.workerId ?? defaultWorkerId),
+        eq(jobs.lockedAt, job.lockedAt),
+        eq(jobs.attempts, job.attempts),
+      );
+      if (performance.now() + delay > until) throw err;
+      const waited = await sleep(delay, true, { signal: giveUp, ref: false }).catch(() => false);
+      if (!waited) throw err;
+    }
+  }
 }
 
 /**
@@ -277,7 +342,7 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
       { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
       'no handler registered for this job kind',
     );
-    await finish(db, job.id, 'dead', now(), reason);
+    await writeRow(job, opts, (own) => finish(db, job.id, 'dead', now(), reason, undefined, own));
     return { outcome: 'dead', errorType: 'no_handler' };
   }
   // Decoded by the claim; undefined when the stored payload is not JSON.
@@ -290,13 +355,9 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
     );
     // Stripped like any finished job's (#175): a payload that does not validate may still
     // carry a body.
-    await finish(
-      db,
-      job.id,
-      'dead',
-      now(),
-      `invalid payload: ${parsed.error.message}`,
-      withoutTransient(handler, job.payload),
+    const kept = withoutTransient(handler, job.payload);
+    await writeRow(job, opts, (own) =>
+      finish(db, job.id, 'dead', now(), `invalid payload: ${parsed.error.message}`, kept, own),
     );
     return { outcome: 'dead', errorType: 'invalid_payload' };
   }
@@ -348,9 +409,23 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
       })
     : undefined;
   if (hold !== undefined) held.stop = hold.signal;
+  // Past its hold a job's row is the reset's, which may have reseeded the account under the same id:
+  // a write still waiting then would land in it.
+  const ending: RunOptions =
+    hold === undefined || opts.giveUp === undefined
+      ? opts
+      : { ...opts, giveUp: AbortSignal.any([opts.giveUp, hold.signal]) };
   try {
     if (hold !== undefined) {
-      const still = await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, job.id)).get();
+      let still: { id: string } | undefined;
+      try {
+        still = await db.select({ id: jobs.id }).from(jobs).where(eq(jobs.id, job.id)).get();
+      } catch (err) {
+        // It never ran. Not due at once: the worker claims again straight away.
+        const runAt = now() + BASE_DELAY_MS;
+        await writeRow(job, ending, (own) => unclaim(db, job, { runAt, own }));
+        throw err;
+      }
       if (still === undefined) {
         log?.warn(
           { 'opportun.job.id': job.id, 'opportun.job.kind': job.kind },
@@ -359,7 +434,7 @@ async function runJob(db: Db, job: ClaimedJob, opts: RunOptions): Promise<JobOut
         return { outcome: 'discarded' };
       }
     }
-    const run = () => runHandler(db, job, opts, handler, parsed.data, ctx, transient);
+    const run = () => runHandler(db, job, ending, handler, parsed.data, ctx, transient);
     // Its AI calls end on the hold's stop signal, before the bound (#684).
     return await (hold === undefined ? run() : runWithHoldStop(hold.signal, run));
   } finally {
@@ -393,27 +468,32 @@ async function runHandler(
     };
     if (job.attempts >= job.maxAttempts) {
       log?.error(fields, 'job exhausted its retries; marked dead');
-      await finish(db, job.id, 'dead', at, errorText(err), transient);
+      await writeRow(job, opts, (own) =>
+        finish(db, job.id, 'dead', at, errorText(err), transient, own),
+      );
       await afterDead(db, job, log);
       return { outcome: 'dead', errorType: errorType(err) };
     } else {
       log?.warn(fields, 'job failed; will retry');
-      await db
-        .update(jobs)
-        .set({
-          status: 'pending',
-          runAt: at + backoffMs(job.attempts, opts.random),
-          lockedBy: null,
-          lockedAt: null,
-          lastError: errorText(err).slice(0, MAX_ERROR_LENGTH),
-          updatedAt: at,
-        })
-        .where(eq(jobs.id, job.id))
-        .run();
+      const runAt = at + backoffMs(job.attempts, opts.random);
+      await writeRow(job, opts, async (own) => {
+        await db
+          .update(jobs)
+          .set({
+            status: 'pending',
+            runAt,
+            lockedBy: null,
+            lockedAt: null,
+            lastError: truncateText(errorText(err), MAX_ERROR_LENGTH),
+            updatedAt: at,
+          })
+          .where(and(eq(jobs.id, job.id), own))
+          .run();
+      });
       return { outcome: 'retry', errorType: errorType(err) };
     }
   }
-  await finish(db, job.id, 'done', now(), undefined, transient);
+  await writeRow(job, opts, (own) => finish(db, job.id, 'done', now(), undefined, transient, own));
   return { outcome: 'done' };
 }
 
@@ -517,7 +597,11 @@ export async function recoverStaleJobs(
 }
 
 /** Puts back a claimed job that never ran: pending, unlocked, and its attempt not counted. */
-async function unclaim(db: Db, job: ClaimedJob): Promise<void> {
+async function unclaim(
+  db: Db,
+  job: ClaimedJob,
+  to: { runAt?: number; own?: SQL | undefined } = {},
+): Promise<void> {
   await db
     .update(jobs)
     .set({
@@ -525,9 +609,10 @@ async function unclaim(db: Db, job: ClaimedJob): Promise<void> {
       lockedBy: null,
       lockedAt: null,
       attempts: job.attempts - 1,
+      ...(to.runAt === undefined ? {} : { runAt: to.runAt }),
       updatedAt: Date.now(),
     })
-    .where(eq(jobs.id, job.id))
+    .where(and(eq(jobs.id, job.id), to.own))
     .run();
 }
 
@@ -556,6 +641,8 @@ export function startRunner(
   const clock = opts.now ?? Date.now;
   const workerId = opts.workerId ?? defaultWorkerId;
   let stopped = false;
+  /** Ends a wait to write a job's row, which stop() does not wait out: the next start recovers it. */
+  const giveUp = new AbortController();
   let timer: NodeJS.Timeout | undefined;
 
   /** How many jobs of each kind are running right now, for the per-kind ceilings. */
@@ -610,7 +697,12 @@ export function startRunner(
           await unclaim(db, job);
           return;
         }
-        await processJob(db, job, { ...opts, stopping: () => stopped });
+        await processJob(db, job, {
+          ...opts,
+          workerId,
+          stopping: () => stopped,
+          giveUp: giveUp.signal,
+        });
         await safeMaterialize(db, clock(), opts);
       } catch (err) {
         opts.onError?.(err);
@@ -662,6 +754,7 @@ export function startRunner(
   return {
     async stop() {
       stopped = true;
+      giveUp.abort();
       if (timer !== undefined) clearTimeout(timer);
       // Nothing starts a loop from here: the timer is gone, and startup schedules none once stopped.
       await startup;
