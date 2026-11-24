@@ -108,8 +108,8 @@ class Desk {
     for (const p of list) this.postings.set(p.id, p);
   }
 
-  /** An alert email brings these cards, and each is ranked: the order has settled. */
-  async alert(site: Site, cards: AlertCard[]): Promise<void> {
+  /** An alert email brings these cards, and each is ranked (unless `ranked` is false): the order has settled. */
+  async alert(site: Site, cards: AlertCard[], ranked = true): Promise<void> {
     this.publish(...cards.map((c) => c.posting));
     this.mails += 1;
     const res = await this.context.request.post('/api/v1/connector/mail/batch', {
@@ -122,7 +122,7 @@ class Desk {
       .poll(
         async () =>
           (await this.results()).filter(
-            (r) => wanted.includes(r.posting.externalId ?? '') && r.aiScore !== null,
+            (r) => wanted.includes(r.posting.externalId ?? '') && (!ranked || r.aiScore !== null),
           ).length,
         { timeout: 45_000 },
       )
@@ -158,6 +158,11 @@ class Desk {
   async discovery(): Promise<void> {
     await this.page.goto('/discovery');
     await expect(this.page.getByText(/results? to review\.$|^Nothing to review/)).toBeVisible();
+  }
+
+  /** The cards: the list's own items, not the locations listed inside one. */
+  get cards() {
+    return this.page.getByRole('list', { name: 'Results to review' }).locator('> li');
   }
 
   row(title: string, company = COMPANY) {
@@ -511,7 +516,7 @@ test('W7, cases 39 and 41: selection, focus and place when the card leaves', asy
       list.map((x) => ({ posting: x, location: PLACE })),
     );
     await desk.discovery();
-    const rows = desk.page.getByRole('list', { name: 'Results to review' }).getByRole('listitem');
+    const rows = desk.cards;
     await expect(rows).toHaveCount(24);
     const names = await rows.evaluateAll((els) =>
       els.map((e) => e.getAttribute('aria-label') ?? ''),
@@ -564,16 +569,14 @@ test('W7, case 40: "select all matching" loses only the captured one', async () 
       await desk.alert(
         'linkedin',
         list.slice(i, i + 70).map((x) => ({ posting: x, location: PLACE })),
+        false,
       );
     }
     await desk.discovery();
+    await desk.page.getByLabel('Sort by').selectOption({ label: 'Date discovered' });
     await desk.page.getByRole('button', { name: 'Select all 210 matching' }).click();
     await expect(desk.page.getByText('210 selected')).toBeVisible();
-    const first = await desk.page
-      .getByRole('list', { name: 'Results to review' })
-      .getByRole('listitem')
-      .first()
-      .getAttribute('aria-label');
+    const first = await desk.cards.first().getAttribute('aria-label');
     const gone = list.find((p) => `${p.title} at ${COMPANY}` === first) as MockPosting;
     expect(await desk.capture(gone)).toContain(ADDED);
     await desk.back();
@@ -623,9 +626,9 @@ for (const site of SITES) {
       expect(await desk.popup.capture(postingAddress(p))).toContain(ADDED);
       const one = await desk.oneAtInterested(p);
       const results = (await desk.results()).length;
-      expect(await desk.popup.capture(postingAddress(p))).toBe(
-        'Already in your pipeline, at Interested. This page was added to its timeline.',
-      );
+      expect
+        .soft(await desk.popup.capture(postingAddress(p)))
+        .toBe('Already in your pipeline, at Interested. This page was added to its timeline.');
       expect((await desk.oneAtInterested(p)).id).toBe(one.id);
       expect(await desk.results()).toHaveLength(results);
       await desk.back();
@@ -691,9 +694,11 @@ test("W6, case 30: the user's own description is never replaced", async () => {
     const stored = (await desk.opportunities(p.title))[0]?.descriptionMd as string;
     await desk.discovery();
     await desk.openPosting(p);
-    expect(await desk.popup.capture(postingAddress(p))).toBe(
-      'Already in your pipeline: moved to Interested. Its own description was kept; this page is on its timeline.',
-    );
+    expect
+      .soft(await desk.popup.capture(postingAddress(p)))
+      .toBe(
+        'Already in your pipeline: moved to Interested. Its own description was kept; this page is on its timeline.',
+      );
     await desk.oneAtInterested(p, { descriptionMd: stored });
     expect(
       (await desk.entries(id)).filter((e) => e.title === 'Captured from LinkedIn'),
@@ -728,7 +733,7 @@ for (const [stage, label, end, said] of [
       });
       await desk.discovery();
       await desk.openPosting(p);
-      expect(await desk.popup.capture(postingAddress(p))).toContain(said);
+      expect.soft(await desk.popup.capture(postingAddress(p))).toContain(said);
       const one = await desk.oneAtInterested(p, { stage: end });
       expect(one.id).toBe(id);
       await desk.back();
@@ -952,11 +957,13 @@ for (const [what, sites] of [
         );
         const chosen = card.at(first) as AlertCard;
         const n = card.length - 1;
-        expect(await desk.capture(chosen.posting)).toMatch(
-          n === 1
-            ? /^Added to your pipeline as Interested\..*1 other posting/
-            : /^Added to your pipeline as Interested\..*2 other postings/,
-        );
+        expect
+          .soft(await desk.capture(chosen.posting))
+          .toMatch(
+            n === 1
+              ? /^Added to your pipeline as Interested\..*1 other posting/
+              : /^Added to your pipeline as Interested\..*2 other postings/,
+          );
         const one = await desk.oneAtInterested(chosen.posting);
         await desk.back();
         await desk.leaves('Many Places Role', 1);
@@ -972,9 +979,9 @@ for (const [what, sites] of [
         // Another of its locations, captured later: the same opportunity, nothing more.
         const later = card.find((c) => c !== chosen) as AlertCard;
         const results = (await desk.results()).length;
-        expect(await desk.capture(later.posting)).toContain(
-          'Already in your pipeline, at Interested.',
-        );
+        expect
+          .soft(await desk.capture(later.posting))
+          .toContain('Already in your pipeline, at Interested.');
         expect((await desk.oneAtInterested(chosen.posting)).id).toBe(one.id);
         expect(await desk.results()).toHaveLength(results);
       });
@@ -993,7 +1000,7 @@ test('case 53: Senior and Principal of one title are two cards; Sr is Senior', a
       { posting: principal, location: 'Boise' },
     ]);
     await desk.discovery();
-    const rows = desk.page.getByRole('list', { name: 'Results to review' }).getByRole('listitem');
+    const rows = desk.cards;
     await expect(rows).toHaveCount(2);
     await expect(desk.row('Principal Archive Keeper')).toHaveAccessibleName(
       `Principal Archive Keeper at ${COMPANY}`,
@@ -1019,6 +1026,7 @@ test('case 53: capturing the Senior posting leaves the Principal card', async ()
       { posting: principal, location: 'Boise' },
     ]);
     await desk.discovery();
+    await expect(desk.cards).toHaveCount(2);
     expect(await desk.capture(senior)).toContain(ADDED);
     await desk.back();
     await desk.leaves('Senior Archive Keeper', 1);
@@ -1039,7 +1047,9 @@ test('case 55: a location that arrives after the capture is a card, and goes to 
     await desk.discovery();
     await expect(desk.row('Later Place Role')).toBeVisible();
     await desk.openPosting(late);
-    expect(await desk.popup.capture(postingAddress(late))).toContain('Already in your pipeline');
+    expect
+      .soft(await desk.popup.capture(postingAddress(late)))
+      .toContain('Already in your pipeline');
     expect((await desk.oneAtInterested(late)).id).toBe(one.id);
     await desk.back();
     await desk.leaves('Later Place Role', 0);
