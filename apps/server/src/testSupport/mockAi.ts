@@ -322,11 +322,11 @@ export const MOCK_HEAVY_USAGE_MARKER = 'qa-mock: heavy usage';
  */
 const MOCK_CAPTURE_LOCATION = /qa-mock: location is ([^.\n]{1,80})\./;
 /**
- * A captured page whose text has `qa-mock: refine takes <ms> ms` is answered that much later, at most
- * MOCK_CAPTURE_DELAY_MAX_MS: a capture still running when the user is back in Discovery (#970).
+ * A captured page whose text has this is answered only after MOCK_CAPTURE_DELAY_MS: a capture still
+ * running when the user is back in Discovery (#970).
  */
-const MOCK_CAPTURE_DELAY = /qa-mock: refine takes (\d{1,5}) ms/;
-const MOCK_CAPTURE_DELAY_MAX_MS = 10_000;
+export const MOCK_SLOW_CAPTURE_MARKER = 'qa-mock: slow capture';
+const MOCK_CAPTURE_DELAY_MS = 4_000;
 const HEAVY_USAGE = { prompt_tokens: 1_000_000, completion_tokens: 0, total_tokens: 1_000_000 };
 
 /** Registers the mock endpoint on the app (no session, outside /api, loopback callers only). */
@@ -340,11 +340,11 @@ export async function mockAiRoutes(app: FastifyInstance): Promise<void> {
       ? body.model.slice(MODEL_PREFIX.length)
       : body.model;
     const promptText = body.messages.map((m) => messageText(m.content)).join('\n');
-    if (task === 'capture.linkedin' || task === 'capture.job') {
-      const wait = Number(MOCK_CAPTURE_DELAY.exec(promptText)?.[1] ?? 0);
-      await new Promise((resolve) =>
-        setTimeout(resolve, Math.min(wait, MOCK_CAPTURE_DELAY_MAX_MS)),
-      );
+    if (
+      (task === 'capture.linkedin' || task === 'capture.job') &&
+      promptText.includes(MOCK_SLOW_CAPTURE_MARKER)
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, MOCK_CAPTURE_DELAY_MS));
     }
     const id = `chatcmpl-mock-${Date.now()}`;
     const created = Math.floor(Date.now() / 1000);

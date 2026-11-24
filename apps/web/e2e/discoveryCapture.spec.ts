@@ -5,6 +5,7 @@
 // is (https://github.com/bgoleno/opportun/issues/967#issuecomment-7120097602). The pages are mocks
 // answered at the sites' own addresses: nothing leaves the machine.
 import { expect, test, type Request } from '@playwright/test';
+import { MOCK_SLOW_CAPTURE_MARKER } from '../../server/src/testSupport/mockAi';
 import {
   ADDED,
   atDesk,
@@ -168,7 +169,7 @@ for (const site of SITES) {
   test(`W7, cases 8 and 35: ${site}, the popup closed and the user back before the capture has finished`, async () => {
     await atDesk(async (desk) => {
       const p = posting(site, 'Slow Role', {
-        description: `${DESCRIPTION}\nqa-mock: refine takes 6000 ms`,
+        description: `${DESCRIPTION}\n${MOCK_SLOW_CAPTURE_MARKER}`,
       });
       await desk.alert(site, [
         { posting: p, location: PLACE },
