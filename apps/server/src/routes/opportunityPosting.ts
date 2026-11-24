@@ -24,6 +24,7 @@ import { NormalizedPostingSchema, POSTING_STATES } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import type { Db } from '../db/client';
 import { HttpError } from '../lib/errors';
 import { isSystemWritten, replaceAllowedByFlag } from '../lib/postingFingerprint';
 import {
@@ -42,6 +43,7 @@ import {
   ownGreenhouseRef,
   type BodyReader,
 } from '../lib/postingSearch';
+import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import { unfinishedDedupeKeys } from '../repos/jobs';
 import { POSTING_RECONCILE_KIND } from '../lib/jobKinds';
@@ -132,6 +134,41 @@ function userWritten(opp: OpportunityRowView): boolean {
   if (replaceAllowedByFlag(opp)) return false;
   return !isSystemWritten(opp.descriptionMd, opp.descriptionFingerprint);
 }
+
+/**
+ * An attach refused because its job is tracked as another of the user's opportunities (its company,
+ * title and location are that one's, repos/opportunities.ts claimDedupeKey) says which one
+ * (https://github.com/bgoleno/opportun/issues/936). Read as the user: only their own is ever named.
+ */
+async function namingTracked<T>(db: Db, ctx: UserCtx, attach: () => Promise<T>): Promise<T> {
+  try {
+    return await attach();
+  } catch (err) {
+    const existingId = err instanceof HttpError ? err.details?.existingId : undefined;
+    if (!(err instanceof HttpError) || err.code !== 'duplicate' || typeof existingId !== 'string') {
+      throw err;
+    }
+    await racePoint('posting.alreadyTracked');
+    let tracked: OpportunityRowView;
+    try {
+      tracked = await getOpportunity(db, ctx, existingId);
+    } catch {
+      // Deleted or merged meanwhile: the refusal as it was.
+      throw err;
+    }
+    throw new HttpError(409, 'duplicate', undefined, {
+      existingId,
+      existingTitle: tracked.title,
+      existingCompany: tracked.companyName,
+    });
+  }
+}
+
+/** attachPosting and attachPostingSaying, with their refusal for a tracked job naming it. */
+const attach = (...args: Parameters<typeof attachPosting>) =>
+  namingTracked(args[0], args[1], () => attachPosting(...args));
+const attachSaying = (...args: Parameters<typeof attachPostingSaying>) =>
+  namingTracked(args[0], args[1], () => attachPostingSaying(...args));
 
 export async function opportunityPostingRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
@@ -244,7 +281,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         // only ever comes from an email-linked job id, never a board read). Forwarded onto the
         // timeline entry (attachPosting) and in this response, so a person watching the moment
         // sees it in the toast and it still stands after the toast is gone.
-        const { opportunity, changed, keptDescription } = await attachPostingSaying(
+        const { opportunity, changed, keptDescription } = await attachSaying(
           db,
           ctx,
           id,
@@ -338,12 +375,12 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           );
           // A row picked from the board confirms a posting the user described themselves, the
           // description kept, as Find posting's own match does (#756).
-          return attachPosting(db, ctx, id, described, 'board', undefined, identity, {
+          return attach(db, ctx, id, described, 'board', undefined, identity, {
             keepDescription: true,
           });
         }
         if (text !== undefined) {
-          return attachPosting(
+          return attach(
             db,
             ctx,
             id,
@@ -358,7 +395,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           url as string,
         );
         const out = await extract(db, ctx, url, page);
-        return attachPosting(
+        return attach(
           db,
           ctx,
           id,
