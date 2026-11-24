@@ -270,6 +270,21 @@ describe('a server that cannot start, as a process', () => {
       { OPPORTUN_MASTER_KEY: '', OPPORTUN_MASTER_KEY_FILE: KEY.repeat(100) },
       /^OPPORTUN_MASTER_KEY_FILE could not be read \(ENAMETOOLONG\)/m,
     ],
+    [
+      'OPPORTUN_BASE_URL that is not a URL',
+      { DB_DIALECT: 'sqlite', OPPORTUN_BASE_URL: `https://${USER}:${PASSWORD}@a ${HOST}/` },
+      /^OPPORTUN_BASE_URL is not a valid URL$/m,
+    ],
+    [
+      'sslmode that is not one',
+      { DATABASE_URL: `postgres://${USER}:${PASSWORD}@${HOST}/${DB_NAME}?sslmode=${PASSWORD}` },
+      /^DATABASE_URL sslmode must be disable, require or verify-full$/m,
+    ],
+    [
+      'DB_DIALECT that is neither',
+      { DB_DIALECT: PASSWORD },
+      /DB_DIALECT must be sqlite or postgres$/m,
+    ],
   ])(
     'a configuration error: %s',
     async (_what, settings, says) => {

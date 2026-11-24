@@ -218,7 +218,7 @@ function loadBaseUrl(env: NodeJS.ProcessEnv): string {
   try {
     url = new URL(raw);
   } catch {
-    throw new ConfigError(`OPPORTUN_BASE_URL is not a valid URL: ${raw}`);
+    throw new ConfigError('OPPORTUN_BASE_URL is not a valid URL');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new ConfigError('OPPORTUN_BASE_URL must use http or https');
@@ -458,9 +458,7 @@ function loadDatabaseUrl(env: NodeJS.ProcessEnv): string {
 
 function parseSsl(raw: string, source: string): DbSsl {
   if ((DB_SSL_MODES as readonly string[]).includes(raw)) return raw as DbSsl;
-  throw new ConfigError(
-    `${source} must be disable, require or verify-full, got: ${JSON.stringify(raw)}`,
-  );
+  throw new ConfigError(`${source} must be disable, require or verify-full`);
 }
 
 function loadPostgres(env: NodeJS.ProcessEnv): PostgresConfig {
