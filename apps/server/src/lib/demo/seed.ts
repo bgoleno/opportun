@@ -26,6 +26,7 @@ import {
 } from '../../db/schema';
 import { budgetKey, writeSetting } from '../../lib/ai';
 import { bindVaultKey, putSecretIn } from '../../lib/secretBox';
+import { fileSettingProblem } from '../../lib/fileSetting';
 import { hashPassword } from '../../lib/passwords';
 import { firstUnmarkedUser } from '../../lib/demoDedicated';
 import { insertUserRow, REGISTRATION_OPEN_KEY } from '../../lib/registration';
@@ -740,9 +741,7 @@ function demoAiKeyFromEnv(env: NodeJS.ProcessEnv): string | undefined {
     try {
       return readOperatorFile(resolve(file)).trim();
     } catch (err) {
-      throw new DemoAiKeyFileError(
-        `OPPORTUN_DEMO_AI_KEY_FILE could not be read (${file}): ${(err as Error).message}`,
-      );
+      throw new DemoAiKeyFileError(fileSettingProblem('OPPORTUN_DEMO_AI_KEY_FILE', 'the key', err));
     }
   }
   const inline = env.OPPORTUN_DEMO_AI_KEY;

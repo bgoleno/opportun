@@ -9,5 +9,5 @@ export type DbDialect = (typeof DB_DIALECTS)[number];
 export function parseDbDialect(raw: string | undefined): DbDialect {
   if (raw === undefined || raw === '' || raw === 'sqlite') return 'sqlite';
   if (raw === 'postgres') return 'postgres';
-  throw new Error(`DB_DIALECT must be sqlite or postgres, got: ${JSON.stringify(raw)}`);
+  throw new Error('DB_DIALECT must be sqlite or postgres');
 }
