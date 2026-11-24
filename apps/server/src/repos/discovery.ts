@@ -740,9 +740,26 @@ export async function unsuppressResult(
   id: string,
 ): Promise<DiscoveryResultView> {
   const result = await getResult(db, ctx, id);
-  if (result.disposition === 'pending') throw new HttpError(409, 'already_pending');
+  if (result.disposition === 'pending') {
+    // Its dismissal was undone (#927).
+    throw new HttpError(
+      409,
+      'already_pending',
+      'This result is back in the review queue, so there is nothing to unsuppress. Decide on it there.',
+      undefined,
+      { userFacing: true },
+    );
+  }
   if (result.disposition === 'accepted') {
-    if (result.opportunityId === null) throw new HttpError(409, 'no_linked_opportunity');
+    if (result.opportunityId === null) {
+      throw new HttpError(
+        409,
+        'no_linked_opportunity',
+        "This result's opportunity was deleted, so it cannot be unsuppressed. If the job comes up again, add it with New opportunity in the pipeline.",
+        undefined,
+        { userFacing: true },
+      );
+    }
     const opp = await getOpportunity(db, ctx, result.opportunityId);
     if (opp.stage !== 'dismissed') {
       throw new HttpError(

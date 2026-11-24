@@ -75,7 +75,16 @@ export function SetPasswordCard(props: {
       });
       navigate(authUrl);
     } catch (err) {
-      setNotice(errorMessage(err));
+      const code = err instanceof ApiError ? err.code : '';
+      // The card goes with the next read of hasPassword, so it is said outside it.
+      if (code === 'has_password')
+        toast({ title: 'Password already set', description: errorMessage(err) });
+      else setNotice(errorMessage(err));
+      // Changed elsewhere: a password set in another tab, or another account signed in there (#927).
+      if (code === 'has_password' || code === 'not_linked') {
+        void qc.invalidateQueries({ queryKey: twoFactorQuery.queryKey });
+        void qc.invalidateQueries({ queryKey: linkedAccountsQuery.queryKey });
+      }
     }
   }
 
