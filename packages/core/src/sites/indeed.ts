@@ -22,6 +22,22 @@ export const INDEED_JOB_KEY = /^[0-9a-f]{8,32}$/i;
  */
 const PAGES: readonly HostRule[] = [{ exact: 'indeed.com' }, { exact: 'www.indeed.com' }];
 
+/** Where a stored link names its job: in `jk` on a posting and the redirects to one, and in `vjk` on
+ *  a list or the home page, for the job open beside it. */
+const STORED_KEY = new Map<string, 'jk' | 'vjk'>([
+  ['/viewjob', 'jk'],
+  ['/m/viewjob', 'jk'],
+  ['/rc/clk', 'jk'],
+  ['/pagead/clk', 'jk'],
+  ['/jobs', 'vjk'],
+  ['/', 'vjk'],
+]);
+
+const jobOf = (key: string | null) =>
+  key !== null && INDEED_JOB_KEY.test(key)
+    ? { site: 'indeed', board: null, id: key.toLowerCase() }
+    : null;
+
 export const indeed = {
   id: 'indeed',
   label: 'Indeed',
@@ -33,11 +49,12 @@ export const indeed = {
   // server's siteOfUrl drops one trailing dot, linkOnHost none).
   jobFromUrl(url) {
     if (!PAGES.some((r) => hostMatchesRule(url.hostname, r))) return null;
-    if (url.pathname !== '/viewjob') return null;
-    const jk = url.searchParams.get('jk');
-    return jk !== null && INDEED_JOB_KEY.test(jk)
-      ? { site: 'indeed', board: null, id: jk.toLowerCase() }
-      : null;
+    return url.pathname === '/viewjob' ? jobOf(url.searchParams.get('jk')) : null;
+  },
+  storedJobFromUrl(url) {
+    if (!PAGES.some((r) => hostMatchesRule(url.hostname, r))) return null;
+    const name = STORED_KEY.get(url.pathname);
+    return name === undefined ? null : jobOf(url.searchParams.get(name));
   },
   isJobId: (id) => INDEED_JOB_KEY.test(id),
   jobPageUrl(ref) {

@@ -39,8 +39,8 @@ Open a LinkedIn profile or job posting, or an Indeed job, click the Opportun ico
 
 - A **profile** (`linkedin.com/in/...`) becomes a contact, with company and position. Capturing
   the same person again updates them.
-- A **job posting** (`linkedin.com/jobs/view/...`, or the jobs search view with a posting
-  selected) becomes an **opportunity at Interested**.
+- A **job posting** (`linkedin.com/jobs/view/...`, with or without words before the number in the
+  address, or the jobs search view with a posting selected) becomes an **opportunity at Interested**.
 - An **Indeed job** (`indeed.com/viewjob?jk=...`, or an Indeed search or the Indeed home page
   with a job open on the right) becomes an **opportunity at Interested** too, with the job's title, company and
   description and the link `https://www.indeed.com/viewjob?jk=...`. With an AI key, the
@@ -53,9 +53,16 @@ Capturing a job is treated as a decision, not as filing something to look at lat
 reading the posting and you want it. So a captured job never lands in the review queue. If the
 job was already sitting there as a lead from a job alert email, that lead is filled in and
 accepted rather than duplicated, and if you already track the job, the capture fills in
-whatever the opportunity was missing. An opportunity you had dismissed comes back to
+whatever the opportunity was missing. When the lead is one location of a card that has several,
+the whole card goes with it: the other postings are kept on the opportunity's timeline, with their
+location and link. An opportunity you had dismissed comes back to
 Interested, because capturing it means you changed your mind. One you have already applied to,
 or are interviewing for, keeps its stage and only gains the details.
+
+The description of the captured page becomes the opportunity's when it has none, and replaces a
+short text that came with this same posting, such as one from a feed, if nobody has edited it. It
+never replaces your own words or the company's own posting. Either way the whole page is on the
+opportunity's timeline, and the popup says which it was.
 
 A different job that only looks like one you track is kept apart instead: for example a
 Principal role on the same site as the Staff role you track at that company and location,
@@ -93,10 +100,10 @@ normal use and exist so a mistake cannot turn into a flood. When one is reached,
 which, and when you can capture again.
 
 A capture can also be refused for a moment, not for a limit: Opportun saves one of your
-captures at a time, so while an earlier one is still being saved, a second waits a few seconds
-and is then turned away. The popup says "Opportun is still saving another capture of yours" and
-to try again in a few seconds. Nothing is wrong: this attempt saved nothing, so wait a moment
-and click **Capture this page** again.
+captures at a time, and some other work of yours can hold it up too, so a capture waits a few
+seconds and is then turned away. The popup says "Opportun is busy saving something else of yours, so
+this capture is not finished" and to try again in a few seconds. Nothing is wrong: wait a moment and
+click **Capture this page** again, which finishes it.
 
 ## Filling an application (assisted apply)
 
@@ -171,9 +178,14 @@ is not.
 
 ## When something is wrong
 
-- **The popup says it was added to your pipeline**: that is where a captured job goes now. It
-  is not in the review queue. An extension built before this change says "review queue"
-  instead; update it from Settings > Integrations > Extensions and Connectors.
+- **The popup says it was added to your pipeline, or that it is already there and at which
+  stage**: that is where a captured job goes. It is not in the review queue. An older extension
+  says less, or "review queue"; update it from Settings > Integrations > Extensions and Connectors.
+- **You closed the popup while it said "Capturing…"**: keep it open until it says the job was
+  added. Closed right after the click, nothing may have been sent; the card is then still in
+  Discovery, and capturing again is safe.
+- **"Opportun does not read this address"**: the tab is LinkedIn's or Indeed's mobile site or one of
+  Indeed's country sites. Open the job on the site the popup names.
 - **"Open a supported page"**: the tab is not a profile or posting the server recognizes.
 - **"Open a single Indeed job"**: the Indeed tab is a search or the home page with no job
   opened, a company page, or another page that is not one job. Open the job (or click it in the

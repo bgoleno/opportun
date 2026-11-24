@@ -60,6 +60,119 @@ describe('renderOutcome', () => {
     expect(renderOutcome(job)).toEqual({ tone: 'success', text: said });
   });
 
+  // https://github.com/bgoleno/opportun/issues/967, section 4 of tl's design: one sentence for each
+  // thing that can have happened, true in each.
+  describe('a server that says what happened', () => {
+    const job = {
+      kind: 'job' as const,
+      resultId: 'r1',
+      duplicate: false,
+      refined: false,
+      opportunityId: 'o1',
+    };
+    const text = (over: Partial<Extract<Outcome, { kind: 'job' }>>) => {
+      const { tone, text: said } = renderOutcome({ ...job, ...over });
+      expect(tone).toBe('success');
+      return said;
+    };
+
+    it.each([
+      [true, 'interested', 'interested', 'Added to your pipeline as Interested.'],
+      [false, 'interested', 'interested', 'Already in your pipeline: moved to Interested.'],
+      [
+        false,
+        null,
+        'interested',
+        'Already in your pipeline, at Interested. This page was added to its timeline.',
+      ],
+      [
+        false,
+        null,
+        'preparing',
+        'Already in your pipeline, at Preparing. This page was added to its timeline.',
+      ],
+      [
+        false,
+        null,
+        'applied',
+        'Already in your pipeline, at Applied. This page was added to its timeline.',
+      ],
+      [
+        false,
+        null,
+        'in_process',
+        'Already in your pipeline, at In process. This page was added to its timeline.',
+      ],
+      [
+        false,
+        null,
+        'offer',
+        'Already in your pipeline, at Offer. This page was added to its timeline.',
+      ],
+      [
+        false,
+        null,
+        'closed',
+        'Already in your pipeline, at Closed. This page was added to its timeline.',
+      ],
+      [
+        false,
+        null,
+        'discovered',
+        'Already in your pipeline, at New. It could not be moved to Interested just now: move it on its page.',
+      ],
+      [
+        false,
+        null,
+        'dismissed',
+        'Already in your pipeline, at Dismissed. It could not be moved to Interested just now: move it on its page.',
+      ],
+    ])('created %s, moved to %s, now at %s', (created, stage, currentStage, said) => {
+      expect(text({ created, stage, currentStage })).toBe(said);
+    });
+
+    const moved = { created: false, stage: 'interested', currentStage: 'interested' } as const;
+    const there = { created: false, stage: null, currentStage: 'applied' } as const;
+    const made = { created: true, stage: 'interested', currentStage: 'interested' } as const;
+
+    it('then what became of the description', () => {
+      expect(text({ ...moved, description: 'added' })).toBe(
+        'Already in your pipeline: moved to Interested. Its description was added.',
+      );
+      expect(text({ ...made, description: 'kept' })).toBe(
+        'Added to your pipeline as Interested. Its own description was kept; this page is on its timeline.',
+      );
+      // The timeline is not said twice.
+      expect(text({ ...there, description: 'kept' })).toBe(
+        'Already in your pipeline, at Applied. This page was added to its timeline. Its own description was kept.',
+      );
+      expect(text({ ...there, filled: false })).toBe(
+        "Already in your pipeline, at Applied. This page was added to its timeline. Its details could not be added just now. Add them on the opportunity's page.",
+      );
+    });
+
+    it('then the rest of its card', () => {
+      expect(text({ ...made, linked: 1 })).toBe(
+        'Added to your pipeline as Interested. The other posting on its card was linked to it.',
+      );
+      expect(text({ ...made, linked: 2 })).toBe(
+        'Added to your pipeline as Interested. The 2 other postings on its card were linked to it.',
+      );
+      expect(text({ ...moved, description: 'added', linked: 2 })).toBe(
+        'Already in your pipeline: moved to Interested. Its description was added. The 2 other postings on its card were linked to it.',
+      );
+    });
+
+    it('a stage this build does not know is written out, bounded', () => {
+      expect(text({ created: false, stage: null, currentStage: 'on_hold' })).toContain(
+        'at On hold.',
+      );
+      expect(
+        text({ created: false, stage: null, currentStage: 'x'.repeat(900) }).length,
+      ).toBeLessThan(300);
+    });
+  });
+
   it('still reads a response from a server older than these fields', () => {
     // The contract is frozen in both directions: an extension newer than its server must not
     // fall over when opportunityId and stage are absent.
@@ -210,7 +323,7 @@ describe('renderOutcome', () => {
   it('a busy server says to try again shortly, not that something is broken (#309)', () => {
     expect(renderOutcome({ kind: 'busy', retryAfterSec: 5 })).toEqual({
       tone: 'error',
-      text: 'Opportun is still saving another capture of yours. Try again in a few seconds.',
+      text: 'Opportun is busy saving something else of yours, so this capture is not finished. Try again in a few seconds.',
     });
     expect(renderOutcome({ kind: 'busy', retryAfterSec: null }).text).toMatch(
       /Try again in a few seconds\.$/,

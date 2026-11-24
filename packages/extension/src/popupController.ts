@@ -1,7 +1,7 @@
 // The popup's behavior, with every browser API injected (popup.ts wires the real ones), so it
 // runs under happy-dom in tests. The page is read only inside the Capture click handler (C-1).
 import { postCapture, testConnection, type FetchLike, type Outcome } from './api';
-import { captureSiteOf, indeedJobKey, type CaptureSiteId } from './canonical';
+import { captureSiteOf, indeedJobKey, readableHostFor, type CaptureSiteId } from './canonical';
 import {
   fetchConfirmable,
   postConfirmation,
@@ -511,7 +511,10 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         // untouched and unsent.
         const site = tab?.url === undefined ? null : captureSiteOf(tab.url);
         if (tab === null || tab.url === undefined || site === null) {
-          showOutcome({ kind: 'unsupported_tab' });
+          const host = tab?.url === undefined ? null : readableHostFor(tab.url);
+          showOutcome(
+            host === null ? { kind: 'unsupported_tab' } : { kind: 'other_address', host },
+          );
           return;
         }
         // An Indeed tab is read only when its URL names one posting (issue #74): there is no
@@ -545,7 +548,13 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
         showOutcome(outcome, site);
         showResultLink(s, outcome);
       },
-      { working: 'Capturing…', button: captureButton, writes: true },
+      // A popup closed before its request has left sends nothing, and there is no background worker to
+      // send it (manifest.ts): the user is told (#967).
+      {
+        working: 'Capturing… Keep this window open until it says the job was added.',
+        button: captureButton,
+        writes: true,
+      },
     );
   });
 

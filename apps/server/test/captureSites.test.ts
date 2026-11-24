@@ -238,3 +238,76 @@ describe('postingIdentity: Indeed', () => {
     ).toBeNull();
   });
 });
+
+// The addresses one posting goes by (https://github.com/bgoleno/opportun/issues/967; tl's W5 ruling,
+// https://github.com/bgoleno/opportun/issues/967#issuecomment-7120119028). A tab is captured at fewer
+// of them than a stored link may hold: a redirect is an address a tab passes through.
+describe('the addresses of one posting', () => {
+  const LI = '1000000001';
+  const JK = '0000000000000a01';
+  const tab = (href: string) => {
+    const site = siteOfUrl(href);
+    const job = site?.jobFromUrl(new URL(href)) ?? null;
+    return job === null ? null : `${job.site}:${job.id}`;
+  };
+  const stored = (href: string) =>
+    postingIdentity(posting({ postingUrl: href, externalId: 'opaque-1' }));
+
+  it.each([
+    [`https://www.linkedin.com/jobs/view/${LI}/`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs/view/staff-engineer-at-initech-${LI}/`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs/view/staff-engineer-at-initech-${LI}?trk=x`, `linkedin:${LI}`],
+    [`https://de.linkedin.com/jobs/view/ing%C3%A9nieur-${LI}`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/comm/jobs/view/${LI}/?trackingId=x`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/comm/jobs/view/staff-engineer-${LI}`, `linkedin:${LI}`],
+    ['https://www.linkedin.com/jobs/view/engineer-123456', 'linkedin:123456'],
+    [`https://www.indeed.com/viewjob?jk=${JK}&from=serp`, `indeed:${JK}`],
+  ])('a tab and a stored link at %s are %s', (href, identity) => {
+    expect(tab(href)).toBe(identity);
+    expect(stored(href)).toBe(identity);
+  });
+
+  it.each([
+    [`https://www.linkedin.com/jobs/search/?currentJobId=${LI}&keywords=x`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs/search-results/?currentJobId=${LI}`, `linkedin:${LI}`],
+    [`https://www.linkedin.com/jobs/collections/recommended/?currentJobId=${LI}`, `linkedin:${LI}`],
+    [`https://www.indeed.com/m/viewjob?jk=${JK}`, `indeed:${JK}`],
+    [`https://www.indeed.com/rc/clk?jk=${JK.toUpperCase()}&bb=x`, `indeed:${JK}`],
+    [`https://indeed.com/pagead/clk?mo=r&jk=${JK}`, `indeed:${JK}`],
+    [`https://www.indeed.com/jobs?q=x&vjk=${JK}`, `indeed:${JK}`],
+    [`https://www.indeed.com/?vjk=${JK}`, `indeed:${JK}`],
+  ])('a stored link at %s is %s, and no tab is', (href, identity) => {
+    expect(stored(href)).toBe(identity);
+    expect(tab(href)).toBeNull();
+  });
+
+  it.each([
+    // No id, and not enough digits for one: a year is not an id.
+    'https://www.linkedin.com/jobs/view/staff-engineer-at-initech/',
+    'https://www.linkedin.com/jobs/view/staff-engineer-2024/',
+    'https://www.linkedin.com/jobs/view/staff-engineer-12345',
+    'https://www.linkedin.com/jobs/view/staff-engineer-1000000001x',
+    'https://www.linkedin.com/jobs/view/-1000000001',
+    `https://www.linkedin.com/jobs/view/a-${'1'.repeat(21)}`,
+    'https://www.linkedin.com/jobs/view/a-1000000001/apply',
+    'https://www.linkedin.com/x/jobs/view/1000000001',
+    'https://www.linkedin.com/jobs/search/?currentJobId=not-an-id',
+    'https://www.linkedin.com/jobs/?currentJobId=1000000001',
+    'https://www.linkedin.com/feed/?currentJobId=1000000001',
+    'https://m.linkedin.com/jobs/view/1000000001',
+    'https://www.indeed.com/pagead/clk?mo=r',
+    'https://www.indeed.com/rc/clk?vjk=0000000000000a01',
+    'https://www.indeed.com/jobs?jk=0000000000000a01',
+    'https://www.indeed.com/cmp/Example?jk=0000000000000a01',
+    'https://uk.indeed.com/viewjob?jk=0000000000000a01',
+  ])('names no posting: %s', (href) => {
+    expect(tab(href)).toBeNull();
+    expect(postingIdentity(posting({ postingUrl: href, externalId: 'opaque-1' }))).toBeNull();
+  });
+
+  it('the id in the path wins over one in the query', () => {
+    const href = `https://www.linkedin.com/jobs/view/${LI}/?currentJobId=2000000002`;
+    expect(stored(href)).toBe(`linkedin:${LI}`);
+    expect(tab(href)).toBe(`linkedin:${LI}`);
+  });
+});

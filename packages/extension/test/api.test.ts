@@ -38,6 +38,41 @@ describe('postCapture request', () => {
   });
 });
 
+// A popup the user closes ends its requests (qa on
+// https://github.com/bgoleno/opportun/issues/967): kept alive, one already started is finished.
+describe('postCapture outlives the popup', () => {
+  const answer = { kind: 'job', resultId: 'r1', duplicate: false, refined: false };
+  const sent = async (text: string) => {
+    const fetch = respond(201, answer);
+    await postCapture(fetch, SETTINGS, { ...PAYLOAD, text });
+    return fetch.mock.calls[0]![1];
+  };
+  const bytes = (s: string) => new TextEncoder().encode(s).length;
+
+  it('kept alive up to 60,000 bytes of body, and not over it', async () => {
+    const room = 60_000 - bytes(JSON.stringify({ ...PAYLOAD, text: '' }));
+    const most = await sent('a'.repeat(room));
+    expect(bytes(most.body)).toBe(60_000);
+    expect(most.keepalive).toBe(true);
+    const over = await sent('a'.repeat(room + 1));
+    expect(bytes(over.body)).toBe(60_001);
+    // Not false: as it always went.
+    expect(over).not.toHaveProperty('keepalive');
+  });
+
+  it('bytes, not characters', async () => {
+    const wide = await sent('é'.repeat(30_000));
+    expect(wide.body.length).toBeLessThan(60_000);
+    expect(wide).not.toHaveProperty('keepalive');
+  });
+
+  it('not the connection test, which saves nothing', async () => {
+    const fetch = respond(422, { error: { code: 'unrecognized_page' } });
+    await testConnection(fetch, SETTINGS);
+    expect(fetch.mock.calls[0]![1]).not.toHaveProperty('keepalive');
+  });
+});
+
 describe('postCapture outcomes', () => {
   it('a created or updated profile', async () => {
     expect(
@@ -105,6 +140,27 @@ describe('postCapture outcomes', () => {
         PAYLOAD,
       ),
     ).toMatchObject({ kind: 'job', resultId: 'r1' });
+  });
+
+  it('carries what a current server says of the opportunity, and nothing it does not know (#967)', async () => {
+    const job = { kind: 'job', resultId: 'r1', duplicate: false, refined: false };
+    const read = (over: object) =>
+      postCapture(respond(200, { ...job, ...over }), SETTINGS, PAYLOAD);
+    const said = { created: false, currentStage: 'applied', description: 'kept', linked: 2 };
+    expect(await read(said)).toEqual({ ...job, ...said });
+    expect(await read({ created: true, currentStage: 'interested', description: 'added' })).toEqual(
+      {
+        ...job,
+        created: true,
+        currentStage: 'interested',
+        description: 'added',
+      },
+    );
+    expect(await read({ created: 'yes', currentStage: 3, description: 'lost', linked: 0 })).toEqual(
+      job,
+    );
+    expect(await read({ linked: 1.5 })).toEqual(job);
+    expect(await read({ linked: '2' })).toEqual(job);
   });
 
   it('carries filled only when the server says false (#914)', async () => {

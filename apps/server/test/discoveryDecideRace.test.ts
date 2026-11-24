@@ -187,7 +187,7 @@ describe('a capture and a decision on one result (#968)', () => {
     );
   });
 
-  it('the capture first, of a location group a bulk accept holds: the rest go where the capture went', async () => {
+  it('the capture first, of a card whose locations a bulk accept holds: all of them are decided', async () => {
     const { app, a } = await boot();
     const id = await card(app, a);
     const ctx = ctxOf(a);
@@ -215,7 +215,7 @@ describe('a capture and a decision on one result (#968)', () => {
 
     expect(res.json().results).toEqual([
       { id, outcome: 'already_decided', existingId: captured.opportunityId },
-      { id: elsewhere.id, outcome: 'attached', existingId: captured.opportunityId },
+      { id: elsewhere.id, outcome: 'already_decided', existingId: captured.opportunityId },
     ]);
     expect(await opportunityIds(app, a)).toEqual([captured.opportunityId]);
   });
