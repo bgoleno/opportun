@@ -345,7 +345,12 @@ test('W7, case 40: "select all matching" loses only the captured one', async () 
       );
     }
     await desk.discovery();
+    // An order ranking leaves alone, and read before the selection: one made while the new order is
+    // still being read loses the cards that order does not show.
+    const read = desk.page.waitForResponse((r) => /sort=-createdAt/.test(r.url()));
     await desk.page.getByLabel('Sort by').selectOption({ label: 'Date discovered' });
+    await read;
+    await expect(desk.cards.first()).toHaveAccessibleName(/Bulk Role/);
     await desk.page.getByRole('button', { name: 'Select all 210 matching' }).click();
     await expect(desk.page.getByText('210 selected')).toBeVisible();
     const first = await desk.cards.first().getAttribute('aria-label');
@@ -737,8 +742,8 @@ for (const [what, sites] of [
           .soft(await desk.capture(chosen.posting))
           .toMatch(
             n === 1
-              ? /^Added to your pipeline as Interested\..*1 other posting/
-              : /^Added to your pipeline as Interested\..*2 other postings/,
+              ? /^Added to your pipeline as Interested\..*other posting on its card was linked/
+              : /^Added to your pipeline as Interested\..*2 other postings on its card were linked/,
           );
         const one = await desk.oneAtInterested(chosen.posting);
         await desk.back();
@@ -747,7 +752,10 @@ for (const [what, sites] of [
         const links = (await desk.entries(one.id)).map((e) => e.externalUrl);
         for (const c of card) {
           expect(
-            links.filter((u) => u === postingAddress(c.posting)),
+            // The capture's own entry has the page's address, with no slash at its end.
+            links.filter(
+              (u) => u === postingAddress(c.posting) || `${u}/` === postingAddress(c.posting),
+            ),
             `${c.location} on the timeline`,
           ).toHaveLength(1);
         }
