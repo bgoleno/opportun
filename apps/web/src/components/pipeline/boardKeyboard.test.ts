@@ -169,7 +169,7 @@ describe('the board keyboard drag (#475)', () => {
 // #886: the board's chain scrolls sideways when it is narrower than its columns. A step names its
 // column and scrolls it into view, so a column scrolled away can be reached.
 describe('the board keyboard drag on a board narrower than its columns (#886)', () => {
-  /** Four 288 px chain columns in a 600 px area at x 100, then a pinned rail beside it. */
+  /** Four 288 px chain columns in a 600 px area at x 100, then a rail in the area beside it. */
   function narrowBoard(scrollLeft: number, areaWidth = 600) {
     const columns = ['new', 'interested', 'preparing', 'offer', 'closed'];
     const area = document.createElement('div');
@@ -178,15 +178,19 @@ describe('the board keyboard drag on a board narrower than its columns (#886)', 
     Object.defineProperty(area, 'scrollWidth', { value: 1188 });
     area.scrollLeft = scrollLeft;
     area.getBoundingClientRect = () => rect(100, 0, areaWidth, 700) as DOMRect;
+    const ends = document.createElement('div');
+    ends.setAttribute(BOARD_SCROLLER_ATTR, '');
+    document.body.append(ends);
+    ends.getBoundingClientRect = () => rect(100 + areaWidth + 12, 0, 56, 700) as DOMRect;
     const rects = new Map<UniqueIdentifier, ClientRect>();
     const droppables = new Map<UniqueIdentifier, DroppableContainer>();
     columns.forEach((id, i) => {
       const node = document.createElement('section');
-      const pinned = id === 'closed';
-      (pinned ? document.body : area).append(node);
+      const end = id === 'closed';
+      (end ? ends : area).append(node);
       // Live, as dnd-kit's are: a chain column's place follows the area's scroll.
       const place = () =>
-        pinned
+        end
           ? rect(100 + areaWidth + 12, 100, 56, 600)
           : rect(100 + i * 300 - area.scrollLeft, 100, 288, 600);
       node.getBoundingClientRect = () => place() as DOMRect;
@@ -226,7 +230,7 @@ describe('the board keyboard drag on a board narrower than its columns (#886)', 
         context: context as never,
       });
     };
-    return { area, step, go, rects, droppables, lastContext: () => last };
+    return { area, ends, step, go, rects, droppables, lastContext: () => last };
   }
 
   /** The card's centre for the coordinates the getter gave. */
@@ -267,11 +271,41 @@ describe('the board keyboard drag on a board narrower than its columns (#886)', 
     expect(b.step.at).toBe('interested');
   });
 
-  it('leaves a pinned column, always in view, alone', () => {
+  it('scrolls neither area for an end column that is in view', () => {
     const b = narrowBoard(10);
     b.go(KeyboardCode.Right, 'offer');
     expect(b.step.at).toBe('closed');
     expect(b.area.scrollLeft).toBe(10);
+    expect(b.ends.scrollLeft).toBe(0);
+  });
+
+  // #902: both end columns expanded on a narrow board scroll in an area of their own.
+  it('scrolls the end columns’ own area, and no other, for an end column that is out of view', () => {
+    const b = narrowBoard(10, 288);
+    Object.defineProperty(b.ends, 'scrollWidth', { value: 332 });
+    b.ends.getBoundingClientRect = () => rect(400, 0, 180, 700) as DOMRect;
+    const closed = () => rect(400 + 172 - b.ends.scrollLeft, 100, 160, 600);
+    const node = b.droppables.get('closed')!.node.current!;
+    node.getBoundingClientRect = () => closed() as DOMRect;
+    const live = {
+      get left() {
+        return closed().left;
+      },
+      get right() {
+        return closed().right;
+      },
+      top: 100,
+      bottom: 700,
+      width: 160,
+      height: 600,
+    };
+    b.rects.set('closed', live);
+    const at = b.go(KeyboardCode.Right, 'offer');
+    expect(b.step.at).toBe('closed');
+    expect(b.ends.scrollLeft).toBe(152);
+    expect(b.area.scrollLeft).toBe(10);
+    // On the centre of the column, as it is drawn now.
+    expect(centre(at)).toBe(420 + 80);
   });
 
   it('leaves dnd-kit nothing to scroll on a step, and what it had on Up and Down', () => {
