@@ -155,7 +155,7 @@ export class Desk {
 
   async discovery(): Promise<void> {
     await this.page.goto('/discovery');
-    await expect(this.page.getByText(/results? to review\.$|^Nothing to review/)).toBeVisible();
+    await expect(this.page.getByText(/^\d+ results? to review\.$/)).toBeVisible();
   }
 
   /** The cards: the list's own items, not the locations listed inside one. */
