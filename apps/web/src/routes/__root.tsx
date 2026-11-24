@@ -3,6 +3,7 @@ import { createRootRouteWithContext, Link, Outlet, redirect } from '@tanstack/re
 import { AppShell } from '@/components/AppShell';
 import { Button } from '@/components/ui/button';
 import { meQuery, PUBLIC_PATHS } from '@/lib/auth';
+import { takeAtFirstLoad } from '@/lib/loginRedirect';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -10,8 +11,11 @@ export interface RouterContext {
 
 export const Route = createRootRouteWithContext<RouterContext>()({
   // Every screen except sign-in and registration needs a session.
-  beforeLoad: async ({ context, location }) => {
+  beforeLoad: async ({ context, location, preload }) => {
     const user = await context.queryClient.ensureQueryData(meQuery);
+    // A provider's sign-in lands on `/`: on to the page that was asked for (#942).
+    const asked = preload ? undefined : takeAtFirstLoad(location.pathname, user !== null);
+    if (asked !== undefined) throw redirect(asked);
     const isPublic = PUBLIC_PATHS.has(location.pathname);
     if (user === null && !isPublic) {
       throw redirect({ to: '/login', search: { redirect: location.href } });

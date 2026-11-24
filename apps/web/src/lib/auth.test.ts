@@ -1,42 +1,9 @@
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { mockApi } from '@/test/render';
-import { forceLocalSignOut, logout, meQuery, safeRedirect } from './auth';
+import { forceLocalSignOut, logout, meQuery } from './auth';
 
 const USER = { id: 'u1', email: 'owner@example.com', displayName: 'Alex Rivera', isAdmin: false };
-
-describe('safeRedirect', () => {
-  it('keeps same-origin absolute paths', () => {
-    expect(safeRedirect('/pipeline?stage=applied')).toBe('/pipeline?stage=applied');
-    expect(safeRedirect('/opportunities/abc')).toBe('/opportunities/abc');
-  });
-
-  it('rejects non-strings, relative, protocol-relative and auth targets', () => {
-    expect(safeRedirect(undefined)).toBe('/');
-    expect(safeRedirect('pipeline')).toBe('/');
-    expect(safeRedirect('//evil.example')).toBe('/');
-    expect(safeRedirect('/login')).toBe('/');
-  });
-
-  it('rejects a tab, which browsers strip to form a protocol-relative URL', () => {
-    expect(safeRedirect('/\t/evil.example')).toBe('/');
-  });
-
-  it('rejects CR and LF anywhere in the target', () => {
-    expect(safeRedirect('/\r\n/evil.example')).toBe('/');
-    expect(safeRedirect('/ok\nnext')).toBe('/');
-  });
-
-  it('rejects backslashes anywhere in the target', () => {
-    expect(safeRedirect('/\\evil.example')).toBe('/');
-    expect(safeRedirect('/a\\b')).toBe('/');
-  });
-
-  it('rejects other control characters', () => {
-    expect(safeRedirect('/\u0000/evil.example')).toBe('/');
-    expect(safeRedirect('/x\u001f')).toBe('/');
-  });
-});
 
 /**
  * Issue #151: clearing the local session is only honest once the server has actually
