@@ -412,8 +412,9 @@ those settled results live.
 Dismissed a result that was wrong to skip, or a requisition reopened later? **Unsuppress**
 lets the next repost through to the review queue again, instead of it being silently treated
 as the same job forever. For an accepted result, unsuppressing only takes effect once the
-opportunity it became is itself dismissed; while that opportunity is still active, a repost
-should keep being treated as the same job.
+opportunity it became is dismissed or deleted; while that opportunity is still there, a repost
+should keep being treated as the same job. Deleting an opportunity does not bring its reposts back by
+itself: unsuppress its result too if you want them.
 
 Once unsuppressed, a result shows an **Unsuppressed** badge in place of the button. Reversing
 a decision and never having made one are different states, and collapsing them into one

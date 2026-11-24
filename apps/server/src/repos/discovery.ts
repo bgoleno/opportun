@@ -46,12 +46,13 @@ import { HttpError, notFound } from '../lib/errors';
 import { isBoardSource, prefilter, prefilterHolds, type PrefilterVerdict } from '../lib/prefilter';
 import { PREFILTER_ON_POSITIVES, PREFILTER_ON_RECALL_PERCENT } from '../lib/prefilter';
 import { DISCOVERY_RUN_KIND } from '../lib/jobKinds';
+import { racePoint } from '../lib/racePoints';
 import type { Db, Exec, UserCtx } from './base';
 import { ownedBy } from './base';
 import { getOpportunity } from './opportunities';
 import { countWhere, orderBy, sortColumns, type ListOpts, type Page } from './list';
 import { startOfUtcDay } from './taskRuns';
-import { runCount, withTransaction } from '../db/client';
+import { lockScope, runCount, withTransaction } from '../db/client';
 
 export type DiscoverySourceRow = typeof discoverySources.$inferSelect;
 export type DiscoveryRunRow = typeof discoveryRuns.$inferSelect;
@@ -728,64 +729,86 @@ export async function findChainTarget(
  * action here rather than implicit in another create, since discovery ingestion runs on its
  * own schedule with no "the user is creating something new" moment to hang it on.
  *
- * Only ever happens on this call: passive discovery polling never releases a key by itself, so
- * every already-decided result keeps suppressing exactly as before until a user acts on it.
- * Accepted results stay blocked unless their opportunity has itself been dismissed from the
- * pipeline (mirroring `hasLiveDuplicate`'s "dismissed means not live" rule) — while that
- * opportunity is still active, the key SHOULD keep blocking reposts of a job already tracked.
+ * Only ever happens on this call: passive discovery polling never releases a key by itself, and
+ * neither does deleting an opportunity (which says it is not wanted here, not that its job is wanted
+ * again: tl on https://github.com/bgoleno/opportun/issues/1008), so every already-decided result keeps
+ * suppressing exactly as before until a user acts on it. Accepted results stay blocked unless their
+ * opportunity has itself been dismissed from the pipeline, or deleted (mirroring `hasLiveDuplicate`'s
+ * "dismissed means not live" rule): while that opportunity is still there, the key SHOULD keep
+ * blocking reposts of a job already tracked.
+ *
+ * Decided and written under the user's lock, as accept, dismiss and undo are (routes/discovery.ts
+ * decidePending), and only where the row still is the one decided from: a writer without that lock
+ * (the dedupe-key repair, the purge) may have been at it.
  */
 export async function unsuppressResult(
   db: Db,
   ctx: UserCtx,
   id: string,
 ): Promise<DiscoveryResultView> {
-  const result = await getResult(db, ctx, id);
-  if (result.disposition === 'pending') {
-    // Its dismissal was undone (#927).
-    throw new HttpError(
-      409,
-      'already_pending',
-      'This result is back in the review queue, so there is nothing to unsuppress. Decide on it there.',
-      undefined,
-      { userFacing: true },
-    );
-  }
-  if (result.disposition === 'accepted') {
-    if (result.opportunityId === null) {
+  return await withTransaction(db, async (tx) => {
+    await lockScope(tx, `user:${ctx.userId}`);
+    const result = await getResult(tx, ctx, id);
+    await racePoint('discovery.unsuppress.locked');
+    if (result.disposition === 'pending') {
+      // Its dismissal was undone (#927).
       throw new HttpError(
         409,
-        'no_linked_opportunity',
-        "This result's opportunity was deleted, so it cannot be unsuppressed. If the job comes up again, add it with New opportunity in the pipeline.",
+        'already_pending',
+        'This result is back in the review queue, so there is nothing to unsuppress. Decide on it there.',
         undefined,
         { userFacing: true },
       );
     }
-    const opp = await getOpportunity(db, ctx, result.opportunityId);
-    if (opp.stage !== 'dismissed') {
+    // An accepted one with no opportunity had it deleted.
+    if (result.disposition === 'accepted' && result.opportunityId !== null) {
+      const opp = await getOpportunity(tx, ctx, result.opportunityId);
+      if (opp.stage !== 'dismissed') {
+        throw new HttpError(
+          409,
+          'opportunity_still_active',
+          "This job's opportunity is still in your pipeline. Dismiss the opportunity first, then unsuppress this result.",
+          undefined,
+          { userFacing: true },
+        );
+      }
+    }
+    if (result.dedupeKey === null) {
       throw new HttpError(
         409,
-        'opportunity_still_active',
-        "This job's opportunity is still in your pipeline. Dismiss the opportunity first, then unsuppress this result.",
+        'not_suppressing',
+        'This result is already unsuppressed. There is nothing more to do.',
         undefined,
         { userFacing: true },
       );
     }
-  }
-  if (result.dedupeKey === null) {
-    throw new HttpError(
-      409,
-      'not_suppressing',
-      'This result is already unsuppressed. There is nothing more to do.',
-      undefined,
-      { userFacing: true },
-    );
-  }
-  await db
-    .update(discoveryResults)
-    .set({ dedupeKey: null, updatedAt: Date.now() })
-    .where(ownedResult(ctx, id))
-    .run();
-  return await getResult(db, ctx, id);
+    const written = await tx
+      .update(discoveryResults)
+      .set({ dedupeKey: null, updatedAt: Date.now() })
+      .where(
+        and(
+          ownedResult(ctx, id),
+          eq(discoveryResults.disposition, result.disposition),
+          eq(discoveryResults.dedupeKey, result.dedupeKey),
+          result.opportunityId === null
+            ? isNull(discoveryResults.opportunityId)
+            : eq(discoveryResults.opportunityId, result.opportunityId),
+        ),
+      )
+      .returning({ id: discoveryResults.id });
+    // Read again for the answer, and first for a row that is gone: not found.
+    const now = await getResult(tx, ctx, id);
+    if (written.length === 0) {
+      throw new HttpError(
+        409,
+        'result_changed',
+        'This result changed while it was being unsuppressed, so nothing was changed. Try again.',
+        undefined,
+        { userFacing: true },
+      );
+    }
+    return now;
+  });
 }
 
 /** The column as it is stored, on either engine: JSON text on SQLite, jsonb on Postgres. */
