@@ -3,6 +3,7 @@
 // confident match makes the employer's copy authoritative and keeps the capture's extras; any
 // other outcome changes nothing and raises a flag the user can act on.
 import type { NormalizedPosting } from '@opportun/core';
+import { eq } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { runStructured } from '@opportun/ai';
 import type { FastifyInstance } from 'fastify';
@@ -15,6 +16,7 @@ import type { BoardLookup } from '../src/lib/postingSearch';
 import type { safeFetch } from '../src/lib/safeFetch';
 import { createActivity, listActivities } from '../src/repos/activities';
 import { createCompany } from '../src/repos/companies';
+import { opportunities } from '../src/db/schema';
 import {
   createOpportunity,
   getOpportunity,
@@ -22,11 +24,12 @@ import {
   updateOpportunity,
 } from '../src/repos/opportunities';
 import type { UserCtx } from '../src/repos/base';
+import { search } from '../src/repos/search';
 import { onSlowTransaction } from '../src/db/gate';
 import { useApi } from './api';
 import { testDialect } from './db';
 import type { TestClient } from './isolation';
-import { pauseAt, settledOrWaiting } from './race';
+import { heldOpen, pauseAt, settledOrWaiting, someoneBlocked } from './race';
 
 vi.mock('@opportun/ai', async (orig) => ({
   ...(await orig<typeof import('@opportun/ai')>()),
@@ -281,6 +284,12 @@ describe('reconcilePosting', () => {
       payload: { descriptionMd: SAVED },
     });
 
+  /** The opportunities the index has the word for. */
+  const found = async (app: FastifyInstance, ctx: UserCtx, word: string) =>
+    (await search(app.db, ctx, word, { limit: 20, offset: 0 })).items
+      .filter((h) => h.entityKind === 'opportunity')
+      .map((h) => h.entityId);
+
   const reconcileNotes = async (app: FastifyInstance, ctx: UserCtx, id: string) =>
     (await listActivities(app.db, ctx, id, { limit: 50, offset: 0 })).items
       .filter((i) => i.kind === 'note')
@@ -394,12 +403,15 @@ describe('reconcilePosting', () => {
   // Parked inside the write's own transaction, after its read and before its UPDATE. On Postgres
   // the save commits meanwhile, so a check read in that transaction would be stale and only the
   // UPDATE's own WHERE sees it. On SQLite the write gate holds the save back until the check
-  // commits; it then lands on top, so the text is kept either way.
+  // commits; it then lands on top, so the text is kept either way. The check changes no link here:
+  // one that does has the row by then, below.
   it("a save that lands inside the write's transaction is kept (#856)", async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     vi.mocked(runStructured).mockResolvedValue({ passages: [] });
     const { id } = await seedCaptured(app, ctx);
+    const { postingUrl } = atsPosting();
+    await app.db.update(opportunities).set({ postingUrl }).where(eq(opportunities.id, id)).run();
     const before = await getOpportunity(app.db, ctx, id);
     onSlowTransaction(() => undefined);
     const pause = pauseAt('opportunities.update.locked');
@@ -417,6 +429,57 @@ describe('reconcilePosting', () => {
     if (testDialect === 'postgres') return await expectSkipped(app, ctx, before);
     const out = await getOpportunity(app.db, ctx, id);
     expect(Buffer.from(out.descriptionMd ?? '')).toEqual(Buffer.from(SAVED));
+  });
+
+  // A check that changes the link holds the row against an application being started (#913), and so
+  // against a save: that waits, on Postgres too, and lands on top.
+  it('a save beside a write that changes the link waits for it, and is kept', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const { id } = await seedCaptured(app, ctx);
+    onSlowTransaction(() => undefined);
+    const pause = pauseAt('opportunities.update.locked');
+
+    const check = run(app, ctx, id, boardWith([atsPosting()]));
+    await pause.reached;
+    const saving = save(a, id);
+    const blocked = await someoneBlocked(app);
+    pause.release();
+
+    const [, saved] = await Promise.all([check, saving]);
+    expect(blocked).toBe(true);
+    expect(saved.statusCode, saved.body).toBe(200);
+    const out = await getOpportunity(app.db, ctx, id);
+    expect(Buffer.from(out.descriptionMd ?? '')).toEqual(Buffer.from(SAVED));
+    expect(out).toMatchObject({
+      postingUrl: atsPosting().postingUrl,
+      descriptionIsUserWritten: true,
+    });
+    // The index has the text that is kept, and not the check's.
+    expect(await found(app, ctx, 'exactly')).toEqual([id]);
+    expect(await found(app, ctx, 'telemetry')).toEqual([]);
+  });
+
+  // The other way round: the save has written the row and not committed when the check comes to it.
+  it('a save that has the row first makes the check wait, and it is left alone', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    vi.mocked(runStructured).mockResolvedValue({ passages: [] });
+    const { id } = await seedCaptured(app, ctx);
+    const before = await getOpportunity(app.db, ctx, id);
+    onSlowTransaction(() => undefined);
+    const held = heldOpen(app, (tx) =>
+      updateOpportunity(tx as never, ctx, id, { descriptionMd: SAVED }),
+    );
+    await held.reached;
+    const checking = run(app, ctx, id, boardWith([atsPosting()]));
+    const blocked = await someoneBlocked(app);
+    held.go();
+    await held.done;
+    await checking;
+    expect(blocked).toBe(true);
+    await expectSkipped(app, ctx, before);
   });
 
   // qa on #855: a forced re-derive whose confirm() left a description saved meanwhile alone must

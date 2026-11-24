@@ -355,6 +355,32 @@ export async function createSubmissionDraft(
     const created = await withTransaction(db, async (tx) => {
       // Gone since it was read above is not found (#944), as for anything added to one (#925).
       await holdOpportunity(tx, ctx, opportunityId);
+      // What this is pinned from, as it is now that no save can change it (#913): one that did since
+      // it was read above has marked no draft, as there was none. Inserted as it stands, this one
+      // would be live on a posting the opportunity has left, with nothing to say so.
+      const fresh = await tx
+        .select({
+          postingUrl: opportunities.postingUrl,
+          atsJobRef: opportunities.atsJobRef,
+          postingState: opportunities.postingState,
+        })
+        .from(opportunities)
+        .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
+        .get();
+      if (fresh === undefined) throw notFound();
+      if (
+        fresh.postingUrl !== opp.postingUrl ||
+        fresh.postingState !== opp.postingState ||
+        JSON.stringify(fresh.atsJobRef) !== JSON.stringify(opp.atsJobRef)
+      ) {
+        throw new HttpError(
+          409,
+          'posting_changed',
+          "This opportunity's posting changed while you were starting the application. Check the posting, then start again.",
+          undefined,
+          { userFacing: true },
+        );
+      }
       const [row] = await tx
         .insert(applicationSubmissions)
         .values({
@@ -784,6 +810,19 @@ export async function lockLiveAttempt(
   ctx: UserCtx,
   opportunityId: string,
 ): Promise<string | null> {
+  const live = await liveAttemptId(tx, ctx, opportunityId);
+  if (live === null) return null;
+  await lockScope(tx, `submission:${live}`);
+  // The caller passes this id to markPostingChanged (#157): the attempt marked is the one locked.
+  return live;
+}
+
+/** The opportunity's live attempt that a posting change would reach, if it has one. */
+export async function liveAttemptId(
+  tx: Exec,
+  ctx: UserCtx,
+  opportunityId: string,
+): Promise<string | null> {
   const live = await tx
     .select({ id: applicationSubmissions.id })
     .from(applicationSubmissions)
@@ -795,10 +834,7 @@ export async function lockLiveAttempt(
       ),
     )
     .get();
-  if (live === undefined) return null;
-  await lockScope(tx, `submission:${live.id}`);
-  // The caller passes this id to markPostingChanged (#157): the attempt marked is the one locked.
-  return live.id;
+  return live?.id ?? null;
 }
 
 /**
