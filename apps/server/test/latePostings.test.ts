@@ -357,23 +357,20 @@ describe.each(SITES)('the same posting on %s, captured before its alert', (...si
     await expectDuplicate(app, a, alertOf(site, THERE, { title: 'Infrastructure' }));
   });
 
-  // Not captured: an accepted lead of another source, whose id is the same.
-  it('accepted from its own alert, then drifted: that source’s externalId is what finds it', async () => {
-    const { app, a, b } = await boot();
-    const own = await arrive(app, a, [alertOf(site, HERE)]);
+  // Only a capture says it: an accepted result of another source does not, even with the id as a
+  // capture stores it.
+  it('accepted from another source with the same id, its title drifted: a card, as today', async () => {
+    const { app, a } = await boot();
+    const id = `${site[0]}:${site[1]}`;
+    const own = await arrive(app, a, [alertOf(site, HERE, { externalId: id })], 'mcp');
     const accepted = await a.request({
       method: 'POST',
       url: `/api/v1/discovery/results/${own.inserted[0]!.id}/accept`,
       payload: {},
     });
     expect(accepted.statusCode, accepted.body).toBe(200);
-    // Through another source no capture says it, so it is a card, as today.
-    const drifted = alertOf(site, THERE, {
-      title: 'Infrastructure',
-      externalId: `${site[0]}:${site[1]}`,
-    });
-    expect((await arrive(app, a, [drifted], 'mcp')).stats).toMatchObject({ inserted: 1 });
-    expect(await pendingOf(app, b)).toEqual([]);
+    const drifted = alertOf(site, THERE, { title: 'Infrastructure' });
+    expect((await arrive(app, a, [drifted])).stats).toMatchObject({ inserted: 1, duplicates: 0 });
   });
 
   it('another id of a role with another title: a card', async () => {
@@ -564,6 +561,43 @@ describe('a card already there', () => {
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json().opportunityId).not.toBe(id);
     expect(await opportunitiesOf(app, a)).toHaveLength(2);
+  });
+});
+
+describe('a role renamed since', () => {
+  const rename = (app: FastifyInstance, id: string) =>
+    app.db
+      .update(opportunities)
+      .set({ title: 'What I call it', dedupeKey: dedupeKey(JOB.company, 'What I call it', HERE) })
+      .where(eq(opportunities.id, id))
+      .run();
+
+  it.each(['captured', 'accepted'] as const)(
+    'is found by the result %s into it',
+    async (origin) => {
+      const { app, a } = await boot();
+      const id = await ORIGINS[origin](app, a);
+      await rename(app, id);
+      expect((await arrive(app, a, [another(LINKEDIN, THERE)])).stats).toMatchObject({
+        linked: 1,
+        inserted: 0,
+      });
+      const linked = (await resultsOf(app, a)).filter((r) => r.rankSkipReason === 'linked');
+      expect(linked.map((r) => r.opportunityId)).toEqual([id]);
+    },
+  );
+
+  it('made by hand, nothing has the old title: a card', async () => {
+    const { app, a } = await boot();
+    await rename(app, await ORIGINS['made by hand'](app, a));
+    expect((await arrive(app, a, [another(LINKEDIN, THERE)])).stats.inserted).toBe(1);
+  });
+
+  it('and is found by its new title', async () => {
+    const { app, a } = await boot();
+    await rename(app, await ORIGINS.accepted(app, a));
+    const posting = another(LINKEDIN, THERE, { title: 'What I call it' });
+    expect((await arrive(app, a, [posting])).stats.linked).toBe(1);
   });
 });
 
