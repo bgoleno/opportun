@@ -32,6 +32,7 @@ import {
   BOARD_GAP_CLASS,
   BOARD_SCROLLER_ATTR,
   boardKeyboardCoordinates,
+  bringIntoView,
   keyboardFirst,
   type KeyboardStep,
 } from './boardKeyboard';
@@ -70,6 +71,12 @@ function Column(props: {
   useLayoutEffect(() => {
     if (props.toggled.current !== stage) return;
     props.toggled.current = null;
+    // The end columns' own area may have to scroll to show the column, and on a phone, where the
+    // column is wider than the area, to show its control and the ring around it (#902).
+    if (isTerminal(stage)) {
+      bringIntoView(toggleRef.current?.closest('section'));
+      toggleRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    }
     toggleRef.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collapsed]);
@@ -117,7 +124,7 @@ function Column(props: {
                   aria-label={`Collapse ${name}`}
                   aria-expanded="true"
                   onClick={toggle}
-                  className="cursor-pointer rounded-sm p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  className="scroll-mx-2 cursor-pointer rounded-sm p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ChevronsLeftRight className="size-4" aria-hidden="true" />
                 </button>
@@ -305,9 +312,13 @@ export function Kanban(props: {
     </Column>
   );
 
-  // Closed and dismissed sit outside the scrolling area so they are always drop targets.
+  // Closed and dismissed sit outside the chain's scrolling area, so one of them is always on screen
+  // as a drop target. Both expanded can be wider than a narrow board (#902): the chain then keeps a
+  // whole column (or, on a phone, what two rails would leave it), and they scroll in an area of their
+  // own beside it. With room for all, as with either one a rail, nothing gives way.
   const chain = props.columns.filter((c) => !isTerminal(c.stage));
   const terminal = props.columns.filter((c) => isTerminal(c.stage));
+  const bothExpanded = terminal.length > 1 && terminal.every((c) => !c.collapsed);
   order.current = [...chain, ...terminal].map((c) => c.stage);
   columnOfId.current = (id) => {
     const stage = OPPORTUNITY_STAGES.find((s) => s === id);
@@ -347,14 +358,31 @@ export function Kanban(props: {
       <div className={cn('flex items-start', BOARD_GAP_CLASS)}>
         {chain.length > 0 ? (
           <div
-            className={cn('flex min-w-0 flex-1 items-start overflow-x-auto pb-4', BOARD_GAP_CLASS)}
+            className={cn(
+              'flex min-w-0 flex-1 items-start overflow-x-auto pb-4',
+              BOARD_GAP_CLASS,
+              // eslint-disable-next-line opportun/no-arbitrary-width -- a column's width (w-72), or what two rails and their gaps (8.5rem) leave of a phone's: no token says either
+              bothExpanded && 'min-w-[min(18rem,calc(100%-8.5rem))]',
+            )}
             {...{ [BOARD_SCROLLER_ATTR]: '' }}
           >
             {chain.map(renderColumn)}
           </div>
         ) : null}
         {terminal.length > 0 ? (
-          <div className={cn('flex shrink-0 items-start pb-4', BOARD_GAP_CLASS)}>
+          <div
+            className={cn(
+              'flex items-start pb-4',
+              BOARD_GAP_CLASS,
+              // Each fits the area, less the gap and a sliver of the other one (the sign that there
+              // is one, where scrollbars do not show), down to 10rem.
+              bothExpanded
+                ? // eslint-disable-next-line opportun/no-arbitrary-width -- the area's width less the gap and the sliver (1.25rem): no token says it
+                  'min-w-0 overflow-x-auto *:max-w-[calc(100%-1.25rem)] *:min-w-40'
+                : 'shrink-0',
+            )}
+            {...{ [BOARD_SCROLLER_ATTR]: '' }}
+          >
             {terminal.map(renderColumn)}
           </div>
         ) : null}
