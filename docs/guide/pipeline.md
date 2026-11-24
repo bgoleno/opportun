@@ -102,7 +102,10 @@ own, and its timeline gets an entry, **Kept apart from a different LinkedIn post
 the other job and, if it has a posting link, linking to it. An opportunity whose title is at another
 level (Staff against Principal) is another job too, whatever it came from: the entry is then **Kept apart
 from a job at another level**. The other locations of the Discovery
-card a capture completes are not kept apart: they are that opportunity's. An opportunity that came from
+card a capture completes are not kept apart: they are that opportunity's. Nor does a posting of another
+location that is already on an opportunity (one Discovery linked, say) keep a capture of the role apart
+from it. If a job at another level is the only one in the way, a captured Discovery card still goes to an open
+opportunity of its own title in another city. An opportunity that came from
 none of these, such as one you created by hand with the same title, is filled in as usual, even if you
 gave it a posting link. A dismissed opportunity that a capture fills in comes back to Interested. If
 the opportunity a capture is kept apart from is dismissed, the capture still gets its own
@@ -139,7 +142,10 @@ five tabs.
 
 ### Timeline
 
-A running log: stage changes, attached postings, referral asks, and entries you add yourself
+A running log: stage changes, attached postings (**Also posted via ...**, with the location and the
+link: one you attached, or
+[another location Discovery found](discovery.md#a-job-already-in-your-pipeline)), referral asks, and
+entries you add yourself
 (Note, Meeting, Interview or Link, each with a title, details in Markdown and, for meetings
 and interviews, participants and a time). The **Next steps** panel holds dated to-dos; ones
 due within 7 days show on the dashboard.

@@ -131,15 +131,30 @@ const SPELLED_OUT: ReadonlyMap<string, string> = new Map([
  * only, never stored.
  */
 export function cardKey(storedKey: string, company: string, title: string): string {
+  return [
+    dedupeGroupKey(storedKey),
+    orFallback(normalize(company), company),
+    wholeTitle(title),
+  ].join('|');
+}
+
+/** A title as cardKey compares it: normalized, levels spelled out, none stripped. */
+function wholeTitle(title: string): string {
   const whole = normalize(title)
     .split(' ')
     .map((word) => SPELLED_OUT.get(word) ?? word)
     .join(' ');
-  return [
-    dedupeGroupKey(storedKey),
-    orFallback(normalize(company), company),
-    orFallback(whole, title),
-  ].join('|');
+  return orFallback(whole, title);
+}
+
+/**
+ * Whether two titles are one, level and all, as cardKey reads them. A stored key strips the level at
+ * either end, so by key alone "Senior X" and "Principal X" would be one job: they are two (the owner,
+ * on https://github.com/bgoleno/opportun/issues/967). The titles only: a company renamed since does
+ * not make it another job.
+ */
+export function sameTitle(a: string, b: string): boolean {
+  return wholeTitle(a) === wholeTitle(b);
 }
 
 /**

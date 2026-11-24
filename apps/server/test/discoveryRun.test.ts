@@ -194,6 +194,7 @@ describe('discovery.run job', () => {
       invalid: 0,
       suppressed: 0,
       filtered: 0,
+      linked: 0,
     });
     expect(run!.finishedAt).not.toBeNull();
     expect(run!.error).toBeNull();
@@ -212,6 +213,7 @@ describe('discovery.run job', () => {
       invalid: 0,
       suppressed: 0,
       filtered: 0,
+      linked: 0,
     });
   });
 
@@ -239,6 +241,7 @@ describe('discovery.run job', () => {
       invalid: 0,
       suppressed: 2,
       filtered: 0,
+      linked: 0,
     });
     const feedback = await app.db
       .select()
@@ -307,7 +310,7 @@ describe('discovery.run job', () => {
     const ctx = ctxOf(a);
     await createOpportunity(app.db, ctx, {
       companyName: 'Initech',
-      title: 'Senior Staff Platform Engineer',
+      title: 'Staff, Platform Engineer',
       location: 'Austin, TX',
       sourceKind: 'manual',
     });
@@ -372,9 +375,7 @@ describe('discovery.run job', () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     registerSource(fakeSource('ats_lever', { postings: [P1] }));
-    registerSource(
-      fakeSource('mcp', { postings: [{ ...P1, title: 'Sr. Staff Platform Engineer' }] }),
-    );
+    registerSource(fakeSource('mcp', { postings: [{ ...P1, title: 'Staff, Platform Engineer' }] }));
     const lever = await createSource(app.db, ctx, {
       kind: 'ats_lever',
       config: { org: 'initech' },

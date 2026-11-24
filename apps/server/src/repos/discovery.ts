@@ -6,6 +6,7 @@ import {
   cardKey,
   dedupeGroupKey,
   newId,
+  OPPORTUNITY_STAGES,
   type Disposition,
   type NormalizedPosting,
   type RankSkipReason,
@@ -623,24 +624,31 @@ export async function setDisposition(
   return await getResult(exec, ctx, id);
 }
 
-/** Stage an already-accepted role is still eligible to receive another member of its own
- *  location group (issue #226): a role already applied to or further along may be getting a
- *  genuinely new posting, not a location variant, so it is excluded rather than silently
- *  extended. The owner has the final word on exactly where this line sits; see #226. */
-const CHAINABLE_STAGES = ['discovered', 'interested'] as const;
+/**
+ * The stages at which a role takes another posting of its card (the owner's decision on
+ * https://github.com/bgoleno/opportun/issues/967, which ended #226's line at Applied): every one but
+ * closed and dismissed, after which a posting is a new opening.
+ */
+const OPEN_STAGES = OPPORTUNITY_STAGES.filter((s) => s !== 'closed' && s !== 'dismissed');
 
 /**
- * The opportunity an already-accepted result of the same card (cardKey, #968) produced, if one
- * both exists and is still eligible (issue #226); the oldest, if several. Scoped to THIS user's own
- * data, the same as every other lookup in this file. Takes the result's stored key and its posting.
+ * The open opportunity of the card (cardKey, #968) this posting is of, if there is one; the oldest,
+ * if several: one whose own company and title make that card, or one a result of that card was
+ * accepted into (issue #226). When one of the first holds the posting's very key, none is found by its
+ * own company and title: that is `duplicate`, at ingest and at Accept, which asks (tl on
+ * https://github.com/bgoleno/opportun/issues/967). An opportunity made by Create anyway has no stored
+ * key, so only its result finds it. Scoped to THIS user's own data, the same as every other lookup in
+ * this file.
+ * Takes the posting's stored key and the posting.
  *
- * The scan is the stored key's company and title (dedupeGroupKey, issue #209), and cardKey then
- * decides among what it finds, the whole title with it: no limit before that, or an opportunity of
+ * Both scans are the stored key's company and title (dedupeGroupKey, issue #209), and cardKey then
+ * decides among what they find, the whole title with it: no limit before that, or an opportunity of
  * another level would hide this one's. The prefix is already lowercased by dedupeKey's own
  * normalize(): matched as a case-sensitive LIKE *prefix* (db/dialect.ts's
- * likePrefix, the prefix and `|` plus anything), not a contains pattern, so it is a range scan on
- * discovery_results_user_dedupe_idx(user_id, dedupe_key), not a table scan or a full scan
- * defeated by SQLite's case-insensitive LIKE (measured with EXPLAIN QUERY PLAN; see #226).
+ * likePrefix, the prefix and `|` plus anything), not a contains pattern, so each is a range scan, on
+ * discovery_results_user_dedupe_idx and opportunities_user_dedupe_uq (user_id, dedupe_key), not a
+ * table scan or a full scan defeated by SQLite's case-insensitive LIKE (measured with EXPLAIN QUERY
+ * PLAN; see #226).
  */
 export async function findChainTarget(
   exec: Exec,
@@ -649,9 +657,29 @@ export async function findChainTarget(
   posting: NormalizedPosting,
 ): Promise<string | undefined> {
   const card = cardKey(storedKey, posting.company, posting.title);
-  const rows = await exec
+  const prefix = `${dedupeGroupKey(storedKey)}|`;
+  const own = await exec
     .select({
-      opportunityId: discoveryResults.opportunityId,
+      id: opportunities.id,
+      createdAt: opportunities.createdAt,
+      dedupeKey: opportunities.dedupeKey,
+      company: companies.name,
+      title: opportunities.title,
+    })
+    .from(opportunities)
+    .innerJoin(companies, eq(companies.id, opportunities.companyId))
+    .where(
+      and(
+        ownedBy(opportunities.userId, ctx),
+        likePrefix(opportunities.dedupeKey, prefix),
+        inArray(opportunities.stage, OPEN_STAGES),
+      ),
+    )
+    .all();
+  const accepted = await exec
+    .select({
+      id: opportunities.id,
+      createdAt: opportunities.createdAt,
       dedupeKey: discoveryResults.dedupeKey,
       // Only what cardKey compares, not the posting: a description can be 50,000 characters, for
       // each row found, under the user's lock (sec on #976).
@@ -663,20 +691,31 @@ export async function findChainTarget(
     .where(
       and(
         ownedBy(discoveryResults.userId, ctx),
-        likePrefix(discoveryResults.dedupeKey, `${dedupeGroupKey(storedKey)}|`),
-        inArray(opportunities.stage, CHAINABLE_STAGES),
+        likePrefix(discoveryResults.dedupeKey, prefix),
+        inArray(opportunities.stage, OPEN_STAGES),
       ),
     )
-    .orderBy(asc(opportunities.createdAt))
     .all();
-  const row = rows.find(
-    ({ dedupeKey, company, title }) =>
-      dedupeKey !== null &&
-      company !== null &&
-      title !== null &&
-      cardKey(dedupeKey, company, title) === card,
+  const ofCard = <
+    T extends { dedupeKey: string | null; company: string | null; title: string | null },
+  >(
+    rows: T[],
+  ): T[] =>
+    rows.filter(
+      ({ dedupeKey, company, title }) =>
+        dedupeKey !== null &&
+        company !== null &&
+        title !== null &&
+        cardKey(dedupeKey, company, title) === card,
+    );
+  const byOwn = ofCard(own);
+  // The holder of the posting's own key is the question Accept asks (createOpportunity's duplicate);
+  // one at another level is another job, and no question about this one.
+  const asked = byOwn.some(({ dedupeKey }) => dedupeKey === storedKey);
+  const [oldest] = [...(asked ? [] : byOwn), ...ofCard(accepted)].sort(
+    (x, y) => x.createdAt - y.createdAt || (x.id < y.id ? -1 : 1),
   );
-  return row?.opportunityId ?? undefined;
+  return oldest?.id;
 }
 
 /**
@@ -834,7 +873,14 @@ export async function prefilterRecall(exec: Exec, ctx: UserCtx): Promise<Prefilt
     .from(discoveryResults)
     .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
     .innerJoin(discoverySources, eq(discoverySources.id, discoveryRuns.sourceId))
-    .where(and(ownedBy(discoveryResults.userId, ctx), eq(discoveryResults.disposition, 'accepted')))
+    .where(
+      and(
+        ownedBy(discoveryResults.userId, ctx),
+        eq(discoveryResults.disposition, 'accepted'),
+        // Linked by ingest, accepted by nobody (#971).
+        or(isNull(discoveryResults.rankSkipReason), ne(discoveryResults.rankSkipReason, 'linked')),
+      ),
+    )
     .all();
   const targets = await exec
     .select()

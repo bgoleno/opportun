@@ -304,6 +304,7 @@ export const ATTRIBUTES = {
   'opportun.count.invalid': int,
   'opportun.count.suppressed': int,
   'opportun.count.filtered': int,
+  'opportun.count.linked': int,
   'opportun.communication.id': { kind: 'id' },
   'opportun.company.id': { kind: 'id' },
   'opportun.source.id': { kind: 'id' },
@@ -768,6 +769,7 @@ const SYSTEM_EVENTS = {
       'opportun.count.invalid',
       'opportun.count.suppressed',
       'opportun.count.filtered',
+      'opportun.count.linked',
     ],
   },
 } as const satisfies Record<string, EventDef>;

@@ -158,6 +158,7 @@ export async function runDiscoverySource(
     invalid: 0,
     suppressed: 0,
     filtered: 0,
+    linked: 0,
   };
   const inserted: DiscoveryResultView[] = [];
   const { config, cursor } = splitConfig(source);
@@ -251,6 +252,7 @@ function runFinished(ctx: UserCtx, kind: string, outcome: 'done' | 'error', stat
       'opportun.count.invalid': stats.invalid,
       'opportun.count.suppressed': stats.suppressed,
       'opportun.count.filtered': stats.filtered,
+      'opportun.count.linked': stats.linked,
     },
     { userId: ctx.userId },
   );
