@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { inspect } from 'node:util';
 import { parseDbDialect, type DbDialect } from './db/dialectName';
 import { readBuildInfo, type BuildInfo } from './lib/buildInfo';
+import { fileSettingProblem } from './lib/fileSetting';
 import { NO_PEPPERS, pepperSet, type PepperSet } from './lib/pepperSet';
 import { readOperatorFile } from './lib/storage';
 
@@ -175,11 +176,11 @@ export class ConfigError extends Error {
   override name = 'ConfigError';
 }
 
-function parseMasterKey(hex: string, source: string): Buffer {
+function parseMasterKey(hex: string, says: string): Buffer {
   const trimmed = hex.trim();
   if (!MASTER_KEY_HEX.test(trimmed)) {
     throw new ConfigError(
-      `${source} must be 32 bytes encoded as 64 hex characters (generate one with: openssl rand -hex 32)`,
+      `${says} 32 bytes encoded as 64 hex characters (generate one with: openssl rand -hex 32)`,
     );
   }
   return Buffer.from(trimmed, 'hex');
@@ -189,7 +190,7 @@ function parseMasterKey(hex: string, source: string): Buffer {
 export function loadMasterKey(env: NodeJS.ProcessEnv): Buffer {
   const inline = env.OPPORTUN_MASTER_KEY;
   if (inline !== undefined && inline !== '') {
-    return parseMasterKey(inline, 'OPPORTUN_MASTER_KEY');
+    return parseMasterKey(inline, 'OPPORTUN_MASTER_KEY must be');
   }
   const file = env.OPPORTUN_MASTER_KEY_FILE;
   if (file !== undefined && file !== '') {
@@ -197,11 +198,9 @@ export function loadMasterKey(env: NodeJS.ProcessEnv): Buffer {
     try {
       contents = readOperatorFile(resolve(file));
     } catch (err) {
-      throw new ConfigError(
-        `OPPORTUN_MASTER_KEY_FILE could not be read (${file}): ${(err as Error).message}`,
-      );
+      throw new ConfigError(fileSettingProblem('OPPORTUN_MASTER_KEY_FILE', 'the master key', err));
     }
-    return parseMasterKey(contents, `OPPORTUN_MASTER_KEY_FILE (${file})`);
+    return parseMasterKey(contents, 'OPPORTUN_MASTER_KEY_FILE must hold');
   }
   throw new ConfigError(
     'Missing OPPORTUN_MASTER_KEY: set OPPORTUN_MASTER_KEY (64 hex characters) or OPPORTUN_MASTER_KEY_FILE (path to a file containing it)',
@@ -219,7 +218,7 @@ function loadBaseUrl(env: NodeJS.ProcessEnv): string {
   try {
     url = new URL(raw);
   } catch {
-    throw new ConfigError(`OPPORTUN_BASE_URL is not a valid URL: ${raw}`);
+    throw new ConfigError('OPPORTUN_BASE_URL is not a valid URL');
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     throw new ConfigError('OPPORTUN_BASE_URL must use http or https');
@@ -449,9 +448,7 @@ function loadDatabaseUrl(env: NodeJS.ProcessEnv): string {
     try {
       return readOperatorFile(resolve(file)).trim();
     } catch (err) {
-      throw new ConfigError(
-        `DATABASE_URL_FILE could not be read (${file}): ${(err as Error).message}`,
-      );
+      throw new ConfigError(fileSettingProblem('DATABASE_URL_FILE', 'the URL', err));
     }
   }
   throw new ConfigError(
@@ -461,9 +458,7 @@ function loadDatabaseUrl(env: NodeJS.ProcessEnv): string {
 
 function parseSsl(raw: string, source: string): DbSsl {
   if ((DB_SSL_MODES as readonly string[]).includes(raw)) return raw as DbSsl;
-  throw new ConfigError(
-    `${source} must be disable, require or verify-full, got: ${JSON.stringify(raw)}`,
-  );
+  throw new ConfigError(`${source} must be disable, require or verify-full`);
 }
 
 function loadPostgres(env: NodeJS.ProcessEnv): PostgresConfig {
