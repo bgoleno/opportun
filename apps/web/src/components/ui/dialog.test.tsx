@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
-import { useState, type SyntheticEvent } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { StrictMode, useState, type SyntheticEvent } from 'react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { browserCloses, pressEscapeOn } from '@/test/dialog';
 import { Dialog, DialogContent, DialogTitle } from './dialog';
 
@@ -101,6 +101,67 @@ describe('DialogContent', () => {
     const { onOpenChange } = renderDialog({});
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+// A parent may take the dialog out as it answers (`{asked ? <Dialog open ...> : null}`): an element
+// that goes while it is open gives the focus back to nobody (#975). jsdom has no close().
+describe('DialogContent taken out by its parent', () => {
+  const proto = HTMLDialogElement.prototype;
+  afterEach(() => {
+    Reflect.deleteProperty(proto, 'close');
+  });
+
+  function setup(open: boolean) {
+    /** One entry per close(): whether the element was still in the page. */
+    const closes: boolean[] = [];
+    proto.close = function (this: HTMLDialogElement) {
+      closes.push(this.isConnected);
+      this.removeAttribute('open');
+    };
+    function Parent({ shown }: { shown: boolean }) {
+      return shown ? (
+        <Dialog open={open} onOpenChange={() => undefined}>
+          <DialogContent>
+            <DialogTitle>Example</DialogTitle>
+          </DialogContent>
+        </Dialog>
+      ) : null;
+    }
+    const { rerender } = render(<Parent shown />);
+    expect(closes).toEqual([]);
+    rerender(<Parent shown={false} />);
+    expect(document.querySelector('dialog')).toBeNull();
+    return closes;
+  }
+
+  it('is closed once, before it leaves the page', () => {
+    expect(setup(true)).toEqual([true]);
+  });
+
+  it('is not closed when it was not open', () => {
+    expect(setup(false)).toEqual([]);
+  });
+
+  it('is open after the extra mount of StrictMode', () => {
+    proto.close = function (this: HTMLDialogElement) {
+      this.removeAttribute('open');
+    };
+    const onOpenChange = vi.fn();
+    render(
+      <StrictMode>
+        <Dialog open onOpenChange={onOpenChange}>
+          <DialogContent>
+            <DialogTitle>Example</DialogTitle>
+          </DialogContent>
+        </Dialog>
+      </StrictMode>,
+    );
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('open');
+    // The close event of the extra unmount.
+    fireEvent(dialog, new Event('close'));
+    expect(onOpenChange).not.toHaveBeenCalled();
   });
 });
 

@@ -8,6 +8,7 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -81,6 +82,16 @@ function DialogContent({
       else el.removeAttribute('open');
     }
   }, [open, nativeCloses]);
+
+  // A parent may take the dialog out as it answers. An element that goes while it is open gives the
+  // focus back to nobody, so it is closed first: in a layout effect's cleanup, since a passive one
+  // runs when the element has gone (#975).
+  useLayoutEffect(() => {
+    const el = ref.current;
+    return () => {
+      if (el !== null && el.open && typeof el.close === 'function') el.close();
+    };
+  }, []);
 
   return (
     // Caller props are spread first so they can never replace the close wiring below;
