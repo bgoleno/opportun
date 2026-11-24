@@ -455,15 +455,20 @@ posting stays as it was, matched or confirmed by you. One that changes anything 
 not yours counts as matched. A row you pick yourself is always recorded on the timeline.
 
 The description is stored as text, so it survives the posting being taken down. A description
-you wrote or edited yourself is never overwritten; one Opportun wrote, such as the page text
-from a browser capture, is replaced by the posting it was standing in for.
+you wrote or edited yourself is not overwritten unless you agree to it; one Opportun wrote, such as
+the page text from a browser capture, is replaced by the posting it was standing in for. A description
+you save while Opportun is looking the posting up, attaching it, or re-deriving from the captured
+page is kept, and you are told.
 
 An opportunity captured with the [browser extension](browser-extension.md) runs this search on
 its own, in the background. When it cannot settle the result it changes nothing and says so:
 a note on the Details tab, and a **Posting unconfirmed** mark on the opportunity's card on the
 board, so you can see it without opening anything. The note carries the button that resolves
-it. If the posting you edited yourself is the reason it stopped, the button looks the board
-copy up so you can decide whether to take it.
+it. If a description you edited yourself is the reason it stopped, the timeline says "Posting check:
+description kept", and **Review board copy** and **Find posting** ask "Replace your description?"
+before they look the board copy up: if it is found, it takes your description's place, and your edit
+can't be recovered. A posting you add by hand there asks the same. **Find posting** under Assisted
+apply never replaces it.
 
 ![The Details tab after Find posting attached a Greenhouse posting, with a Posting attached toast](images/opportunity-details-posting.png)
 

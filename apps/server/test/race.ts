@@ -89,6 +89,19 @@ export function pauseAt(point: string): Pause {
   return { reached, release: () => go(), arrived: () => count };
 }
 
+/**
+ * Runs `act` while a caller is parked at `pause`, and lets it go however that ends: a failure in
+ * `act` must not leave it parked, or the app's close waits for it instead of naming the failure.
+ */
+export async function whileParked<T>(pause: Pause, act: () => Promise<T>): Promise<T> {
+  try {
+    await pause.reached;
+    return await act();
+  } finally {
+    pause.release();
+  }
+}
+
 /** How often the held-apart oracle looks at the second caller. */
 const POLL_MS = 10;
 

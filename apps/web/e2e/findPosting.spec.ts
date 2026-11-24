@@ -347,9 +347,6 @@ test.describe('Find posting from each posting state (#859)', () => {
 });
 
 test.describe("the user's description survives the posting checks (#851, #856, #858)", () => {
-  // The background check keeps a description saved while it reads the board (#851, fixed by
-  // #855). The two tests below stay fixme until #858 lands (#863): a re-derive that waits on the
-  // board, and a board copy taken from the edited state, can still write over the user's text.
   test('saved while the background check waits on a slow board, it is kept', async ({
     page,
     playwright,
@@ -385,7 +382,7 @@ test.describe("the user's description survives the posting checks (#851, #856, #
     await expect(entries).not.toContainText("Replaced the description with the board's copy.");
   });
 
-  test.fixme('saved while a re-derive waits on a slow board, it is kept', async ({
+  test('saved while a re-derive waits on a slow board, it is kept', async ({
     page,
     playwright,
   }) => {
@@ -418,7 +415,7 @@ test.describe("the user's description survives the posting checks (#851, #856, #
     );
   });
 
-  test.fixme('from edited, replacing the description with the board copy asks first', async ({
+  test('from edited, replacing the description with the board copy asks first', async ({
     page,
     playwright,
   }) => {
@@ -448,8 +445,23 @@ test.describe("the user's description survives the posting checks (#851, #856, #
       await page.getByRole('button', { name: action }).click();
       const ask = page.getByRole('dialog');
       await expect(ask).toBeVisible();
+      await expect(ask).toContainText("your edit can't be recovered afterward");
       await ask.getByRole('button', { name: 'Cancel' }).click();
+      await expect(ask).toBeHidden();
       expect(await description(page, id)).toBe(TYPED);
     }
+    // Without that answer the server keeps it too (#858), whoever calls.
+    const paste = await page.request.post(`/api/v1/opportunities/${id}/posting`, {
+      headers: { 'x-csrf-token': await csrf(page) },
+      data: { text: 'A description pasted from somewhere else.' },
+    });
+    expect(paste.status()).toBe(409);
+    expect(await description(page, id)).toBe(TYPED);
+    // Agreed, the board's copy takes its place.
+    await page.getByRole('button', { name: 'Review board copy' }).click();
+    await page.getByRole('dialog').getByRole('button', { name: 'Find and replace' }).click();
+    await expect(page.getByText(/Build import and export services/)).toBeVisible();
+    await expect(page.getByText("Matched on the company's board.")).toBeVisible();
+    expect(await description(page, id)).not.toContain(TYPED);
   });
 });
