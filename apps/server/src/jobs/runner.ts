@@ -131,7 +131,11 @@ export interface RunOptions {
   keep?: ((job: ClaimedJob, kept: KeptWrite) => void) | undefined;
 }
 
-/** What a claimed job came to, not written yet, and what follows it (afterDead). */
+/**
+ * What a claimed job came to, not written yet, and what follows it (afterDead). In memory only, and it
+ * closes over the whole job, its payload as claimed included: at most one for each worker before claims
+ * stop, until a sweep makes it or drops it (sec on https://github.com/bgoleno/opportun/pull/992).
+ */
 interface KeptWrite {
   /** Resolves with how many rows it wrote. */
   write: (own?: SQL) => Promise<number>;
