@@ -339,6 +339,43 @@ describe.each(SITES)('the same posting on %s, captured before its alert', (...si
     await expectDuplicate(app, a, posting, 'mcp');
   });
 
+  // The capture's own result alone: its entry is written after, in a transaction of its own.
+  it('while the capture is between its opportunity and its entry', async () => {
+    const { app, a } = await boot();
+    const pause = pauseAt('captureResolve.settled');
+    const capturing = capture(app, a, site, HERE);
+    await pause.reached;
+    await expectDuplicate(app, a, alertOf(site, THERE, { title: 'Infrastructure' }));
+    pause.release();
+    await capturing;
+  });
+
+  it('with its entry deleted by the user', async () => {
+    const { app, a } = await boot();
+    await capture(app, a, site, HERE);
+    await app.db.delete(activities).where(eq(activities.userId, a.userId)).run();
+    await expectDuplicate(app, a, alertOf(site, THERE, { title: 'Infrastructure' }));
+  });
+
+  // Not captured: an accepted lead of another source, whose id is the same.
+  it('accepted from its own alert, then drifted: that source’s externalId is what finds it', async () => {
+    const { app, a, b } = await boot();
+    const own = await arrive(app, a, [alertOf(site, HERE)]);
+    const accepted = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${own.inserted[0]!.id}/accept`,
+      payload: {},
+    });
+    expect(accepted.statusCode, accepted.body).toBe(200);
+    // Through another source no capture says it, so it is a card, as today.
+    const drifted = alertOf(site, THERE, {
+      title: 'Infrastructure',
+      externalId: `${site[0]}:${site[1]}`,
+    });
+    expect((await arrive(app, a, [drifted], 'mcp')).stats).toMatchObject({ inserted: 1 });
+    expect(await pendingOf(app, b)).toEqual([]);
+  });
+
   it('another id of a role with another title: a card', async () => {
     const { app, a } = await boot();
     await capture(app, a, site, HERE);
@@ -356,17 +393,35 @@ describe.each(SITES)('the same posting on %s, captured before its alert', (...si
     expect((await arrive(app, a, [posting], 'mcp')).stats.inserted).toBe(1);
   });
 
-  it("another user's capture: a card", async () => {
+  // Found by the text of the address, refused by what it says.
+  it('a capture whose address only contains the id: a card', async () => {
+    const { app, a } = await boot();
+    await capture(app, a, site, HERE);
+    await app.db.delete(discoveryResults).run();
+    await app.db
+      .update(activities)
+      .set({ externalUrl: `https://boards.example.com/jobs/${site[1]}` })
+      .where(eq(activities.kind, 'capture'))
+      .run();
+    const posting = alertOf(site, THERE, { title: 'Infrastructure (Platform)' });
+    expect((await arrive(app, a, [posting], 'mcp')).stats.inserted).toBe(1);
+  });
+
+  it.each(['its result', 'its entry'])("another user's capture, by %s: a card", async (by) => {
     const { app, a, b } = await boot();
     await capture(app, a, site, HERE);
+    if (by === 'its result') await app.db.delete(activities).run();
+    else await app.db.delete(discoveryResults).run();
     const posting = alertOf(site, THERE, { title: 'Infrastructure (Platform)' });
     expect((await arrive(app, b, [posting])).stats.inserted).toBe(1);
   });
 
-  it('its opportunity dismissed: a card, as today', async () => {
+  it.each(['its result', 'its entry'])('its opportunity dismissed, by %s: a card', async (by) => {
     const { app, a } = await boot();
     const { opportunityId } = await capture(app, a, site, HERE);
     await move(app, opportunityId, 'dismissed');
+    if (by === 'its result') await app.db.delete(activities).run();
+    else await app.db.delete(discoveryResults).run();
     const posting = alertOf(site, THERE, { title: 'Infrastructure (Platform)' });
     expect((await arrive(app, a, [posting])).stats.inserted).toBe(1);
   });
