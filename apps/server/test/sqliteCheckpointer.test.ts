@@ -57,6 +57,78 @@ async function write(h: SqliteHandle, rows: number): Promise<void> {
   }
 }
 
+/**
+ * Another connection, on a thread of its own, that holds the checkpoint lock as SQLite holds it for any
+ * checkpoint: wal_checkpoint(RESTART) keeps it while it waits for a reader with an older snapshot (until
+ * that reader ends, or its busy timeout). FULL is the same for a reader whose snapshot is not the last.
+ * One that finds the lock taken, by the worker's own checkpoint say, is refused at once, whatever its
+ * busy timeout (busy 1, log -1), so it is tried until it is not
+ * (https://github.com/bgoleno/opportun/issues/1033).
+ */
+function holdCheckpointLock(file: string, mode: 'RESTART' | 'FULL' = 'RESTART') {
+  const worker = new Worker(
+    `const { workerData, parentPort } = require('node:worker_threads');
+     const Database = require(workerData.driver);
+     const db = new Database(workerData.file);
+     db.pragma('busy_timeout = ' + workerData.busyMs);
+     const pause = new Int32Array(new SharedArrayBuffer(4));
+     for (;;) {
+       const [r] = db.pragma('wal_checkpoint(' + workerData.mode + ')');
+       if (r.busy === 0 || r.log !== -1) break;
+       parentPort.postMessage('refused');
+       Atomics.wait(pause, 0, 0, 5);
+     }
+     db.close();`,
+    {
+      eval: true,
+      workerData: {
+        driver: createRequire(import.meta.url).resolve('better-sqlite3'),
+        file,
+        mode,
+        busyMs: PATIENCE_MS,
+      },
+    },
+  );
+  let failed: unknown;
+  worker.on('error', (err) => (failed = err));
+  let refusals = 0;
+  worker.on('message', () => (refusals += 1));
+  const ended = new Promise<void>((r) => worker.once('exit', () => r()));
+  /** Until it has the lock; the lock is asked without a checkpoint, which could take it (#1033). */
+  const held = async (): Promise<void> => {
+    const probe = new Database(file, { timeout: 0 });
+    try {
+      await until(() => {
+        if (failed !== undefined) throw failed;
+        return writersKeptOut(probe);
+      });
+    } finally {
+      probe.close();
+    }
+  };
+  return {
+    held,
+    ended,
+    refusals: () => refusals,
+    stop: async () => void (await worker.terminate()),
+  };
+}
+
+/**
+ * Whether somebody keeps writers out now. A RESTART or a FULL does from before it copies anything, once it has the
+ * checkpoint lock, until it is done. Where nothing else writes, that is what tells it is there.
+ */
+function writersKeptOut(probe: Database.Database): boolean {
+  try {
+    probe.exec('BEGIN IMMEDIATE');
+  } catch (err) {
+    if ((err as { code?: string }).code === 'SQLITE_BUSY') return true;
+    throw err;
+  }
+  probe.exec('ROLLBACK');
+  return false;
+}
+
 const shmOf = (dataDir: string) => join(dataDir, 'opportun.db-shm');
 
 /**
@@ -368,13 +440,10 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       checkpointerTuning: { maxPages: 50, maxWaitMs: 500, pollMs: 20 },
     });
     const file = join(opened.dataDir, 'opportun.db');
-    // The lock is held as SQLite holds it for any checkpoint: a second connection, on a thread of
-    // its own, runs wal_checkpoint(RESTART), which keeps the checkpoint lock while it waits for a
-    // reader with an older snapshot (here until that reader ends, or its busy timeout). While it
-    // does, the worker's own PASSIVE checkpoint gets busy with log -1, which the worker counts as
-    // held back.
+    // The lock is held by a RESTART that waits for a reader (holdCheckpointLock). While it does, the
+    // worker's own PASSIVE checkpoint gets busy with log -1, which the worker counts as held back.
     const reader = new Database(file, { readonly: true });
-    let holder: Worker | undefined;
+    let holder: ReturnType<typeof holdCheckpointLock> | undefined;
     try {
       const h = opened.handle as SqliteHandle;
       await h.checkpointer!.ready;
@@ -384,37 +453,15 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       // Frames after the reader's snapshot, below the size threshold: only the age bound calls
       // for their checkpoint, half a second on, while the lock is held.
       await write(h, 10);
-      const holding = new Promise<void>((resolve, reject) => {
-        holder = new Worker(
-          `const { workerData, parentPort } = require('node:worker_threads');
-           const Database = require(workerData.driver);
-           const db = new Database(workerData.file);
-           db.pragma('busy_timeout = 20000');
-           parentPort.postMessage('holding');
-           db.pragma('wal_checkpoint(RESTART)');
-           db.close();`,
-          {
-            eval: true,
-            workerData: { driver: createRequire(import.meta.url).resolve('better-sqlite3'), file },
-          },
-        );
-        holder.once('message', () => resolve());
-        holder.once('error', reject);
-      });
-      await holding;
-      // `holding` is sent before the lock is taken, and a busy host can stop the thread between the
-      // two: the worker's attempt would find the lock free (#948). Asked of the lock itself.
-      await until(() => {
-        const [r] = h.sqlite.pragma('wal_checkpoint(PASSIVE)') as { busy: number; log: number }[];
-        return r?.busy === 1 && r.log === -1;
-      });
+      holder = holdCheckpointLock(file);
+      await holder.held();
       const during = h.checkpointer!.checkpoints;
       // Past the age bound with the lock held: the worker's attempt did nothing, so none is counted.
       await new Promise((r) => setTimeout(r, 1_500));
       expect(h.checkpointer!.checkpoints).toBe(during);
       // Release: the reader ends, and the holder's RESTART copies what is left and finishes.
       reader.exec('COMMIT');
-      await new Promise<void>((resolve) => holder!.once('exit', () => resolve()));
+      await holder.ended;
       // A burst after the release: the worker checkpoints it once its retry delay has passed.
       const after = h.checkpointer!.checkpoints;
       await write(h, 60);
@@ -422,7 +469,56 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
     } finally {
       if (reader.inTransaction) reader.exec('COMMIT');
       reader.close();
-      await holder?.terminate();
+      await holder?.stop();
+      await opened.close();
+    }
+  });
+
+  // What the test above stands on (https://github.com/bgoleno/opportun/issues/1033): its holder met the
+  // lock taken, by the worker's checkpoint or by the test's own look at it, and ended without holding.
+  it('a holder whose first RESTART is refused at once still comes to hold the checkpoint lock', async () => {
+    const opened = await openTestDb();
+    const file = join(opened.dataDir, 'opportun.db');
+    const older = new Database(file, { readonly: true });
+    const latest = new Database(file, { readonly: true });
+    const read = (db: Database.Database) => {
+      db.exec('BEGIN');
+      db.prepare('SELECT count(*) FROM bench_383').get();
+    };
+    const holders: ReturnType<typeof holdCheckpointLock>[] = [];
+    const hold = (mode?: 'FULL') => {
+      const h = holdCheckpointLock(file, mode);
+      holders.push(h);
+      return h;
+    };
+    const probe = new Database(file, { timeout: 0 });
+    try {
+      const h = opened.handle as SqliteHandle;
+      await write(h, 1);
+      read(older);
+      await write(h, 10);
+      // Waits for the older snapshot only, so it lets go when the test says, and not by a clock.
+      const first = hold('FULL');
+      await first.held();
+      read(latest);
+      const second = hold();
+      await until(() => second.refusals() > 0);
+      older.exec('COMMIT');
+      await first.ended;
+      await second.held();
+      // And keeps it, as long as the reader it waits for is there.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(writersKeptOut(probe)).toBe(true);
+      latest.exec('COMMIT');
+      await second.ended;
+      expect(writersKeptOut(probe)).toBe(false);
+    } finally {
+      for (const db of [older, latest]) {
+        if (db.inTransaction) db.exec('COMMIT');
+        db.close();
+      }
+      probe.close();
+      for (const held of holders) await held.stop();
       await opened.close();
     }
   });
