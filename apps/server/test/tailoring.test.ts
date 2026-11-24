@@ -10,6 +10,7 @@ import { connectGoogle, fakeGoogle, type FakeGoogle } from './fakeGoogle';
 import { assertIsolated, type TestClient } from './isolation';
 import { BASE_DOC_ID, BASE_TEXT, createOpportunity, registerBase } from './resumeFixtures';
 import { exec, queryOne } from './db';
+import { PATIENCE_MS } from './patience';
 
 // The provider is always mocked: no network calls and no real keys in tests.
 vi.mock('../../../packages/ai/src/providers', async (importOriginal) => {
@@ -1012,7 +1013,7 @@ describe('the demo reset gate and the streamed reply (#618)', () => {
     expect(gate.held).toBe(1);
     finish();
     // The handler saves what it has, then gives the hold back.
-    await expect.poll(() => gate.held, { timeout: 5000 }).toBe(0);
+    await expect.poll(() => gate.held, { timeout: PATIENCE_MS }).toBe(0);
     // The aborted client's socket can stay open on the server, and app.close() would wait for
     // it (CI's Node did, for the hook's whole 30 s): close it here.
     app.server.closeAllConnections();

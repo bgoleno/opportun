@@ -18,6 +18,7 @@ import {
 import { useApi } from './api';
 import { queryOne, sqliteOnly, testDialect } from './db';
 import type { TestClient } from './isolation';
+import { PATIENCE_MS } from './patience';
 import { heldApart, pauseAt, settledOrWaiting } from './race';
 
 const boot = useApi();
@@ -68,7 +69,7 @@ async function expectKeyMatches(app: FastifyInstance, id: string) {
 
 /** Waits until a caller is blocked by another: on any lock on Postgres, at the gate on SQLite. */
 async function someoneBlocked(app: FastifyInstance): Promise<void> {
-  const deadline = performance.now() + 10_000;
+  const deadline = performance.now() + PATIENCE_MS;
   for (;;) {
     const gate = writeGateOf(app.db);
     const n =

@@ -39,6 +39,7 @@ import {
 } from '../src/repos/discoveryBudget';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { PATIENCE_MS } from './patience';
 import { holdAt } from './race';
 import { runQueuedJob } from './runQueuedJob';
 
@@ -884,7 +885,7 @@ describe('#214 criterion 3: deferred postings are ranked on the next budget day,
       await enqueueRankWaiting(app.db, ctxOf(a));
       const runner = startRunner(app.db, { services: app.jobs.services, intervalMs: 5 });
       const until = async (cond: () => Promise<boolean>) => {
-        const end = performance.now() + 5000;
+        const end = performance.now() + PATIENCE_MS;
         while (!(await cond())) {
           if (performance.now() > end) throw new Error('timed out waiting');
           await new Promise((r) => setTimeout(r, 5));
@@ -1842,7 +1843,7 @@ describe('#214 criterion 4: the limit holds', () => {
             .all();
           expect(open).toEqual([]);
         },
-        { timeout: 20_000, interval: 20 },
+        { timeout: PATIENCE_MS, interval: 20 },
       );
     } finally {
       await runner.stop();

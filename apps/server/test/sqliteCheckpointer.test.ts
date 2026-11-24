@@ -36,9 +36,10 @@ import {
 import { readOperatorBytesAt } from '../src/lib/storage';
 import { sqliteOnly } from './db';
 import { openTestDb } from './helpers';
+import { PATIENCE_MS } from './patience';
 
-const until = async (check: () => boolean, ms = 10_000): Promise<void> => {
-  const end = Date.now() + ms;
+const until = async (check: () => boolean): Promise<void> => {
+  const end = Date.now() + PATIENCE_MS;
   while (!check()) {
     if (Date.now() > end) throw new Error('timed out');
     await new Promise((r) => setTimeout(r, 10));
@@ -351,7 +352,7 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       for (let burst = 0; burst < 6; burst++) {
         const before = h.checkpointer!.checkpoints;
         await write(h, 60);
-        await until(() => h.checkpointer!.checkpoints > before, 15_000);
+        await until(() => h.checkpointer!.checkpoints > before);
       }
       expect(h.checkpointer!.checkpoints).toBeGreaterThanOrEqual(6);
     } finally {
@@ -401,6 +402,12 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
         holder.once('error', reject);
       });
       await holding;
+      // `holding` is sent before the lock is taken, and a busy host can stop the thread between the
+      // two: the worker's attempt would find the lock free (#948). Asked of the lock itself.
+      await until(() => {
+        const [r] = h.sqlite.pragma('wal_checkpoint(PASSIVE)') as { busy: number; log: number }[];
+        return r?.busy === 1 && r.log === -1;
+      });
       const during = h.checkpointer!.checkpoints;
       // Past the age bound with the lock held: the worker's attempt did nothing, so none is counted.
       await new Promise((r) => setTimeout(r, 1_500));
@@ -411,7 +418,7 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       // A burst after the release: the worker checkpoints it once its retry delay has passed.
       const after = h.checkpointer!.checkpoints;
       await write(h, 60);
-      await until(() => h.checkpointer!.checkpoints > after, 15_000);
+      await until(() => h.checkpointer!.checkpoints > after);
     } finally {
       if (reader.inTransaction) reader.exec('COMMIT');
       reader.close();
@@ -453,7 +460,7 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       const started = Date.now();
       // Small writes back to back, one per turn of the loop: a frame is waiting at every look the
       // worker takes, the one straight after a checkpoint included. They go on until 3 s have
-      // passed and 3 checkpoints have come, whichever is later (at most 15 s): a busy machine
+      // passed and 3 checkpoints have come, whichever is later (at most PATIENCE_MS): a busy machine
       // can delay a checkpoint by more than its age bound, so a fixed window can miss one
       // (tl on #393), and the bound below is measured against the time the writes took.
       let writing = true;
@@ -464,10 +471,7 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
         }
       })();
       try {
-        await until(
-          () => Date.now() - started >= 3_000 && h.checkpointer!.checkpoints >= 3,
-          15_000,
-        );
+        await until(() => Date.now() - started >= 3_000 && h.checkpointer!.checkpoints >= 3);
       } finally {
         writing = false;
         await writer;
@@ -499,11 +503,14 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       // The first attempt, however long the worker takes to make it (#716: a fixed 800 ms wait
       // here failed on a loaded runner, where the worker had not tried yet).
       await until(() => h.checkpointer!.checkpoints - before >= 1);
+      const from = Date.now();
       const first = h.checkpointer!.checkpoints;
-      // Once held back, the next attempt waits a second (RETRY_MS): over the 800 ms from the
-      // first, at most one more, not one per poll (about 40 at this 20 ms poll).
+      // Once held back, the next attempt waits a second (RETRY_MS): at most one more per second the
+      // wait took, the part seconds at its ends included, and not one per poll (about 40 at this
+      // 20 ms poll). A busy host makes the wait longer than was asked (#948).
       await new Promise((r) => setTimeout(r, 800));
-      expect(h.checkpointer!.checkpoints - first).toBeLessThanOrEqual(1);
+      const most = Math.floor((Date.now() - from) / 1_000) + 2;
+      expect(h.checkpointer!.checkpoints - first).toBeLessThanOrEqual(most);
     } finally {
       if (reader.inTransaction) reader.exec('COMMIT');
       reader.close();
@@ -672,20 +679,32 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       backgroundCheckpoint: true,
       checkpointerTuning: { pageSize: 512, pollMs: 20 },
     });
+    // Beside it, one that waits 8 s: the first to stop is the server's own. Measured against it and
+    // not the wall clock, which a busy host moves for both (#948).
+    const longer = startBackgroundCheckpointer(join(opened.dataDir, 'opportun.db'), {
+      pragmas: [],
+      pageSize: 512,
+      pollMs: 20,
+      unreadableMs: 8_000,
+      onStopped: () => undefined,
+    });
     try {
       const h = opened.handle as SqliteHandle;
-      const stop = await h.checkpointer!.stopped;
+      const stop = await Promise.race([
+        h.checkpointer!.stopped,
+        longer.stopped.then(() => 'the longer one first'),
+      ]);
+      if (typeof stop === 'string') throw new Error(stop);
       const elapsed = Date.now() - startedAt;
       expect(stop).toMatchObject({ unexpected: true });
       expect(elapsed).toBeGreaterThanOrEqual(5_000);
-      // About one poll after the limit; the margin is for a loaded machine.
-      expect(elapsed).toBeLessThan(8_000);
       const ms = /has not been readable for (\d+) ms$/.exec((stop.err as Error).message);
       expect(Number(ms?.[1])).toBeGreaterThan(5_000);
     } finally {
+      await longer.stop();
       await opened.close();
     }
-  }, 20_000);
+  });
 
   it('a header unreadable for a while and then readable again: the worker goes on, and checkpoints', async () => {
     const checkpoints: CheckpointRecord[] = [];
@@ -702,26 +721,28 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
         pageSize,
         maxPages: 50,
         pollMs: 20,
-        unreadableMs: 1_000,
+        unreadableMs: 5_000,
         onStopped: () => (stopped = true),
         onCheckpoint: (c) => checkpoints.push(c),
       });
       try {
         await cp.ready;
-        // Twice, each time for about 30 looks at a header it cannot read, with a few readable
-        // looks between: together longer than the limit, so a readable look must start it again.
+        // Twice, each time for many looks at a header it cannot read: together longer than the limit,
+        // so a readable look must start it again. Each is seconds short of the limit, and the
+        // checkpoint between them shows that the look was made: a busy host can neither stretch one
+        // past the limit nor miss the look (#948).
         for (let i = 0; i < 2; i++) {
           const restore = tearHeader(shm);
           expect(readWalIndex(shm, pageSize)).toBeUndefined();
-          await new Promise((r) => setTimeout(r, 600));
+          await new Promise((r) => setTimeout(r, 2_600));
           restore();
-          await new Promise((r) => setTimeout(r, 200));
+          expect(stopped).toBe(false);
+          const before = checkpoints.length;
+          await write(h, 100);
+          await until(() => checkpoints.length > before || stopped);
+          expect(stopped).toBe(false);
+          expect(checkpoints[before]).toMatchObject({ reason: 'size' });
         }
-        expect(stopped).toBe(false);
-        await write(h, 100);
-        await until(() => checkpoints.length > 0 || stopped);
-        expect(stopped).toBe(false);
-        expect(checkpoints[0]).toMatchObject({ reason: 'size' });
       } finally {
         await cp.stop();
       }
@@ -745,8 +766,9 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
         pragmas: [],
         pageSize,
         maxPages: 50,
-        // The first look comes a poll after ready, so the tear below lands before it.
-        pollMs: 200,
+        // The first look comes a poll after ready, so the tear below lands before it: a second, for a
+        // busy host (#948).
+        pollMs: 1_000,
         unreadableMs: 300,
         onStopped: () => undefined,
         onCheckpoint: (c) => checkpoints.push(c),
