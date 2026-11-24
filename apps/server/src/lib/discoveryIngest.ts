@@ -85,9 +85,10 @@ const isLinkedToNoneOpen = (r: {
  * Duplicates: a live (non-dismissed) opportunity with the key; any result with the key the user
  * already decided on (accepted or dismissed; not one ingest linked to a role since over,
  * isLinkedToNoneOpen), so an attached, force-accepted or merged-away posting is not re-suggested on
- * the next poll; a pending result with the key from this same source; or any earlier result from this same source with the posting's externalId (a repost
- * whose title or location drifted); or the very posting, by its id on its site, of an opportunity it
- * was captured into (#971). A pending result from another source makes it multi-posted.
+ * the next poll; a pending result with the key from this same source; or any earlier result from this
+ * same source with the posting's externalId (a repost whose title or location drifted); or the very
+ * posting, by its id on its site, of an opportunity it was captured into (#971). A pending result from
+ * another source makes it multi-posted.
  */
 async function checkDuplicate(
   exec: Exec,

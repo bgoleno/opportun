@@ -1097,6 +1097,90 @@ describe('a place linked while its role was open, posted again with a new id', (
   });
 });
 
+// tl on #995: the card that makes is captured where Accept would put it, not into the role that is over.
+describe.each([
+  ['linkedin', SITES[0] as Site, SITES[1] as Site],
+  ['indeed', SITES[1] as Site, SITES[0] as Site],
+] as const)('a capture on %s of a place linked while its role was open', (_site, mine, theirs) => {
+  const [siteId, , , freshId, freshUrl] = mine;
+  const FRESH: Site = [siteId, freshId, freshUrl, '', ''];
+  const NO_ID = { postingUrl: 'https://short.example.com/x', externalId: 'opaque-1' };
+  /** The linked posting: another site's, or one with no id that can be read. */
+  const LINKED_AS = {
+    'another site’s': another(theirs, THERE),
+    'one of no id': another(theirs, THERE, NO_ID),
+  };
+  const HOWS = Object.keys(LINKED_AS) as (keyof typeof LINKED_AS)[];
+  const CASES = HOWS.flatMap((how) =>
+    (['closed', 'dismissed'] as const).flatMap((stage) =>
+      [true, false].map((withCard) => [how, stage, withCard] as const),
+    ),
+  );
+  async function role(
+    app: FastifyInstance,
+    c: TestClient,
+    how: keyof typeof LINKED_AS,
+    stage: OpportunityStage,
+  ): Promise<string> {
+    const id = await ORIGINS['made by hand'](app, c);
+    expect((await arrive(app, c, [LINKED_AS[how]])).stats.linked).toBe(1);
+    await move(app, id, stage);
+    return id;
+  }
+
+  it.each(CASES)(
+    'linked as %s, the role %s, a card there %s: its own',
+    async (how, stage, withCard) => {
+      const { app, a } = await boot();
+      const over = await role(app, a, how, stage);
+      if (withCard) expect((await arrive(app, a, [another(mine, THERE)])).stats.inserted).toBe(1);
+      const before = (await opportunitiesOf(app, a)).find((o) => o.id === over);
+      const captured = await capture(app, a, FRESH, THERE);
+      expect(captured.createdOpportunity).toBe(true);
+      expect(captured.opportunityId).not.toBe(over);
+      const after = await opportunitiesOf(app, a);
+      expect(after.find((o) => o.id === over)).toEqual(before);
+      expect(after).toHaveLength(2);
+      expect(await pendingOf(app, a)).toEqual([]);
+    },
+  );
+
+  it.each(HOWS)('linked as %s, the role open: goes to it, as before', async (how) => {
+    const { app, a } = await boot();
+    const id = await role(app, a, how, 'applied');
+    expect((await capture(app, a, FRESH, THERE)).opportunityId).toBe(id);
+    expect(await opportunitiesOf(app, a)).toHaveLength(1);
+  });
+
+  it.each(['closed', 'dismissed'] as const)(
+    'the very posting linked, the role %s: goes to it, as before',
+    async (stage) => {
+      const { app, a } = await boot();
+      const id = await ORIGINS['made by hand'](app, a);
+      expect((await arrive(app, a, [another(mine, THERE)])).stats.linked).toBe(1);
+      await move(app, id, stage);
+      expect((await capture(app, a, FRESH, THERE)).opportunityId).toBe(id);
+    },
+  );
+
+  it.each(['closed', 'dismissed'] as const)(
+    'accepted by the user, not linked, the role %s: goes to it, as before',
+    async (stage) => {
+      const { app, a } = await boot();
+      const id = await ORIGINS['made by hand'](app, a);
+      const cardId = await card(app, a, LINKED_AS['another site’s']);
+      const res = await a.request({
+        method: 'POST',
+        url: `/api/v1/discovery/results/${cardId}/accept`,
+        payload: { attachTo: id },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      await move(app, id, stage);
+      expect((await capture(app, a, FRESH, THERE)).opportunityId).toBe(id);
+    },
+  );
+});
+
 describe('a role renamed since', () => {
   const rename = (app: FastifyInstance, id: string) =>
     app.db

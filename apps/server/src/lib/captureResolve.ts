@@ -375,7 +375,15 @@ async function findMatch(db: Exec, ctx: UserCtx, posting: NormalizedPosting): Pr
   for (const decided of accepted) {
     if (decided.opportunityId !== null) {
       const opp = await getOpportunity(db, ctx, decided.opportunityId).catch(() => null);
-      if (opp !== null) {
+      // One ingest linked, found by its key alone, names its role while that is open: after that another
+      // posting of its place is a new opening, for a capture as for Accept (#990). By its id it is the
+      // very posting.
+      const isOver =
+        decided.rankSkipReason === 'linked' &&
+        !ids.has(decided.id) &&
+        opp !== null &&
+        OVER.has(opp.stage);
+      if (opp !== null && !isOver) {
         return { opportunity: opp, keptApartFrom: null, leads, withoutId, accepted };
       }
     }
