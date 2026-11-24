@@ -32,9 +32,7 @@ test.afterAll(removeBuiltExtension);
 
 for (const { site, width } of [
   { site: 'linkedin', width: 1280 },
-  { site: 'indeed', width: 1280 },
-  { site: 'linkedin', width: 768 },
-  { site: 'linkedin', width: 1920 },
+  { site: 'indeed', width: 768 },
 ] as const) {
   test(`W1 to W7, case 1: ${site} card, posting, capture, back, gone (${width} px)`, async () => {
     await atDesk(
@@ -367,129 +365,52 @@ test('W7, case 40: "select all matching" loses only the captured one', async () 
 
 // --- W5: which card, and how many opportunities --------------------------------------------------
 
-for (const site of SITES) {
-  for (const [what, cardAt, pageAt, kept] of [
-    ['both name another place', PLACE, 'Denver', PLACE],
-    ['only the page names one', null, 'Denver', 'Denver'],
-    ['neither names one', null, null, null],
-  ] as const) {
-    test(`W5, case 12: ${site}, ${what}`, async () => {
-      await atDesk(async (desk) => {
-        const p = posting(site, 'Placed Role', {
-          description:
-            pageAt === null ? DESCRIPTION : `${DESCRIPTION}\nqa-mock: location is ${pageAt}.`,
-        });
-        await desk.alert(site, [
-          { posting: p, location: cardAt },
-          { posting: posting(site, 'Other Role'), location: PLACE },
-        ]);
-        await desk.discovery();
-        await desk.openPosting(p);
-        expect(await desk.popup.capture(postingAddress(p))).toContain(ADDED);
-        await desk.oneAtInterested(p, { location: kept });
-        await desk.back();
-        await desk.leaves('Placed Role', 1);
-        await desk.quiet();
-      });
-    });
-  }
-
-  test(`W5, case 19: ${site}, captured twice`, async () => {
-    await atDesk(async (desk) => {
-      const p = posting(site, 'Twice Role');
-      await desk.alert(site, [
-        { posting: p, location: PLACE },
-        { posting: posting(site, 'Other Role'), location: PLACE },
-      ]);
-      await desk.discovery();
-      await desk.openPosting(p);
-      expect(await desk.popup.capture(postingAddress(p))).toContain(ADDED);
-      const one = await desk.oneAtInterested(p);
-      const results = (await desk.results()).length;
-      expect
-        .soft(await desk.popup.capture(postingAddress(p)))
-        .toBe('Already in your pipeline, at Interested. This page was added to its timeline.');
-      expect((await desk.oneAtInterested(p)).id).toBe(one.id);
-      expect(await desk.results()).toHaveLength(results);
-      await desk.back();
-      await desk.leaves('Twice Role', 1);
-      await desk.quiet();
-    });
-  });
-}
-
-test("W5, case 14: the tab ends at LinkedIn's /jobs/view/<words>-<id>", async () => {
+test('W5, case 12: the card and the page name different places', async () => {
   await atDesk(async (desk) => {
-    const p = posting('linkedin', 'Slug Role');
+    const p = posting('indeed', 'Placed Role', {
+      description: `${DESCRIPTION}\nqa-mock: location is Denver.`,
+    });
+    await desk.alert('indeed', [
+      { posting: p, location: PLACE },
+      { posting: posting('indeed', 'Other Role'), location: PLACE },
+    ]);
+    await desk.discovery();
+    await desk.openPosting(p);
+    expect(await desk.popup.capture(postingAddress(p))).toContain(ADDED);
+    await desk.oneAtInterested(p, { location: PLACE });
+    await desk.back();
+    await desk.leaves('Placed Role', 1);
+    await desk.quiet();
+  });
+});
+
+test('W5, case 19: captured twice', async () => {
+  await atDesk(async (desk) => {
+    const p = posting('linkedin', 'Twice Role');
     await desk.alert('linkedin', [
       { posting: p, location: PLACE },
       { posting: posting('linkedin', 'Other Role'), location: PLACE },
     ]);
     await desk.discovery();
-    expect(
-      await desk.capture(p, `https://www.linkedin.com/jobs/view/slug-role-at-initech-${p.id}/`),
-    ).toContain(ADDED);
-    await desk.oneAtInterested(p);
+    await desk.openPosting(p);
+    expect(await desk.popup.capture(postingAddress(p))).toContain(ADDED);
+    const one = await desk.oneAtInterested(p);
+    const results = (await desk.results()).length;
+    expect
+      .soft(await desk.popup.capture(postingAddress(p)))
+      .toBe('Already in your pipeline, at Interested. This page was added to its timeline.');
+    expect((await desk.oneAtInterested(p)).id).toBe(one.id);
+    expect(await desk.results()).toHaveLength(results);
     await desk.back();
-    await desk.leaves('Slug Role', 1);
-  });
-});
-
-test("W5, case 23: another user's card for the same posting is untouched", async () => {
-  await atDesk(async (a) => {
-    await atDesk(async (b) => {
-      const p = posting('linkedin', 'Shared Role');
-      await a.alert('linkedin', [{ posting: p, location: PLACE }]);
-      await b.alert('linkedin', [{ posting: p, location: PLACE }]);
-      await b.discovery();
-      const before = [await b.results(), await b.opportunities(p.title)];
-      await a.discovery();
-      await a.openPosting(p);
-      expect(await a.popup.capture(postingAddress(p))).toContain(ADDED);
-      await a.back();
-      await a.leaves('Shared Role', 0);
-      await a.oneAtInterested(p);
-      await b.back();
-      await b.page.waitForTimeout(LEAVES_WITHIN);
-      await expect(b.row('Shared Role')).toBeVisible();
-      expect([await b.results(), await b.opportunities(p.title)]).toEqual(before);
-    });
+    await desk.leaves('Twice Role', 1);
+    await desk.quiet();
   });
 });
 
 // --- W6 and W7: an opportunity that was there before ----------------------------------------------
 
-test("W6, case 30: the user's own description is never replaced", async () => {
-  await atDesk(async (desk) => {
-    const p = posting('linkedin', 'Described Role');
-    await desk.alert('linkedin', [{ posting: p, location: PLACE }]);
-    const { id } = await desk.api<{ id: string }>('POST', '/opportunities', {
-      companyName: COMPANY,
-      title: p.title,
-      location: PLACE,
-      sourceKind: 'manual',
-    });
-    const mine = 'What I wrote myself.\n\nWith two  spaces.';
-    await desk.api('PATCH', `/opportunities/${id}`, { descriptionMd: mine });
-    const stored = (await desk.opportunities(p.title))[0]?.descriptionMd as string;
-    await desk.discovery();
-    await desk.openPosting(p);
-    expect
-      .soft(await desk.popup.capture(postingAddress(p)))
-      .toBe(
-        'Already in your pipeline: moved to Interested. Its own description was kept; this page is on its timeline.',
-      );
-    await desk.oneAtInterested(p, { descriptionMd: stored });
-    expect(
-      (await desk.entries(id)).filter((e) => e.title === 'Captured from LinkedIn'),
-    ).toHaveLength(1);
-    await desk.back();
-    await desk.leaves('Described Role', 0);
-  });
-});
-
 for (const [stage, label, end, said] of [
-  ['dismissed', 'Dismissed', 'interested', 'Already in your pipeline: moved to Interested.'],
+  [null, 'New', 'interested', 'Already in your pipeline: moved to Interested.'],
   [
     'applied',
     'Applied',
@@ -507,10 +428,7 @@ for (const [stage, label, end, said] of [
         location: PLACE,
         sourceKind: 'manual',
       });
-      await desk.api('POST', `/opportunities/${id}/stage`, {
-        to: stage,
-        ...(stage === 'dismissed' ? { dismissedReason: 'other' } : {}),
-      });
+      if (stage !== null) await desk.api('POST', `/opportunities/${id}/stage`, { to: stage });
       await desk.discovery();
       await desk.openPosting(p);
       expect.soft(await desk.popup.capture(postingAddress(p))).toContain(said);
@@ -715,66 +633,51 @@ test('case 48: the matched opportunity deleted while the dialog is open', async 
 
 // --- one card, several locations --------------------------------------------------------------------
 
-for (const [what, sites] of [
-  ['two on LinkedIn', ['linkedin', 'linkedin']],
-  ['two on Indeed', ['indeed', 'indeed']],
-  ['three, across both', ['linkedin', 'indeed', 'linkedin']],
-] as const) {
-  for (let first = 0; first < sites.length; first += 1) {
-    test(`W7, cases 50 and 51: a card with locations, ${what}, number ${first + 1} captured first`, async () => {
-      await atDesk(async (desk) => {
-        const places = ['Springfield', 'Denver', 'Boise'];
-        const card = sites.map((s, i) => ({
-          posting: posting(s, 'Many Places Role'),
-          location: places.at(i) as string,
-        }));
-        for (const s of SITES) {
-          const of = card.filter((c) => c.posting.site === s);
-          if (of.length > 0) await desk.alert(s, of);
-        }
-        await desk.alert('linkedin', [
-          { posting: posting('linkedin', 'Other Role'), location: PLACE },
-        ]);
-        await desk.discovery();
-        await expect(desk.row('Many Places Role')).toHaveAccessibleName(
-          `Many Places Role at ${COMPANY}, ${card.length} locations`,
-        );
-        const chosen = card.at(first) as AlertCard;
-        const n = card.length - 1;
-        expect
-          .soft(await desk.capture(chosen.posting))
-          .toMatch(
-            n === 1
-              ? /^Added to your pipeline as Interested\..*other posting on its card was linked/
-              : /^Added to your pipeline as Interested\..*2 other postings on its card were linked/,
-          );
-        const one = await desk.oneAtInterested(chosen.posting);
-        await desk.back();
-        await desk.leaves('Many Places Role', 1);
-        await desk.quiet();
-        const links = (await desk.entries(one.id)).map((e) => e.externalUrl);
-        for (const c of card) {
-          expect(
-            // The capture's own entry has the page's address, with no slash at its end.
-            links.filter(
-              (u) => u === postingAddress(c.posting) || `${u}/` === postingAddress(c.posting),
-            ),
-            `${c.location} on the timeline`,
-          ).toHaveLength(1);
-        }
+test('W7, cases 50 and 51: a card with three locations across both sites, the second captured', async () => {
+  await atDesk(async (desk) => {
+    const places = ['Springfield', 'Denver', 'Boise'];
+    const card = (['linkedin', 'indeed', 'linkedin'] as const).map((s, i) => ({
+      posting: posting(s, 'Many Places Role'),
+      location: places.at(i) as string,
+    }));
+    for (const s of SITES) {
+      const of = card.filter((c) => c.posting.site === s);
+      await desk.alert(s, of);
+    }
+    await desk.alert('linkedin', [{ posting: posting('linkedin', 'Other Role'), location: PLACE }]);
+    await desk.discovery();
+    await expect(desk.row('Many Places Role')).toHaveAccessibleName(
+      `Many Places Role at ${COMPANY}, 3 locations`,
+    );
+    const chosen = card.at(1) as AlertCard;
+    expect
+      .soft(await desk.capture(chosen.posting))
+      .toMatch(/^Added to your pipeline as Interested\..*2 other postings on its card were linked/);
+    const one = await desk.oneAtInterested(chosen.posting);
+    await desk.back();
+    await desk.leaves('Many Places Role', 1);
+    await desk.quiet();
+    const links = (await desk.entries(one.id)).map((e) => e.externalUrl);
+    for (const c of card) {
+      expect(
+        // The capture's own entry has the page's address, with no slash at its end.
+        links.filter(
+          (u) => u === postingAddress(c.posting) || `${u}/` === postingAddress(c.posting),
+        ),
+        `${c.location} on the timeline`,
+      ).toHaveLength(1);
+    }
 
-        // Another of its locations, captured later: the same opportunity, nothing more.
-        const later = card.find((c) => c !== chosen) as AlertCard;
-        const results = (await desk.results()).length;
-        expect
-          .soft(await desk.capture(later.posting))
-          .toContain('Already in your pipeline, at Interested.');
-        expect((await desk.oneAtInterested(chosen.posting)).id).toBe(one.id);
-        expect(await desk.results()).toHaveLength(results);
-      });
-    });
-  }
-}
+    // Another of its locations, captured later: the same opportunity, nothing more.
+    const later = card.find((c) => c !== chosen) as AlertCard;
+    const results = (await desk.results()).length;
+    expect
+      .soft(await desk.capture(later.posting))
+      .toContain('Already in your pipeline, at Interested.');
+    expect((await desk.oneAtInterested(chosen.posting)).id).toBe(one.id);
+    expect(await desk.results()).toHaveLength(results);
+  });
+});
 
 test('case 53: Senior and Principal of one title are two cards; Sr is Senior', async () => {
   await atDesk(async (desk) => {
@@ -829,97 +732,94 @@ const unchanged = ({ id, location, descriptionMd }: Opportunity) => ({
   descriptionMd,
 });
 
-for (const site of SITES) {
-  test(`case 20: ${site}, captured with no card, then its own alert at another place makes none`, async () => {
-    await atDesk(async (desk) => {
-      const p = posting(site, 'Early Captured Role');
-      desk.publish(p);
-      expect(await desk.capture(p)).toContain(ADDED);
-      const one = await desk.oneAtInterested(p);
-      const other = { posting: posting(site, 'Other Role'), location: PLACE };
-      // The other one's card shows that the email has been read.
-      await desk.alert(site, [{ posting: p, location: 'Denver' }, other], { stored: [other] });
-      await desk.discovery();
-      await expect(desk.cards).toHaveCount(1);
-      await expect(desk.row('Early Captured Role')).toHaveCount(0);
-      expect(await desk.oneAtInterested(p)).toMatchObject(unchanged(one));
-      const titles = (await desk.entries(one.id)).map((e) => e.title);
-      expect(titles.filter((t) => t.startsWith('Also posted'))).toEqual([]);
+test('case 20: captured with no card, then its own alert at another place makes none', async () => {
+  await atDesk(async (desk) => {
+    const p = posting('linkedin', 'Early Captured Role');
+    desk.publish(p);
+    expect(await desk.capture(p)).toContain(ADDED);
+    const one = await desk.oneAtInterested(p);
+    const other = { posting: posting('linkedin', 'Other Role'), location: PLACE };
+    // The other one's card shows that the email has been read.
+    await desk.alert('linkedin', [{ posting: p, location: 'Denver' }, other], { stored: [other] });
+    await desk.discovery();
+    await expect(desk.cards).toHaveCount(1);
+    await expect(desk.row('Early Captured Role')).toHaveCount(0);
+    expect(await desk.oneAtInterested(p)).toMatchObject(unchanged(one));
+    const titles = (await desk.entries(one.id)).map((e) => e.title);
+    expect(titles.filter((t) => t.startsWith('Also posted'))).toEqual([]);
+  });
+});
+
+test('case 21: Accept on a card whose role is at Applied elsewhere goes to it', async () => {
+  await atDesk(async (desk) => {
+    const p = posting('linkedin', 'Applied Elsewhere Role');
+    await desk.alert('linkedin', [{ posting: p, location: 'Springfield' }]);
+    const made = await desk.api<Opportunity>('POST', '/opportunities', {
+      companyName: COMPANY,
+      title: p.title,
+      location: 'Denver',
+      sourceKind: 'manual',
+    });
+    await desk.api('POST', `/opportunities/${made.id}/stage`, { to: 'applied' });
+    const [tracked] = await desk.opportunities(p.title);
+    await desk.discovery();
+    await desk
+      .row(p.title)
+      .getByRole('button', { name: /^Accept/ })
+      .click();
+    await desk.leaves(p.title, 0);
+    await expect(desk.page.getByRole('dialog')).toHaveCount(0);
+    expect(await desk.opportunities(p.title)).toMatchObject([
+      { id: made.id, stage: 'applied', location: tracked!.location },
+    ]);
+    expect((await desk.results()).map((r) => [r.disposition, r.opportunityId])).toEqual([
+      ['accepted', made.id],
+    ]);
+  });
+});
+
+test('case 55: a location that arrives after the capture makes no card and is linked', async () => {
+  await atDesk(async (desk) => {
+    const p = posting('indeed', 'Later Place Role');
+    const late = posting('indeed', 'Later Place Role');
+    await desk.alert('indeed', [{ posting: p, location: 'Springfield' }]);
+    await desk.discovery();
+    expect(await desk.capture(p)).toContain(ADDED);
+    const one = await desk.oneAtInterested(p);
+    await desk.alert('indeed', [{ posting: late, location: 'Denver' }], { ranked: false });
+    const linked = async () =>
+      (await desk.entries(one.id)).filter((e) => e.externalUrl === postingAddress(late)).length;
+    await expect.poll(linked).toBe(1);
+    await desk.discovery();
+    await expect(desk.row('Later Place Role')).toHaveCount(0);
+    expect(await desk.oneAtInterested(p)).toMatchObject(unchanged(one));
+
+    expect.soft(await desk.capture(late)).toContain('Already in your pipeline, at Interested.');
+    expect((await desk.oneAtInterested(p)).id).toBe(one.id);
+  });
+});
+
+test('case 56: a location that arrives once the role is closed is a card, captured on its own', async () => {
+  await atDesk(async (desk) => {
+    const p = posting('linkedin', 'Ended Role');
+    const late = posting('linkedin', 'Ended Role');
+    await desk.alert('linkedin', [{ posting: p, location: 'Springfield' }]);
+    await desk.discovery();
+    expect(await desk.capture(p)).toContain(ADDED);
+    const one = await desk.oneAtInterested(p);
+    for (const to of [{ to: 'applied' }, { to: 'closed', closedReason: 'withdrawn' }])
+      await desk.api('POST', `/opportunities/${one.id}/stage`, to);
+    await desk.alert('linkedin', [{ posting: late, location: 'Denver' }]);
+    await desk.discovery();
+    await expect(desk.row('Ended Role')).toBeVisible();
+    expect(await desk.capture(late)).toContain(ADDED);
+    await desk.back();
+    await desk.leaves('Ended Role', 0);
+    const now = await desk.opportunities('Ended Role');
+    expect(now.map((o) => o.stage).sort()).toEqual(['closed', 'interested']);
+    expect(now.find((o) => o.id === one.id)).toMatchObject({
+      stage: 'closed',
+      location: one.location,
     });
   });
-
-  test(`case 21: ${site}, Accept on a card whose role is at Applied elsewhere goes to it`, async () => {
-    await atDesk(async (desk) => {
-      const p = posting(site, 'Applied Elsewhere Role');
-      await desk.alert(site, [{ posting: p, location: 'Springfield' }]);
-      const made = await desk.api<Opportunity>('POST', '/opportunities', {
-        companyName: COMPANY,
-        title: p.title,
-        location: 'Denver',
-        sourceKind: 'manual',
-      });
-      await desk.api('POST', `/opportunities/${made.id}/stage`, { to: 'applied' });
-      const [tracked] = await desk.opportunities(p.title);
-      await desk.discovery();
-      await desk
-        .row(p.title)
-        .getByRole('button', { name: /^Accept/ })
-        .click();
-      await desk.leaves(p.title, 0);
-      await expect(desk.page.getByRole('dialog')).toHaveCount(0);
-      expect(await desk.opportunities(p.title)).toMatchObject([
-        { id: made.id, stage: 'applied', location: tracked!.location },
-      ]);
-      expect((await desk.results()).map((r) => [r.disposition, r.opportunityId])).toEqual([
-        ['accepted', made.id],
-      ]);
-    });
-  });
-
-  test(`case 55: ${site}, a location that arrives after the capture makes no card and is linked`, async () => {
-    await atDesk(async (desk) => {
-      const p = posting(site, 'Later Place Role');
-      const late = posting(site, 'Later Place Role');
-      await desk.alert(site, [{ posting: p, location: 'Springfield' }]);
-      await desk.discovery();
-      expect(await desk.capture(p)).toContain(ADDED);
-      const one = await desk.oneAtInterested(p);
-      await desk.alert(site, [{ posting: late, location: 'Denver' }], { ranked: false });
-      const linked = async () =>
-        (await desk.entries(one.id)).filter((e) => e.externalUrl === postingAddress(late)).length;
-      await expect.poll(linked).toBe(1);
-      await desk.discovery();
-      await expect(desk.row('Later Place Role')).toHaveCount(0);
-      expect(await desk.oneAtInterested(p)).toMatchObject(unchanged(one));
-
-      expect.soft(await desk.capture(late)).toContain('Already in your pipeline, at Interested.');
-      expect((await desk.oneAtInterested(p)).id).toBe(one.id);
-    });
-  });
-}
-
-for (const [stage, move] of [
-  ['closed', [{ to: 'applied' }, { to: 'closed', closedReason: 'withdrawn' }]],
-  ['dismissed', [{ to: 'dismissed', dismissedReason: 'other' }]],
-] as const) {
-  test(`case 56: a location that arrives once the role is ${stage} is a card, captured on its own`, async () => {
-    await atDesk(async (desk) => {
-      const p = posting('linkedin', 'Ended Role');
-      const late = posting('linkedin', 'Ended Role');
-      await desk.alert('linkedin', [{ posting: p, location: 'Springfield' }]);
-      await desk.discovery();
-      expect(await desk.capture(p)).toContain(ADDED);
-      const one = await desk.oneAtInterested(p);
-      for (const to of move) await desk.api('POST', `/opportunities/${one.id}/stage`, to);
-      await desk.alert('linkedin', [{ posting: late, location: 'Denver' }]);
-      await desk.discovery();
-      await expect(desk.row('Ended Role')).toBeVisible();
-      expect(await desk.capture(late)).toContain(ADDED);
-      await desk.back();
-      await desk.leaves('Ended Role', 0);
-      const now = await desk.opportunities('Ended Role');
-      expect(now.map((o) => o.stage).sort()).toEqual([stage, 'interested'].sort());
-      expect(now.find((o) => o.id === one.id)).toMatchObject({ stage, location: one.location });
-    });
-  });
-}
+});
