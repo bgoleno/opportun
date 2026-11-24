@@ -218,6 +218,8 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
         const page = new URL(site.board.pageUrl(board!));
         expect(matchesAny(page.hostname, site.pageHosts), page.href).toBe(true);
         expect(site.board.fromUrl(page)).toEqual(board);
+        // It names a board and no job.
+        expect(site.jobFromUrl(new URL(link)), link).toBeNull();
       }
     });
 
