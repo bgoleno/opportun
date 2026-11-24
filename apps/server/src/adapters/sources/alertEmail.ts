@@ -15,21 +15,20 @@ import { z } from 'zod';
 import type { Db } from '../../db/client';
 import { communications } from '../../db/schema';
 import { senderAddress } from '../../lib/mailAddress';
-import { INDEED_ALERT_SENDER, parseIndeedAlert } from '../../lib/alertParsers/indeed';
-import { LINKEDIN_ALERT_SENDER, parseLinkedInAlert } from '../../lib/alertParsers/linkedin';
 import type { Storage } from '../../lib/storage';
 import type { UserCtx } from '../../repos/base';
 import { markAlertDigest } from '../../repos/communications';
 import { ensureChannelSource, type DiscoverySourceRow } from '../../repos/discovery';
 import { readUserSetting } from '../../repos/userSettings';
 import type { Exec } from '../../db/client';
+import { SITE_MODULES } from '../../sites';
 
 export const ALERT_SENDERS_SETTING = 'alert_senders';
+/** The sites' alert mail, in SITE_MODULES' order. */
+const ALERTS = SITE_MODULES.flatMap((m) => (m.alertEmail === undefined ? [] : [m.alertEmail]));
+
 /** Sender addresses (mail only, never fetched) of the supported alert digests. */
-export const DEFAULT_ALERT_SENDERS: readonly string[] = [
-  LINKEDIN_ALERT_SENDER,
-  INDEED_ALERT_SENDER,
-];
+export const DEFAULT_ALERT_SENDERS: readonly string[] = ALERTS.flatMap((a) => a.senders);
 
 /** At most 100 lowercase addresses; shared with the settings route so validation never drifts. */
 export const SendersSchema = z.array(z.string().trim().toLowerCase().min(3).max(320)).max(100);
@@ -47,8 +46,8 @@ export async function isAlertDigest(exec: Exec, ctx: UserCtx, from: string): Pro
 
 /** Leads from a digest body: the first parser that recognizes it wins. */
 export function parseAlertDigest(text: string): NormalizedPosting[] {
-  for (const parse of [parseLinkedInAlert, parseIndeedAlert]) {
-    const leads = parse(text);
+  for (const alert of ALERTS) {
+    const leads = alert.parse(text);
     if (leads.length > 0) return leads;
   }
   return [];

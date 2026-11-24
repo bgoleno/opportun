@@ -45,6 +45,21 @@ export function hostMatchesRule(host: string, rule: HostRule): boolean {
   return 'exact' in rule ? h === normalizeHost(rule.exact) : rule.pattern.test(h);
 }
 
+/** A link's path segments, empty ones dropped. */
+export function segmentsOf(url: SiteUrl): string[] {
+  return url.pathname.split('/').filter((s) => s.length > 0);
+}
+
+/**
+ * Whether a link is on one of `rules`' hosts, its host compared as the link writes it (lowercased,
+ * a trailing dot kept): how links were read before #769. safeFetch's matching, which also drops
+ * trailing dots, is `hostMatchesRule`.
+ */
+export function linkOnHost(url: SiteUrl, rules: readonly HostRule[]): boolean {
+  const host = url.hostname.toLowerCase();
+  return rules.some((r) => ('exact' in r ? host === r.exact : r.pattern.test(host)));
+}
+
 /** How a site is reached. */
 export type RouteName = 'api' | 'mcp' | 'capture' | 'alertEmail';
 

@@ -250,7 +250,6 @@ There are three strongly connected groups at the checked commit:
   - board API URLs, in the adapters, `jobs/atsDetect.ts`, `jobs/opportunityEnrich.ts` and `lib/greenhouseEmbed.ts`;
   - API hosts, in both `lib/safeFetch.ts` and `obs/outbound.ts`;
   - the ATS kind list, in `adapters/discoverySource.ts`, `jobs/atsDetect.ts` and the web.
-- **The same constant twice in the server:** `LINKEDIN_HOST`, in `lib/captureSites.ts` and `lib/linkedinCapture.ts`.
 - **Admin checks done three ways:** `fail(reply, 403)` in `routes/auth.ts`, `throw forbidden()` in `routes/backups.ts`, and a local `requireAdmin` in `routes/oauthLogin.ts`.
 - **Resume-store dispatch repeated** in `routes/resumes.ts`, `jobs/submissionSnapshot.ts` and `lib/importer.ts`, with two names for one store (`google` and `google_doc`).
 
