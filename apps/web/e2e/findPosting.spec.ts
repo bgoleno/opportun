@@ -347,9 +347,10 @@ test.describe('Find posting from each posting state (#859)', () => {
 });
 
 test.describe("the user's description survives the posting checks (#851, #856, #858)", () => {
-  // Enable once #856 and #858 land (#859): until then a check or a re-derive that waits on the
-  // board can still write over a description the user saved meanwhile.
-  test.fixme('saved while the background check waits on a slow board, it is kept', async ({
+  // The background check keeps a description saved while it reads the board (#851, fixed by
+  // #855). The two tests below stay fixme until #858 lands (#863): a re-derive that waits on the
+  // board, and a board copy taken from the edited state, can still write over the user's text.
+  test('saved while the background check waits on a slow board, it is kept', async ({
     page,
     playwright,
   }) => {
