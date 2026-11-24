@@ -10,6 +10,7 @@ import {
   activities,
   attachments,
   communications,
+  discoveryResults,
   dismissalFeedback,
   jobs,
   nextSteps,
@@ -170,7 +171,7 @@ describe('GET /discovery/results', () => {
 });
 
 describe('POST /discovery/results/:id/accept', () => {
-  it('creates exactly one opportunity, and a re-accept is a 409 (Review Focus 3)', async () => {
+  it('creates exactly one opportunity, and a re-accept is a 409 already_decided (Review Focus 3)', async () => {
     const { app, a } = await boot();
     const target = (
       await a.request({
@@ -224,7 +225,11 @@ describe('POST /discovery/results/:id/accept', () => {
       payload: {},
     });
     expect(again.statusCode).toBe(409);
-    expect(again.json()).toEqual({ error: { code: 'duplicate', existingId: oppId } });
+    expect(again.json().error).toMatchObject({
+      code: 'already_decided',
+      disposition: 'accepted',
+      existingId: oppId,
+    });
     expect(await app.db.select().from(opportunities).all()).toHaveLength(1);
   });
 
@@ -334,6 +339,159 @@ describe('POST /discovery/results/:id/accept', () => {
   });
 });
 
+// A result decided elsewhere (a capture, another tab) is not decided again
+// (https://github.com/bgoleno/opportun/issues/968): every way to decide it answers the same 409,
+// which names its opportunity, and creates and changes nothing.
+describe('deciding a result that is already decided (#968)', () => {
+  const post = (c: TestClient, url: string, payload: Record<string, unknown> = {}) =>
+    c.request({ method: 'POST', url: `/api/v1/${url}`, payload });
+
+  /** Everything a decision can write, so "nothing changed" is the whole of it. */
+  const written = async (app: FastifyInstance) => ({
+    opportunities: await app.db.select().from(opportunities).all(),
+    results: (await app.db.select().from(discoveryResults).all()).map((r) => ({
+      id: r.id,
+      disposition: r.disposition,
+      opportunityId: r.opportunityId,
+      updatedAt: r.updatedAt,
+    })),
+    activities: await app.db.select().from(activities).all(),
+    feedback: await app.db.select().from(dismissalFeedback).all(),
+    history: await app.db.select().from(stageHistory).all(),
+  });
+
+  /** A result, and an opportunity it has nothing to do with to attach it to. */
+  async function seed(app: FastifyInstance, c: TestClient) {
+    const id = await seedResult(app, c);
+    const other = await post(c, 'opportunities', {
+      companyName: 'Globex',
+      title: 'Data Analyst',
+      sourceKind: 'manual',
+    });
+    return { id, otherId: other.json().id as string };
+  }
+
+  /** The ways to decide one result; attach names the other opportunity. */
+  const WAYS = [
+    ['accept', (id: string) => [`discovery/results/${id}/accept`, {}]],
+    [
+      'attach',
+      (id: string, other: string) => [`discovery/results/${id}/accept`, { attachTo: other }],
+    ],
+    ['create anyway', (id: string) => [`discovery/results/${id}/accept`, { force: true }]],
+    ['dismiss', (id: string) => [`discovery/results/${id}/dismiss`, { reason: 'stale' }]],
+  ] as const satisfies readonly (readonly [
+    string,
+    (id: string, other: string) => readonly [string, Record<string, unknown>],
+  ])[];
+
+  it.each(WAYS)(
+    '%s of an accepted one names its opportunity and writes nothing',
+    async (_w, way) => {
+      const { app, a } = await boot();
+      const { id, otherId } = await seed(app, a);
+      const oppId = (await post(a, `discovery/results/${id}/accept`)).json().opportunityId;
+      const before = await written(app);
+      const res = await post(a, ...way(id, otherId));
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json()).toEqual({
+        error: {
+          code: 'already_decided',
+          message: 'This result was already accepted.',
+          disposition: 'accepted',
+          existingId: oppId,
+        },
+      });
+      expect(await written(app)).toEqual(before);
+    },
+  );
+
+  it.each(WAYS)(
+    '%s of an accepted one whose opportunity is deleted names none',
+    async (_w, way) => {
+      const { app, a } = await boot();
+      const { id, otherId } = await seed(app, a);
+      const oppId = (await post(a, `discovery/results/${id}/accept`)).json().opportunityId;
+      const gone = await a.request({ method: 'DELETE', url: `/api/v1/opportunities/${oppId}` });
+      expect(gone.statusCode, gone.body).toBeLessThan(300);
+      const before = await written(app);
+      const res = await post(a, ...way(id, otherId));
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json()).toEqual({
+        error: {
+          code: 'already_decided',
+          message: 'This result was already accepted.',
+          disposition: 'accepted',
+        },
+      });
+      expect(await written(app)).toEqual(before);
+    },
+  );
+
+  it.each(WAYS)('%s of a dismissed one says so and writes nothing', async (_w, way) => {
+    const { app, a } = await boot();
+    const { id, otherId } = await seed(app, a);
+    await post(a, `discovery/results/${id}/dismiss`, { reason: 'seniority' });
+    const before = await written(app);
+    const res = await post(a, ...way(id, otherId));
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toEqual({
+      error: {
+        code: 'already_decided',
+        message: 'This result was already dismissed.',
+        disposition: 'dismissed',
+      },
+    });
+    expect(await written(app)).toEqual(before);
+  });
+
+  it('is answered before attachTo is looked at: a decided result, a deleted opportunity', async () => {
+    const { app, a } = await boot();
+    const { id, otherId } = await seed(app, a);
+    const oppId = (await post(a, `discovery/results/${id}/accept`)).json().opportunityId;
+    await a.request({ method: 'DELETE', url: `/api/v1/opportunities/${otherId}` });
+    const res = await post(a, `discovery/results/${id}/accept`, { attachTo: otherId });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json().error).toMatchObject({ code: 'already_decided', existingId: oppId });
+  });
+
+  it('bulk accept and bulk dismiss count it, and name its opportunity when it has one', async () => {
+    const { app, a } = await boot();
+    const accepted = await seedResult(app, a, { ...POSTING, title: 'One' });
+    const dismissed = await seedResult(app, a, { ...POSTING, title: 'Two' });
+    const orphan = await seedResult(app, a, { ...POSTING, title: 'Three' });
+    const oppId = (await post(a, `discovery/results/${accepted}/accept`)).json().opportunityId;
+    const gone = (await post(a, `discovery/results/${orphan}/accept`)).json().opportunityId;
+    await a.request({ method: 'DELETE', url: `/api/v1/opportunities/${gone}` });
+    await post(a, `discovery/results/${dismissed}/dismiss`, { reason: 'stale' });
+    const before = await written(app);
+    const ids = [accepted, dismissed, orphan];
+    for (const [url, extra] of [
+      ['bulk-accept', {}],
+      ['bulk-dismiss', { reason: 'not_interested' }],
+    ] as const) {
+      const res = await post(a, `discovery/results/${url}`, { ids, ...extra });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().results).toEqual([
+        { id: accepted, outcome: 'already_decided', existingId: oppId },
+        { id: dismissed, outcome: 'already_decided' },
+        { id: orphan, outcome: 'already_decided' },
+      ]);
+    }
+    expect(await written(app)).toEqual(before);
+  });
+
+  it('attaching to an opportunity deleted meanwhile is a 404 and leaves the result pending', async () => {
+    const { app, a } = await boot();
+    const { id, otherId } = await seed(app, a);
+    await a.request({ method: 'DELETE', url: `/api/v1/opportunities/${otherId}` });
+    const before = await written(app);
+    const res = await post(a, `discovery/results/${id}/accept`, { attachTo: otherId });
+    expect(res.statusCode, res.body).toBe(404);
+    expect(await written(app)).toEqual(before);
+  });
+});
+
 describe('POST /discovery/results/bulk-accept (#184)', () => {
   it('accepts each pending id into its own opportunity and reports accepted per item', async () => {
     const { app, a } = await boot();
@@ -398,7 +556,7 @@ describe('POST /discovery/results/bulk-accept (#184)', () => {
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json().results).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: accepted, outcome: 'duplicate' }),
+        expect.objectContaining({ id: accepted, outcome: 'already_decided' }),
         expect.objectContaining({ id: 'not-a-real-id', outcome: 'not_found' }),
         expect.objectContaining({ id: pending, outcome: 'accepted' }),
       ]),
@@ -543,7 +701,8 @@ describe('POST /discovery/results/bulk-accept: location-group chaining (#209)', 
     const results = res.json().results as { id: string; outcome: string; existingId?: string }[];
     const byId = new Map(results.map((r) => [r.id, r]));
     expect(byId.get('not-a-real-id')).toEqual({ id: 'not-a-real-id', outcome: 'not_found' });
-    expect(byId.get(low)?.outcome).toBe('duplicate'); // already accepted before the bulk request
+    // Accepted before the bulk request: decided, and by whom it is held (#968).
+    expect(byId.get(low)).toMatchObject({ outcome: 'already_decided', existingId: lowOppId });
     expect(byId.get(best)).toMatchObject({ outcome: 'attached', existingId: lowOppId });
     expect(byId.get(mid)).toMatchObject({ outcome: 'attached', existingId: lowOppId });
   });
@@ -585,6 +744,91 @@ describe('POST /discovery/results/bulk-accept: location-group chaining (#209)', 
       ]);
     },
   );
+});
+
+describe('levels of one title are different jobs (#968)', () => {
+  const at = (app: FastifyInstance, c: TestClient, title: string, location: string) =>
+    seedResult(app, c, { ...POSTING, title, location, externalId: `${title} ${location}` });
+  const accept = async (c: TestClient, id: string) =>
+    await c.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${id}/accept`,
+      payload: {},
+    });
+
+  it('bulk accept makes one opportunity of each, with its own locations', async () => {
+    const { app, a } = await boot();
+    const ids = [
+      await at(app, a, 'Senior Engineer', 'Austin, TX'),
+      await at(app, a, 'Principal Engineer', 'Boston, MA'),
+      await at(app, a, 'Sr. Engineer', 'Chicago, IL'),
+      await at(app, a, 'Principal Engineer', 'Denver, CO'),
+    ];
+    const res = await a.request({
+      method: 'POST',
+      url: '/api/v1/discovery/results/bulk-accept',
+      payload: { ids },
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    const rows = await app.db.select().from(discoveryResults).all();
+    const of = (i: number) => rows.find((r) => r.id === ids[i])?.opportunityId;
+    expect(of(0)).toBe(of(2));
+    expect(of(1)).toBe(of(3));
+    expect(of(0)).not.toBe(of(1));
+    expect(await app.db.select().from(opportunities).all()).toHaveLength(2);
+  });
+
+  it('an accept chains to an earlier one of its own level only', async () => {
+    const { app, a } = await boot();
+    const senior = (await accept(a, await at(app, a, 'Senior Engineer', 'Austin, TX'))).json();
+    const principal = await accept(a, await at(app, a, 'Principal Engineer', 'Boston, MA'));
+    expect(principal.statusCode, principal.body).toBe(200);
+    expect(principal.json().opportunityId).not.toBe(senior.opportunityId);
+    // The oldest opportunity of the group is the other level's: it is passed over, not the end.
+    const another = (await accept(a, await at(app, a, 'Principal Engineer', 'Denver, CO'))).json();
+    expect(another.opportunityId).toBe(principal.json().opportunityId);
+    const sr = (await accept(a, await at(app, a, 'Sr Engineer', 'Chicago, IL'))).json();
+    expect(sr.opportunityId).toBe(senior.opportunityId);
+  });
+
+  it('another level at the same place still asks: the key is the same', async () => {
+    const { app, a } = await boot();
+    const senior = (await accept(a, await at(app, a, 'Senior Engineer', 'Austin, TX'))).json();
+    const res = await accept(a, await at(app, a, 'Principal Engineer', 'Austin, TX'));
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toEqual({
+      error: { code: 'duplicate', existingId: senior.opportunityId },
+    });
+  });
+
+  it("another user's accepted role is not chained to", async () => {
+    const { app, a, b } = await boot();
+    const theirs = (await accept(b, await at(app, b, 'Senior Engineer', 'Austin, TX'))).json();
+    const mine = await accept(a, await at(app, a, 'Senior Engineer', 'Boston, MA'));
+    expect(mine.statusCode, mine.body).toBe(200);
+    expect(mine.json().opportunityId).not.toBe(theirs.opportunityId);
+  });
+
+  it('several of one level: the oldest is the one chained to', async () => {
+    const { app, a } = await boot();
+    const first = (await accept(a, await at(app, a, 'Senior Engineer', 'Austin, TX'))).json();
+    const second = (
+      await a.request({
+        method: 'POST',
+        url: `/api/v1/discovery/results/${await at(app, a, 'Senior Engineer', 'Boston, MA')}/accept`,
+        payload: { force: true },
+      })
+    ).json();
+    expect(second.opportunityId).not.toBe(first.opportunityId);
+    for (const [id, createdAt] of [
+      [first.opportunityId, 2_000],
+      [second.opportunityId, 1_000],
+    ] as const) {
+      await app.db.update(opportunities).set({ createdAt }).where(eq(opportunities.id, id)).run();
+    }
+    const third = (await accept(a, await at(app, a, 'Senior Engineer', 'Denver, CO'))).json();
+    expect(third.opportunityId).toBe(second.opportunityId);
+  });
 });
 
 describe('POST /discovery/results/:id/dismiss', () => {
@@ -750,18 +994,19 @@ describe('POST /discovery/results/bulk-undo-dismiss (#184)', () => {
       url: '/api/v1/discovery/results/bulk-dismiss',
       payload: { ids: [movedOn], reason: 'not_interested' },
     });
-    // The user accepted it after the fact (e.g. via unsuppress then accept), so it is no
-    // longer the dismissed-by-that-batch result an undo should touch.
+    // The user undid it and accepted it after the fact, so it is no longer the
+    // dismissed-by-that-batch result a second undo should touch.
     await a.request({
       method: 'POST',
-      url: `/api/v1/discovery/results/${movedOn}/unsuppress`,
-      payload: {},
+      url: '/api/v1/discovery/results/bulk-undo-dismiss',
+      payload: { ids: [movedOn] },
     });
-    await a.request({
+    const accepted = await a.request({
       method: 'POST',
       url: `/api/v1/discovery/results/${movedOn}/accept`,
       payload: {},
     });
+    expect(accepted.statusCode, accepted.body).toBe(200);
     const res = await a.request({
       method: 'POST',
       url: '/api/v1/discovery/results/bulk-undo-dismiss',

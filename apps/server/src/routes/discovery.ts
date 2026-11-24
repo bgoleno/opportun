@@ -3,7 +3,7 @@
 import { enqueue } from '../lib/jobQueue';
 import { rankAnyway, rankBelowCut } from '../lib/discoveryIngest';
 import {
-  dedupeGroupKey,
+  cardKey,
   DISCOVERY_SOURCE_KINDS,
   DISMISS_REASONS,
   DISPOSITIONS,
@@ -21,7 +21,8 @@ import { z } from 'zod';
 import { hasSource } from '../adapters/discoverySource';
 import { DISCOVERY_RUN_KIND } from '../lib/jobKinds';
 import { resumeAfterUndo } from '../jobs/discoveryRankWaiting';
-import { HttpError, duplicate } from '../lib/errors';
+import { HttpError } from '../lib/errors';
+import { racePoint } from '../lib/racePoints';
 import { createActivity } from '../repos/activities';
 import {
   createSource,
@@ -47,7 +48,7 @@ import { sourceLabel } from '../lib/sourceLabels';
 import { discoveryCostFigures } from '../repos/discoveryFigures';
 import { IdParams, listQuery, optionalText, pageOf } from './common';
 import { OpportunityView } from './opportunities';
-import { withTransaction } from '../db/client';
+import { lockScope, withTransaction, type Db, type Exec } from '../db/client';
 import type { DiscoveryResultView } from '../repos/discovery';
 import type { UserCtx } from '../repos/base';
 
@@ -179,8 +180,8 @@ type BulkOutcome = (typeof BULK_OUTCOMES)[number];
 const BulkItemResultSchema = z.object({
   id: z.string(),
   outcome: z.enum(BULK_OUTCOMES),
-  /** Present only for `duplicate` and `attached`: the opportunity this id already matches,
-   *  or was linked to. */
+  /** Present only for `duplicate`, `attached` and `already_decided`: the opportunity this id
+   *  already matches, was linked to, or was accepted into (when there still is one). */
   existingId: z.string().optional(),
   /** Present only for `error`: why, for the one item that failed. */
   message: z.string().optional(),
@@ -291,6 +292,76 @@ const CostFiguresSchema = z.object({
 /** How many the user agreed to send, having seen the count and the cost (#215). */
 const RankBelowCutBody = z.object({ count: z.number().int().min(1).max(1_000_000) });
 
+/** 409 for a result somebody already decided: here, in another tab, or by a capture. */
+function alreadyDecided(result: DiscoveryResultView): HttpError {
+  const details = {
+    disposition: result.disposition,
+    // None when it was dismissed, or when the opportunity has since been deleted.
+    ...(result.opportunityId === null ? {} : { existingId: result.opportunityId }),
+  };
+  return result.disposition === 'accepted'
+    ? new HttpError(409, 'already_decided', 'This result was already accepted.', details, {
+        userFacing: true,
+      })
+    : new HttpError(409, 'already_decided', 'This result was already dismissed.', details, {
+        userFacing: true,
+      });
+}
+
+/**
+ * Decides one pending result: the one path of accept, attach, create anyway and dismiss, single
+ * and bulk (https://github.com/bgoleno/opportun/issues/968). The user's lock first, then the read
+ * the decision is made on, then everything it writes, so a capture of the same posting, which
+ * takes that lock before it looks (lib/captureResolve.ts settleLead), either sees this decision or
+ * is seen by it. Not the ingest lock: a run holds it, and Accept should not wait for a run. Lock
+ * order: repos/submissionReview.ts submissionScope.
+ */
+async function decidePending<T>(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+  decide: (tx: Exec, result: DiscoveryResultView) => Promise<T>,
+): Promise<T> {
+  return await withTransaction(db, async (tx) => {
+    await lockScope(tx, `user:${ctx.userId}`);
+    const result = await getResult(tx, ctx, id);
+    if (result.disposition !== 'pending') throw alreadyDecided(result);
+    await racePoint('discovery.decide.locked');
+    return await decide(tx, result);
+  });
+}
+
+/** decidePending for one id of a bulk request: what became of it, never a throw. */
+async function decideItem<T extends { item: BulkItemResult; opportunityId?: string }>(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+  decide: (tx: Exec, result: DiscoveryResultView) => Promise<T>,
+): Promise<{ item: BulkItemResult; opportunityId?: string }> {
+  let found = false;
+  try {
+    return await decidePending(db, ctx, id, (tx, result) => {
+      found = true;
+      return decide(tx, result);
+    });
+  } catch (err) {
+    if (err instanceof HttpError) {
+      const named = err.details?.existingId;
+      const existing = typeof named === 'string' ? { existingId: named } : {};
+      if (err.code === 'already_decided' || err.code === 'duplicate') {
+        return {
+          item: { id, outcome: err.code, ...existing },
+          opportunityId: existing.existingId,
+        };
+      }
+      if (err.statusCode === 404 && !found) return { item: { id, outcome: 'not_found' } };
+    }
+    return {
+      item: { id, outcome: 'error', message: err instanceof Error ? err.message : String(err) },
+    };
+  }
+}
+
 export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
@@ -318,8 +389,8 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * The default accept path (no `attachTo`): creates an opportunity from the result's
-   * posting and marks the result accepted, UNLESS this result's own role (issue #209's
-   * company+title group key) already has a live, still-eligible opportunity from an earlier
+   * posting and marks the result accepted, UNLESS this result's own card (cardKey: one company
+   * and one whole title, #968) already has a live, still-eligible opportunity from an earlier
    * accept, in which case it links to that one instead (issue #226). Shared by the single and
    * bulk accept routes, so a bulk accept runs exactly the same create-or-chain logic as a
    * single one, item by item, rather than a second version of it.
@@ -340,32 +411,20 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
    * already an explicit "no, a new one" from the user.
    */
   async function acceptIntoOpportunity(
+    tx: Exec,
     ctx: UserCtx,
     result: DiscoveryResultView,
     opts: { force?: boolean } = {},
   ): Promise<{ view: DiscoveryResultView; chained: boolean }> {
     const p = result.posting;
     if (opts.force !== true && result.dedupeKey !== null) {
-      const chainTarget = await findChainTarget(db, ctx, dedupeGroupKey(result.dedupeKey));
+      const chainTarget = await findChainTarget(tx, ctx, result.dedupeKey, p);
       if (chainTarget !== undefined) {
-        await createActivity(db, ctx, chainTarget, {
-          kind: 'link',
-          title: `Also posted via ${sourceLabel(result.sourceKind)}`,
-          bodyMd: [`${p.company}: ${p.title}`, p.location ?? null]
-            .filter((l): l is string => l !== null)
-            .join('\n'),
-          occurredAt: Date.now(),
-          participants: [],
-          externalUrl: httpLink(p.postingUrl),
-        });
-        return {
-          view: await setDisposition(db, ctx, result.id, 'accepted', chainTarget),
-          chained: true,
-        };
+        return { view: await linkTo(tx, ctx, result, chainTarget), chained: true };
       }
     }
     const opp = await createOpportunity(
-      db,
+      tx,
       ctx,
       {
         companyName: p.company,
@@ -381,7 +440,65 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       },
       { force: opts.force === true },
     );
-    return { view: await setDisposition(db, ctx, result.id, 'accepted', opp.id), chained: false };
+    return { view: await setDisposition(tx, ctx, result.id, 'accepted', opp.id), chained: false };
+  }
+
+  /** Another source for a job already tracked: links it, changes nothing else (FR-O10). The
+   *  result's row before the timeline entry, whose search row is the last of the lock order. */
+  async function linkTo(
+    tx: Exec,
+    ctx: UserCtx,
+    result: DiscoveryResultView,
+    opportunityId: string,
+  ): Promise<DiscoveryResultView> {
+    const p = result.posting;
+    const view = await setDisposition(tx, ctx, result.id, 'accepted', opportunityId);
+    await createActivity(tx, ctx, opportunityId, {
+      kind: 'link',
+      title: `Also posted via ${sourceLabel(result.sourceKind)}`,
+      bodyMd: [`${p.company}: ${p.title}`, p.location ?? null]
+        .filter((l): l is string => l !== null)
+        .join('\n'),
+      occurredAt: Date.now(),
+      participants: [],
+      externalUrl: httpLink(p.postingUrl),
+    });
+    return view;
+  }
+
+  /** Attaches a result to an opportunity the caller names; another user's is a 404. */
+  async function attachTo(
+    tx: Exec,
+    ctx: UserCtx,
+    result: DiscoveryResultView,
+    opportunityId: string,
+  ): Promise<DiscoveryResultView> {
+    const target = await getOpportunity(tx, ctx, opportunityId);
+    return await linkTo(tx, ctx, result, target.id);
+  }
+
+  /** Dismisses a result, with the feedback row refineDiscoveryPrompt reads its reason from. */
+  async function dismiss(
+    tx: Exec,
+    ctx: UserCtx,
+    result: DiscoveryResultView,
+    reason: (typeof DISMISS_REASONS)[number] | null,
+    note: string | null,
+  ): Promise<DiscoveryResultView> {
+    await tx
+      .insert(dismissalFeedback)
+      .values({
+        id: newId(),
+        userId: ctx.userId,
+        kind: 'dismissal',
+        resultId: result.id,
+        opportunityId: null,
+        reason,
+        note,
+        at: Date.now(),
+      })
+      .run();
+    return await setDisposition(tx, ctx, result.id, 'dismissed');
   }
 
   /**
@@ -396,45 +513,15 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     ctx: UserCtx,
     id: string,
   ): Promise<{ item: BulkItemResult; opportunityId?: string }> {
-    let result: DiscoveryResultView;
-    try {
-      result = await getResult(db, ctx, id);
-    } catch (err) {
-      if (err instanceof HttpError && err.statusCode === 404)
-        return { item: { id, outcome: 'not_found' } };
-      throw err;
-    }
-    if (result.disposition === 'accepted') {
-      return {
-        item:
-          result.opportunityId !== null
-            ? { id, outcome: 'duplicate', existingId: result.opportunityId }
-            : { id, outcome: 'already_decided' },
-        opportunityId: result.opportunityId ?? undefined,
-      };
-    }
-    if (result.disposition !== 'pending') return { item: { id, outcome: 'already_decided' } };
-    try {
-      const { view, chained } = await acceptIntoOpportunity(ctx, result);
+    return await decideItem(db, ctx, id, async (tx, result) => {
+      const { view, chained } = await acceptIntoOpportunity(tx, ctx, result);
       return {
         item: chained
           ? { id, outcome: 'attached', existingId: view.opportunityId ?? undefined }
           : { id, outcome: 'accepted' },
         opportunityId: view.opportunityId ?? undefined,
       };
-    } catch (err) {
-      if (err instanceof HttpError && err.code === 'duplicate') {
-        const existingId = err.details?.existingId;
-        const existing = typeof existingId === 'string' ? existingId : undefined;
-        return {
-          item: { id, outcome: 'duplicate', existingId: existing },
-          opportunityId: existing,
-        };
-      }
-      return {
-        item: { id, outcome: 'error', message: err instanceof Error ? err.message : String(err) },
-      };
-    }
+    });
   }
 
   /** One item of a bulk accept, independent of any group (today's whole contract, before
@@ -452,45 +539,11 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     id: string,
     opportunityId: string,
   ): Promise<BulkItemResult> {
-    let result: DiscoveryResultView;
-    try {
-      result = await getResult(db, ctx, id);
-    } catch (err) {
-      if (err instanceof HttpError && err.statusCode === 404) return { id, outcome: 'not_found' };
-      throw err;
-    }
-    if (result.disposition === 'accepted') {
-      return result.opportunityId !== null
-        ? { id, outcome: 'duplicate', existingId: result.opportunityId }
-        : { id, outcome: 'already_decided' };
-    }
-    if (result.disposition !== 'pending') return { id, outcome: 'already_decided' };
-    try {
-      const p = result.posting;
-      const target = await getOpportunity(db, ctx, opportunityId);
-      await createActivity(db, ctx, target.id, {
-        kind: 'link',
-        title: `Also posted via ${sourceLabel(result.sourceKind)}`,
-        bodyMd: [`${p.company}: ${p.title}`, p.location ?? null]
-          .filter((l): l is string => l !== null)
-          .join('\n'),
-        occurredAt: Date.now(),
-        participants: [],
-        externalUrl: httpLink(p.postingUrl),
-      });
-      await setDisposition(db, ctx, result.id, 'accepted', target.id);
-      return { id, outcome: 'attached', existingId: target.id };
-    } catch (err) {
-      if (err instanceof HttpError && err.code === 'duplicate') {
-        const existingId = err.details?.existingId;
-        return {
-          id,
-          outcome: 'duplicate',
-          existingId: typeof existingId === 'string' ? existingId : undefined,
-        };
-      }
-      return { id, outcome: 'error', message: err instanceof Error ? err.message : String(err) };
-    }
+    const { item } = await decideItem(db, ctx, id, async (tx, result) => {
+      const view = await attachTo(tx, ctx, result, opportunityId);
+      return { item: { id, outcome: 'attached', existingId: view.opportunityId ?? undefined } };
+    });
+    return item;
   }
 
   /** One item of a bulk dismiss: `not_interested` (bulk's own reason, #184) is written like
@@ -501,30 +554,11 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     reason: (typeof DISMISS_REASONS)[number],
     note: string | undefined,
   ): Promise<BulkItemResult> {
-    try {
-      return await withTransaction(db, async (tx) => {
-        const result = await getResult(tx, ctx, id);
-        if (result.disposition !== 'pending') return { id, outcome: 'already_decided' as const };
-        await tx
-          .insert(dismissalFeedback)
-          .values({
-            id: newId(),
-            userId: ctx.userId,
-            kind: 'dismissal',
-            resultId: result.id,
-            opportunityId: null,
-            reason,
-            note: note ?? null,
-            at: Date.now(),
-          })
-          .run();
-        await setDisposition(tx, ctx, result.id, 'dismissed');
-        return { id, outcome: 'dismissed' as const };
-      });
-    } catch (err) {
-      if (err instanceof HttpError && err.statusCode === 404) return { id, outcome: 'not_found' };
-      return { id, outcome: 'error', message: err instanceof Error ? err.message : String(err) };
-    }
+    const { item } = await decideItem(db, ctx, id, async (tx, result) => {
+      await dismiss(tx, ctx, result, reason, note ?? null);
+      return { item: { id, outcome: 'dismissed' } };
+    });
+    return item;
   }
 
   api.post(
@@ -532,33 +566,18 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     { schema: { params: IdParams, body: AcceptBody, response: { 200: ResultSchema } } },
     async (req) => {
       const ctx = app.requireUser(req);
-      const result = await getResult(db, ctx, req.params.id);
-      if (result.disposition === 'accepted') {
-        if (result.opportunityId !== null) throw duplicate(result.opportunityId);
-        throw new HttpError(409, 'already_accepted');
-      }
-      const p = result.posting;
-      if (req.body.attachTo !== undefined) {
-        // Another source for a job already tracked: link it, change nothing else (FR-O10).
-        const target = await getOpportunity(db, ctx, req.body.attachTo);
-        await createActivity(db, ctx, target.id, {
-          kind: 'link',
-          title: `Also posted via ${sourceLabel(result.sourceKind)}`,
-          bodyMd: [`${p.company}: ${p.title}`, p.location ?? null]
-            .filter((l): l is string => l !== null)
-            .join('\n'),
-          occurredAt: Date.now(),
-          participants: [],
-          externalUrl: httpLink(p.postingUrl),
-        });
-        return await setDisposition(db, ctx, result.id, 'accepted', target.id);
-      }
-      // The existing create path: an exact company+title+location dedupe match is still a 409
-      // naming the existing opportunity, writing nothing, so the result stays pending. A
-      // same-role, different-location (or identical) match with its own already-accepted,
-      // still-eligible opportunity chains to it instead (issue #226) and a `force` skips that
-      // lookup entirely.
-      return (await acceptIntoOpportunity(ctx, result, { force: req.body.force === true })).view;
+      const { attachTo: target, force } = req.body;
+      // A result already decided is a 409 already_decided before either is looked at, naming the
+      // opportunity it went to, so `duplicate` means one thing: a pending result matches another
+      // opportunity. That is the existing create path's: an exact company+title+location dedupe
+      // match, writing nothing, so the result stays pending. A same-role, different-location (or
+      // identical) match with its own already-accepted, still-eligible opportunity chains to it
+      // instead (issue #226) and a `force` skips that lookup entirely.
+      return await decidePending(db, ctx, req.params.id, async (tx, result) =>
+        target === undefined
+          ? (await acceptIntoOpportunity(tx, ctx, result, { force: force === true })).view
+          : await attachTo(tx, ctx, result, target),
+      );
     },
   );
 
@@ -581,7 +600,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       // used to still produce more than one opportunity (issue #226) even though this code
       // grouped correctly within each chunk. Fixed not here but one level down, in
       // acceptIntoOpportunity: a would-be primary (this loop's `primary`, or a true singleton
-      // falling through to `acceptOne` below) first asks whether its own group key already has
+      // falling through to `acceptOne` below) first asks whether its own card already has
       // an eligible opportunity from an earlier accept -- another chunk, or any other earlier
       // accept of the same role -- and chains to it instead of creating. That makes the chunk
       // boundary irrelevant here rather than something this route has to reason about.
@@ -599,7 +618,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
       const byGroupKey = new Map<string, { id: string; result: DiscoveryResultView }[]>();
       for (const f of fetched) {
         if (f.result === undefined || f.result.disposition !== 'pending') continue;
-        const key = f.result.dedupeKey === null ? `#${f.id}` : dedupeGroupKey(f.result.dedupeKey);
+        const { dedupeKey, posting } = f.result;
+        const key =
+          dedupeKey === null ? `#${f.id}` : cardKey(dedupeKey, posting.company, posting.title);
         const existing = byGroupKey.get(key);
         if (existing === undefined) byGroupKey.set(key, [{ id: f.id, result: f.result }]);
         else existing.push({ id: f.id, result: f.result });
@@ -650,24 +671,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     { schema: { params: IdParams, body: DismissBody, response: { 200: ResultSchema } } },
     async (req) => {
       const ctx = app.requireUser(req);
-      return await withTransaction(db, async (tx) => {
-        const result = await getResult(tx, ctx, req.params.id);
-        if (result.disposition !== 'pending') throw new HttpError(409, 'not_pending');
-        await tx
-          .insert(dismissalFeedback)
-          .values({
-            id: newId(),
-            userId: ctx.userId,
-            kind: 'dismissal',
-            resultId: result.id,
-            opportunityId: null,
-            reason: req.body.reason ?? null,
-            note: req.body.note ?? null,
-            at: Date.now(),
-          })
-          .run();
-        return await setDisposition(tx, ctx, result.id, 'dismissed');
-      });
+      return await decidePending(db, ctx, req.params.id, (tx, result) =>
+        dismiss(tx, ctx, result, req.body.reason ?? null, req.body.note ?? null),
+      );
     },
   );
 

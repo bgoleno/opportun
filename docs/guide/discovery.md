@@ -284,6 +284,16 @@ On any result:
   [Pipeline](pipeline.md#possible-duplicates)).
 - **Dismiss** asks for a reason (Seniority, Compensation, Location, Industry, Company,
   Stale, Other) and an optional note.
+- A role posted in several locations is one card, with **Accept all** and **Dismiss all**: accepting
+  it makes one opportunity, with the other postings on its timeline. The same title at another level
+  ("Senior" and "Principal") is another card.
+- A result you decided somewhere else (captured with the
+  [browser extension](browser-extension.md), or accepted or dismissed in another tab) leaves the
+  queue when you come back to the page, without a reload. One captured while the page is open leaves
+  by itself within a few seconds, for a minute after you come back and for ten minutes after you open
+  a posting from the page. Pressing **Accept** or **Dismiss** on one that is still shown changes
+  nothing: the page says what it already is, with **View opportunity** when it is in your pipeline. A
+  bulk action counts these instead, as "already decided".
 - Keyboard: `j`/`k` select, `i` accepts, `x` dismisses, `Enter` opens.
 
 ![The review queue with three Vandelay Industries postings to review: the top two shown, scored 92 and 70, the first one selected](images/discovery-review-queue.png)
@@ -401,7 +411,7 @@ LinkedIn profile or job, or the Indeed job, you are looking at to your server, o
 click **Capture this page**. A captured job becomes an opportunity at **Interested** and does not
 pass through this queue: capturing one is how you say you want it. If the job is already
 sitting here as a lead from an alert email, that lead is completed and accepted rather than
-duplicated. Profiles become contacts (see [Network](network.md)). The
+duplicated, and its card leaves the queue. Profiles become contacts (see [Network](network.md)). The
 [browser extension](browser-extension.md) page covers what happens next.
 
 1. Create a device token with the **Browser capture** permission under **Settings >

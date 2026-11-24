@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { DISMISS_REASONS, type DismissReason } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { ExternalLink } from 'lucide-react';
+import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { z } from 'zod';
 import { FormField } from '@/components/FormField';
@@ -152,6 +153,13 @@ export function BulkDismissDialog(props: {
     props.onCancel();
   }
 
+  // Closed by the queue, its selection gone (#968): the note was for those results.
+  const { open } = props;
+  const { reset } = form;
+  useEffect(() => {
+    if (!open) reset();
+  }, [open, reset]);
+
   const submit = form.handleSubmit((v) => {
     form.reset();
     props.onConfirm({ reason: v.reason, ...(v.note.length > 0 ? { note: v.note } : {}) });
@@ -159,7 +167,7 @@ export function BulkDismissDialog(props: {
 
   return (
     <Dialog
-      open={props.open}
+      open={open}
       onOpenChange={(open) => {
         if (!open) close();
       }}
@@ -246,7 +254,8 @@ export interface DuplicateState {
 }
 
 /**
- * Accepting matched an opportunity already tracked (409 duplicate). Same pattern as the new
+ * Accepting a pending result matched another opportunity already tracked (409 duplicate; a result
+ * that is itself decided answers already_decided, and never opens this, #968). Same pattern as the new
  * opportunity dialog (view the existing one, or create anyway), plus "Attach to existing",
  * which links this result to that opportunity instead of creating another.
  */
@@ -327,6 +336,8 @@ export function ResultDetailDialog(props: {
   onDismiss: (r: DiscoveryResult) => void;
   /** Opens the capture dialog for a needs_capture lead (pre-filled with its link). */
   onCapture: (r: DiscoveryResult) => void;
+  /** The posting is being opened, in a new tab or window (#968). */
+  onOpenPosting?: () => void;
 }) {
   const r = props.result;
   const p = r?.posting;
@@ -404,6 +415,8 @@ export function ResultDetailDialog(props: {
                 href={href}
                 target="_blank"
                 rel="noopener noreferrer nofollow"
+                onClick={props.onOpenPosting}
+                onAuxClick={props.onOpenPosting}
                 className="inline-flex w-fit items-center gap-1 text-primary underline underline-offset-2"
               >
                 Open the posting
