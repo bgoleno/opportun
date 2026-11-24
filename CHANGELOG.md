@@ -9,6 +9,12 @@ when the milestone's work was merged.
 
 ## Unreleased
 
+## 0.5.1 (2026-11-23)
+
+This release includes everything in
+[v0.5.0](https://github.com/bgoleno/opportun/releases/tag/v0.5.0), tagged on 2026-11-22, and what
+merged after it.
+
 ### Pipeline board
 
 - **Pipeline board: a card moved by keyboard is picked up in its own column and reaches every
