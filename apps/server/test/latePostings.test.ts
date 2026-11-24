@@ -753,7 +753,14 @@ describe.each(SITES)('a card on %s captured, another level tracked in its city',
   /** The open role in Boston: accepted from a result, or made by hand. */
   const IN_BOSTON = {
     async accepted(app: FastifyInstance, c: TestClient): Promise<string> {
-      const id = await card(app, c, another(site, THERE, { title: SENIOR }));
+      // A board's: no id of the site's, so nothing but its card says what it is.
+      const id = await card(app, c, {
+        ...JOB,
+        title: SENIOR,
+        location: THERE,
+        postingUrl: 'https://boards.example.com/initech/b',
+        externalId: 'board-b',
+      });
       const res = await c.request({
         method: 'POST',
         url: `/api/v1/discovery/results/${id}/accept`,
@@ -808,20 +815,23 @@ describe.each(SITES)('a card on %s captured, another level tracked in its city',
   });
 
   // The kept-apart holder is what #73 says: another posting on the site, under the card's own key.
-  it('kept apart as another posting: not chained, as before', async () => {
-    const { app, a } = await boot();
-    const boston = await IN_BOSTON['made by hand'](app, a);
-    const holder = (await capture(app, a, site, HERE, { title: SENIOR, location: HERE }))
-      .opportunityId;
-    expect(holder).not.toBe(boston);
-    await card(app, a, another(site, HERE, { title: SENIOR }));
-    const [siteId, , , otherId, otherUrl] = site;
-    const captured = await capture(app, a, [siteId, otherId, otherUrl, '', ''], HERE, {
-      title: SENIOR,
-    });
-    expect([boston, holder]).not.toContain(captured.opportunityId);
-    expect(await opportunitiesOf(app, a)).toHaveLength(3);
-  });
+  it.each(['accepted', 'made by hand'] as const)(
+    'kept apart as another posting, the other city’s %s: not chained, as before',
+    async (how) => {
+      const { app, a } = await boot();
+      const boston = await IN_BOSTON[how](app, a);
+      const holder = (await capture(app, a, site, HERE, { title: SENIOR, location: HERE }))
+        .opportunityId;
+      expect(holder).not.toBe(boston);
+      await card(app, a, another(site, HERE, { title: SENIOR }));
+      const [siteId, , , otherId, otherUrl] = site;
+      const captured = await capture(app, a, [siteId, otherId, otherUrl, '', ''], HERE, {
+        title: SENIOR,
+      });
+      expect([boston, holder]).not.toContain(captured.opportunityId);
+      expect(await opportunitiesOf(app, a)).toHaveLength(3);
+    },
+  );
 });
 
 // tl on #985: a lead of another location says nothing of who holds this one's key.
