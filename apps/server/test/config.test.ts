@@ -39,7 +39,7 @@ describe('loadConfig: database', () => {
 
   it('refuses an unknown dialect, naming DB_DIALECT', () => {
     expect(() => loadConfig({ ...base, DB_DIALECT: 'mysql' })).toThrow(
-      /DB_DIALECT must be sqlite or postgres/,
+      /^DB_DIALECT must be sqlite or postgres$/,
     );
     expect(() => loadConfig({ ...base, DB_DIALECT: 'Postgres' })).toThrow(/DB_DIALECT/);
   });
@@ -88,7 +88,7 @@ describe('loadConfig: database', () => {
   it('refuses an invalid DB_SSL or DB_POOL_MAX', () => {
     const env = { ...base, DB_DIALECT: 'postgres', DATABASE_URL: LOCAL_URL };
     expect(() => loadConfig({ ...env, DB_SSL: 'prefer' })).toThrow(
-      /DB_SSL must be disable, require or verify-full/,
+      /^DB_SSL must be disable, require or verify-full$/,
     );
     for (const bad of ['0', '-1', '2.5', 'ten', '1001']) {
       expect(() => loadConfig({ ...env, DB_POOL_MAX: bad })).toThrow(/DB_POOL_MAX/);
@@ -107,7 +107,7 @@ describe('loadConfig: database', () => {
     expect(conflict.message).toMatch(/DB_SSL/);
     expect(conflict.message).not.toContain(SECRET);
     expect(() => loadConfig({ ...env, DATABASE_URL: `${REMOTE_URL}?sslmode=verify-ca` })).toThrow(
-      /sslmode/,
+      /^DATABASE_URL sslmode must be disable, require or verify-full$/,
     );
   });
 

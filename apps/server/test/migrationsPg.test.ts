@@ -105,6 +105,8 @@ describe('migrateLockedPg (recorded fake)', () => {
   it('refuses a database migrated by a newer release, leaving it untouched', async () => {
     const { pool, committed, asPool } = migratingPool({ lastApplied: head + 1 });
     await expect(migrateLockedPg(asPool)).rejects.toThrow(/newer release of Opportun/);
+    // What the server's start-failure line is chosen by (#887).
+    await expect(migrateLockedPg(asPool)).rejects.toMatchObject({ refusal: 'newer_database' });
     expect(committed).toEqual([head + 1]);
     const texts = pool.textsOf(1);
     expect(texts).toContain('ROLLBACK');

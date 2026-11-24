@@ -2,8 +2,12 @@
 import './unsetEmptyAiBaseUrls';
 import { pathToFileURL } from 'node:url';
 import { buildApp } from './app';
-import { ConfigError, loadConfig } from './config';
+import { ConfigError, loadConfig, type Config } from './config';
 import { createLogger, installProcessHandlers, raiseStackTraceLimit } from './obs/log';
+import { ListenFailure, logStartFailure } from './startFailure';
+
+/** The settings the server is starting with, once read: for the line a failed start leaves. */
+let startingWith: Config | undefined;
 
 /** Server entry point: load config, build the app, listen. */
 export async function main(): Promise<void> {
@@ -13,6 +17,7 @@ export async function main(): Promise<void> {
   raiseStackTraceLimit();
   installProcessHandlers();
   const cfg = loadConfig();
+  startingWith = cfg;
   // End-to-end fakes (OPPORTUN_*_MOCK=1, never in production): loaded only when asked for.
   // eslint-disable-next-line no-restricted-properties -- entry point: hands the environment to config's loaders, which read it (#773)
   const env = process.env;
@@ -47,7 +52,11 @@ export async function main(): Promise<void> {
   };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
-  await app.listen({ port: cfg.port, host: cfg.host });
+  try {
+    await app.listen({ port: cfg.port, host: cfg.host });
+  } catch (err) {
+    throw new ListenFailure(err, cfg.port);
+  }
   // Fastify's own "Server listening at <address>" is not a catalogued message (14.8): this one is.
   app.log.info({ 'server.port': cfg.port }, 'server listening');
 }
@@ -61,7 +70,7 @@ if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
       // to say which variable is wrong (design 14.9 keeps every other message to the catalog).
       process.stderr.write(`${err.message}\n`);
     } else {
-      createLogger({ level: 'error' }).error({ err }, 'server failed to start');
+      logStartFailure(createLogger({ level: 'error' }), err, startingWith);
     }
     process.exit(1);
   });
