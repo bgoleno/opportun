@@ -300,10 +300,8 @@ describe('DecidedResults', () => {
     expect(queryClient.getQueryState(discoveryKeys.queue)?.isInvalidated).toBe(true);
   });
 
-  // Its opportunity was deleted, so the row has no link to one. The list is as it was.
-  it('a result whose opportunity was deleted says so (#927)', async () => {
-    const SENTENCE =
-      "This result's opportunity was deleted, so it cannot be unsuppressed. If the job comes up again, add it with New opportunity in the pipeline.";
+  // https://github.com/bgoleno/opportun/issues/1008
+  it('a result whose opportunity was deleted is unsuppressed, as the Accepted tab says', async () => {
     const r = result({
       id: 'a1',
       disposition: 'accepted',
@@ -312,17 +310,18 @@ describe('DecidedResults', () => {
     });
     mockApi({
       'GET /discovery/results': queueHandler({ accepted: [r] }),
-      'POST /discovery/results/a1/unsuppress': {
-        status: 409,
-        body: { error: { code: 'no_linked_opportunity', message: SENTENCE } },
-      },
+      'POST /discovery/results/a1/unsuppress': { ...r, dedupeKey: null },
     });
     const user = userEvent.setup();
     renderWithProviders(<DecidedResults />);
     await user.click(await screen.findByRole('tab', { name: /^Accepted/ }));
+    expect(screen.getByRole('tabpanel')).toHaveTextContent(
+      'Unsuppress only takes effect once the linked opportunity is dismissed or deleted;',
+    );
     const row = await screen.findByRole('listitem', { name: 'Deleted Role at Globex' });
+    expect(within(row).queryByRole('link', { name: 'View opportunity' })).toBeNull();
     await user.click(within(row).getByRole('button', { name: /unsuppress/i }));
-    expect(await toastRegion().findByText(SENTENCE)).toBeInTheDocument();
+    expect(await within(row).findByText('Unsuppressed')).toBeInTheDocument();
   });
 
   it('keyboard: j/k move the selection between rows (issue #155)', async () => {
