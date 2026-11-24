@@ -27,7 +27,14 @@ import { jobs } from '../src/db/schema';
 import { enqueue } from '../src/lib/jobQueue';
 import { racePoint } from '../src/lib/racePoints';
 import { registerJob, unregisterJob } from '../src/jobs/registry';
-import { runDueJobs } from '../src/jobs/runner';
+import {
+  recoverStaleJobs,
+  runDueJobs,
+  startRunner,
+  type RowRetry,
+  type Runner,
+} from '../src/jobs/runner';
+import { DemoResetGate, HOLD_LIMIT_MS } from '../src/lib/demoResetGate';
 import { useApi } from './api';
 import { testDialect } from './db';
 import { captureLogs } from './helpers';
@@ -42,7 +49,8 @@ it('every pool the server makes is watched (#963)', async () => {
   let pools = 0;
   for (const f of (await readdir(src, { recursive: true })).filter((n) => n.endsWith('.ts'))) {
     const text = (await readFile(join(src, f), 'utf8')).replace(/\s+/g, '');
-    const made = text.match(/newpg\.(Pool|Client)\(/g)?.length ?? 0;
+    if (!text.includes("from'pg'")) continue;
+    const made = text.match(/new(pg\.)?(Pool|Client)\(/g)?.length ?? 0;
     const watched = text.match(/watchConnections\((opts\.pool\?\?)?newpg\.Pool\(/g)?.length ?? 0;
     expect([f, watched]).toEqual([f, made]);
     pools += made;
@@ -464,6 +472,404 @@ describe.runIf(testDialect === 'postgres')('a Postgres connection that ends (#96
       const { db } = await small(2);
       await expect(withTransaction(db, () => transaction(db))).rejects.toThrow(/pass its tx/);
     });
+  });
+
+  // tl and em on #963: in a restart Postgres is still away when the job it caught ends, so the write
+  // that says so fails too, and the row stayed `running`, its dedupe key held, until the next start.
+  describe('a job caught while Postgres is away', () => {
+    const KIND = 'test.postgres_away';
+    const NOT_WRITTEN = "a job's row could not be written; trying again";
+
+    /** Postgres gone and back, as the app sees it: `by` stays connected throughout. */
+    async function postgres(app: FastifyInstance, by: pg.Client) {
+      const name = new URL(urlOf(app)).pathname.slice(1);
+      // From another database: Postgres does not let one be closed from within.
+      const server = await outside(process.env.TEST_DATABASE_URL!);
+      const accept = (yes: boolean) =>
+        server.query(`ALTER DATABASE "${name}" WITH ALLOW_CONNECTIONS ${String(yes)}`);
+      return {
+        back: () => accept(true),
+        async leaves(): Promise<void> {
+          await accept(false);
+          await cut(by);
+          await settle();
+        },
+      };
+    }
+    const QUICK: RowRetry = { firstMs: 50, maxMs: 200, limitMs: 60_000 };
+    const LONG: RowRetry = { firstMs: 60_000, maxMs: 60_000, limitMs: 600_000 };
+
+    interface Job {
+      maxAttempts?: number;
+      body?: (db: Db) => Promise<void>;
+      /** An instance job, which a demo server's gate holds. */
+      instance?: boolean;
+      gate?: (pg: { leaves(): Promise<void> }) => DemoResetGate;
+      rowRetry?: RowRetry;
+    }
+    /** One job queued, and what starts a runner on it. */
+    async function queued(job: Job) {
+      const { app, a } = await boot({ logLevel: 'warn' });
+      const by = await outside(urlOf(app));
+      const away = await postgres(app, by);
+      onSlowTransaction(() => undefined); // parked on purpose
+      const seen = { runs: 0, dead: 0, errors: [] as unknown[], ahead: 0 };
+      registerJob({
+        kind: KIND,
+        payloadSchema: z.object({}),
+        maxAttempts: job.maxAttempts ?? 3,
+        async run(db) {
+          seen.runs += 1;
+          await racePoint('test.job');
+          await job.body?.(db);
+        },
+        async onDead() {
+          seen.dead += 1;
+        },
+      });
+      const id = await enqueue(app.db, KIND, {}, job.instance ? {} : { userId: a.userId });
+      let runner: Runner | undefined;
+      const go = (db: Db = app.db): Runner =>
+        (runner = startRunner(db, {
+          intervalMs: 20,
+          workers: 1,
+          workerId: 'test-worker',
+          random: () => 0,
+          now: () => Date.now() + seen.ahead,
+          rowRetry: job.rowRetry ?? QUICK,
+          services: {
+            log: app.log,
+            ...(job.gate === undefined ? {} : { demoResetGate: job.gate(away) }),
+          },
+          onError: (err) => seen.errors.push(err),
+        }));
+      const row = async (of = id) => {
+        const res = await by.query<{ status: string; attempts: number; locked_by: string | null }>(
+          'SELECT status, attempts, locked_by FROM jobs WHERE id = $1',
+          [of],
+        );
+        return res.rows[0]!;
+      };
+      const whole = async () =>
+        (await by.query<Record<string, unknown>>('SELECT * FROM jobs WHERE id = $1', [id]))
+          .rows[0]!;
+      const said = () => logs.lines.filter((l) => l.includes(NOT_WRITTEN));
+      const ends = async (): Promise<void> => {
+        await away.back();
+        await runner?.stop();
+        unregisterJob(KIND);
+      };
+      /** Another job, done: the worker has gone on from the first. */
+      const another = async (): Promise<void> => {
+        const next = await enqueue(app.db, KIND, {}, {});
+        await until(async () => (await row(next)).status === 'done');
+      };
+      return { app, by, away, id, seen, go, row, whole, said, ends, another };
+    }
+    /** The job parked in its handler, Postgres gone, the handler let go. */
+    async function caught(job: Job) {
+      const t = await queued(job);
+      const parked = pauseAt('test.job');
+      const runner = t.go();
+      await parked.reached;
+      await t.away.leaves();
+      parked.release();
+      /** It has failed to write its row, more than once. */
+      const waiting = async (): Promise<void> => {
+        await until(() => t.said().length > 0 || t.seen.errors.length > 0);
+        await new Promise((r) => setTimeout(r, 400));
+      };
+      return { ...t, runner, waiting };
+    }
+    const inTransaction = (db: Db) =>
+      withTransaction(db, async (tx) => {
+        await rawGet(tx, sql`SELECT 1`);
+      });
+
+    it('one that failed goes back to pending once Postgres is back, and runs again', async () => {
+      const t = await caught({ body: inTransaction });
+      try {
+        await t.waiting();
+        expect(await t.row()).toMatchObject({ status: 'running', attempts: 1 });
+        await t.away.back();
+        await until(async () => (await t.row()).status === 'pending');
+        expect(await t.row()).toEqual({ status: 'pending', attempts: 1, locked_by: null });
+        t.seen.ahead = 60 * 60 * 1000;
+        await until(async () => (await t.row()).status === 'done');
+        expect([t.seen.runs, t.seen.dead, t.said().length]).toEqual([2, 0, 1]);
+        expect(crashes).toEqual([]);
+      } finally {
+        await t.ends();
+      }
+    }, 60_000);
+
+    it('one that succeeded is done once Postgres is back, and is not run twice', async () => {
+      const t = await caught({});
+      try {
+        await t.waiting();
+        expect(await t.row()).toMatchObject({ status: 'running', attempts: 1 });
+        await t.away.back();
+        await until(async () => (await t.row()).status === 'done');
+        t.seen.ahead = 60 * 60 * 1000;
+        await settle();
+        expect(await t.row()).toEqual({ status: 'done', attempts: 1, locked_by: null });
+        expect([t.seen.runs, t.seen.dead, t.said().length]).toEqual([1, 0, 1]);
+      } finally {
+        await t.ends();
+      }
+    }, 60_000);
+
+    it('one at its last attempt is dead once Postgres is back, and settled once', async () => {
+      const t = await caught({ body: inTransaction, maxAttempts: 1 });
+      try {
+        await t.waiting();
+        expect([(await t.row()).status, t.seen.dead]).toEqual(['running', 0]);
+        await t.away.back();
+        await until(async () => (await t.row()).status === 'dead' && t.seen.dead > 0);
+        await settle();
+        expect([t.seen.runs, t.seen.dead, t.said().length]).toEqual([1, 1, 1]);
+      } finally {
+        await t.ends();
+      }
+    }, 60_000);
+
+    it('a stop does not wait for it, and the next start recovers the row', async () => {
+      const t = await caught({ body: inTransaction, rowRetry: LONG });
+      try {
+        await t.waiting();
+        const began = performance.now();
+        await t.runner.stop();
+        expect(performance.now() - began).toBeLessThan(5000);
+        expect(t.said()).toHaveLength(1);
+        expect(t.seen.errors.length).toBeGreaterThan(0);
+        expect(await t.row()).toMatchObject({ status: 'running', attempts: 1 });
+        await t.away.back();
+        expect(await recoverStaleJobs(t.app.db)).toBe(1);
+        expect(await t.row()).toEqual({ status: 'pending', attempts: 1, locked_by: null });
+        expect(t.seen.runs).toBe(1);
+      } finally {
+        await t.ends();
+      }
+    }, 60_000);
+
+    it('past its limit the worker goes on to the next job', async () => {
+      const t = await caught({
+        body: inTransaction,
+        rowRetry: { firstMs: 50, maxMs: 50, limitMs: 500 },
+      });
+      try {
+        await until(() => t.said().length > 0);
+        // Given up, the worker claims again, and that fails too while Postgres is away.
+        await until(() => t.seen.errors.length > 1);
+        await t.away.back();
+        await t.another();
+        expect(await t.row()).toMatchObject({ status: 'running', attempts: 1 });
+      } finally {
+        await t.ends();
+      }
+    }, 60_000);
+
+    // tl: past its hold the demo reset may have reseeded the account, and what a dead job's handler
+    // writes would land in it.
+    it('one under the demo reset’s hold is given up when the hold ends', async () => {
+      const t = await caught({
+        body: inTransaction,
+        maxAttempts: 1,
+        instance: true,
+        gate: () => new DemoResetGate({ stopMarginMs: HOLD_LIMIT_MS - 5000 }),
+        rowRetry: { ...LONG, firstMs: 10_000 },
+      });
+      try {
+        await until(() => t.said().length > 0);
+        expect(t.seen.errors).toEqual([]);
+        // Until the hold's end: well before the next try.
+        await until(() => t.seen.errors.length > 0);
+        await until(() => t.seen.errors.length > 1);
+        await t.away.back();
+        await t.another();
+        expect(await t.row()).toMatchObject({ status: 'running', attempts: 1 });
+        expect(t.seen.dead).toBe(0);
+      } finally {
+        await t.ends();
+      }
+    }, 60_000);
+
+    it('one whose check before its handler failed goes back, its attempt not counted', async () => {
+      const t = await queued({
+        instance: true,
+        gate: (pg) => {
+          const gate = new DemoResetGate();
+          const shared = gate.shared.bind(gate);
+          gate.shared = async (opts) => {
+            gate.shared = shared;
+            const hold = await shared(opts);
+            await pg.leaves();
+            return hold;
+          };
+          return gate;
+        },
+      });
+      try {
+        t.go();
+        await until(() => t.said().length > 0);
+        expect([await t.row(), t.seen.runs]).toMatchObject([{ status: 'running', attempts: 1 }, 0]);
+        await t.away.back();
+        await until(async () => (await t.row()).status === 'pending');
+        expect(await t.row()).toEqual({ status: 'pending', attempts: 0, locked_by: null });
+        t.seen.ahead = 60 * 60 * 1000;
+        await until(async () => (await t.row()).status === 'done');
+        expect([t.seen.runs, (await t.row()).attempts]).toEqual([1, 1]);
+      } finally {
+        await t.ends();
+      }
+    }, 60_000);
+
+    // What ends before a handler runs: the write alone fails, by a trigger, as there is no moment
+    // between the claim and it to cut the connection in.
+    it.each([
+      [
+        'of a kind with no handler',
+        (by: pg.Client, id: string) =>
+          by.query("UPDATE jobs SET kind = 'test.nobody' WHERE id = $1", [id]),
+      ],
+      [
+        'whose payload is not valid',
+        (by: pg.Client, id: string) =>
+          by.query("UPDATE jobs SET payload = '[]' WHERE id = $1", [id]),
+      ],
+    ])(
+      'one %s is dead once it can be written',
+      async (_name, spoil) => {
+        const t = await queued({});
+        try {
+          await spoil(t.by, t.id);
+          await t.by.query(`CREATE FUNCTION refuse() RETURNS trigger LANGUAGE plpgsql AS
+          $$ BEGIN RAISE EXCEPTION 'refused'; END $$`);
+          await t.by.query(`CREATE TRIGGER refuse BEFORE UPDATE ON jobs FOR EACH ROW
+          WHEN (NEW.status = 'dead') EXECUTE FUNCTION refuse()`);
+          t.go();
+          await until(() => t.said().length > 0 || t.seen.errors.length > 0);
+          expect((await t.row()).status).toBe('running');
+          await t.by.query('DROP TRIGGER refuse ON jobs');
+          await until(async () => (await t.row()).status === 'dead');
+          expect([t.seen.runs, t.said().length, t.seen.errors]).toEqual([0, 1, []]);
+        } finally {
+          await t.ends();
+        }
+      },
+      60_000,
+    );
+
+    // A try may have been written and its answer lost, so the row is another run's by the next one:
+    // a job put back to pending while it runs would run twice at once.
+    it('a row claimed again after a write whose answer was lost is left alone', async () => {
+      let ran = 0;
+      const t = await queued({
+        body: async () => {
+          ran += 1;
+          if (ran === 1) throw new Error('failed');
+        },
+      });
+      const pool = new pg.Pool({ ...pgPoolConfig(t.app.config.db as PostgresConfig), max: 2 });
+      open.push({ end: () => pool.end() } as never);
+      const { db } = await connectDatabase(t.app.config, { pool });
+      const query = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+      let claimedAgain: Record<string, unknown> | undefined;
+      let tries = 0;
+      pool.query = (async (...args: unknown[]) => {
+        const result = await query(...args);
+        const text = (args[0] as { text?: string }).text ?? '';
+        if (!/^update "jobs" set .*"last_error"/.test(text)) return result;
+        tries += 1;
+        if (tries > 1) return result;
+        expect(await t.row()).toMatchObject({ status: 'pending', attempts: 1 }); // written
+        await t.by.query(
+          `UPDATE jobs SET status = 'running', attempts = 2, locked_by = 'test-worker',
+             locked_at = $2 WHERE id = $1`,
+          [t.id, Date.now() + 60_000],
+        );
+        claimedAgain = await t.whole();
+        throw new Error('answer lost');
+      }) as never;
+      try {
+        t.go(db);
+        await until(() => tries > 1 || t.seen.errors.length > 0);
+        await t.another();
+        expect(await t.whole()).toEqual(claimedAgain);
+        expect([t.said().length, t.seen.runs]).toEqual([1, 2]);
+      } finally {
+        await t.ends();
+      }
+    }, 60_000);
+
+    /** The job fails, and Postgres answers the write of its row with `code`. */
+    async function answered(code: string) {
+      const t = await queued({ body: () => Promise.reject(new Error('failed')) });
+      await t.by.query(`CREATE FUNCTION refuse() RETURNS trigger LANGUAGE plpgsql AS
+        $$ BEGIN RAISE EXCEPTION 'refused' USING ERRCODE = '${code}'; END $$`);
+      await t.by.query(`CREATE TRIGGER refuse BEFORE UPDATE ON jobs FOR EACH ROW
+        WHEN (NEW.status = 'pending') EXECUTE FUNCTION refuse()`);
+      t.go();
+      return t;
+    }
+
+    // Starting up, the old primary made read-only, too many connections, shutting down.
+    it.each(['57P03', '25006', '53300', '57P01'])(
+      'a write Postgres answers with %s is tried again',
+      async (code) => {
+        const t = await answered(code);
+        try {
+          await until(() => t.said().length > 0 || t.seen.errors.length > 0);
+          await t.by.query('DROP TRIGGER refuse ON jobs');
+          await until(async () => (await t.row()).status === 'pending');
+          expect(t.seen.errors).toEqual([]);
+        } finally {
+          await t.ends();
+        }
+      },
+      60_000,
+    );
+
+    // sec and tl: about the statement itself, so no try of it would go better.
+    it.each(['22021', '23514', '42501'])(
+      'a write Postgres answers with %s fails at once',
+      async (code) => {
+        const t = await answered(code);
+        try {
+          await until(() => t.said().length > 0 || t.seen.errors.length > 0);
+          await settle();
+          expect([t.said().length, t.seen.errors.length]).toEqual([0, 1]);
+          expect((await t.row()).status).toBe('running');
+        } finally {
+          await t.ends();
+        }
+      },
+      60_000,
+    );
+
+    it.each([
+      ['its status', "status = 'pending', run_at = run_at + 86400000"],
+      ['its worker', "locked_by = 'another'"],
+      ['when it was claimed', 'locked_at = locked_at + 1'],
+      ['its attempt', 'attempts = attempts + 1'],
+    ])(
+      'a row no longer this claim’s, by %s alone, is left alone',
+      async (_by, change) => {
+        const t = await caught({ body: inTransaction });
+        try {
+          await t.waiting();
+          await t.by.query(`UPDATE jobs SET ${change} WHERE id = $1`, [t.id]);
+          const before = await t.whole();
+          await t.away.back();
+          await t.another();
+          expect(await t.whole()).toEqual(before);
+          expect(t.seen.errors).toEqual([]);
+        } finally {
+          await t.ends();
+        }
+      },
+      60_000,
+    );
   });
 
   // The whole of it, in a process that an uncaught error would end.

@@ -1334,9 +1334,9 @@ const ownDatabases = new WeakMap<pg.PoolClient, PgDb>();
  * Drizzle's transaction on a connection taken here, and given back here whatever happens
  * (https://github.com/bgoleno/opportun/issues/963), and not conn.raw.transaction: drizzle's own pooled
  * one (0.45.4) runs BEGIN outside its try, so a connection that has ended by then was never given
- * back, and poolMax of them left nothing to serve with. It is handed to another caller only after a COMMIT, or a ROLLBACK, that worked (drizzle
- * then throws the body's own error): one whose BEGIN, COMMIT or ROLLBACK failed is destroyed, as its
- * transaction may still be open.
+ * back, and poolMax of them left nothing to serve with. It is handed to another caller only after a
+ * COMMIT, or a ROLLBACK, that worked (drizzle then throws the body's own error): one whose BEGIN, COMMIT
+ * or ROLLBACK failed is destroyed, as its transaction may still be open.
  */
 async function onOwnConnection<T>(
   conn: PgConn,
@@ -1637,6 +1637,29 @@ const WAIT_ENDINGS: ReadonlySet<unknown> = new Set(['55P03', '57014', '40P01']);
 export function isLockWaitEnded(err: unknown): boolean {
   const e = unwrapDriverError(err);
   return e instanceof Error && 'code' in e && WAIT_ENDINGS.has(e.code);
+}
+
+/** SQLSTATE classes: data exception, integrity constraint, syntax error or access rule. */
+const STATEMENT_SQLSTATE = /^(?:22|23|42)[0-9A-Z]{3}$/;
+const STATEMENT_SQLITE = new Set(['SQLITE_TOOBIG', 'SQLITE_MISMATCH', 'SQLITE_ERROR']);
+
+/**
+ * True when the database refused the statement for what it says or holds (SQLSTATE class 22, 23 or 42,
+ * and SQLite's like), so the same one again is refused again. Anything else may pass: a restart or a
+ * failover is answered in many ways (57P03 while it starts, 25006 by the old primary, 53300, node's own
+ * errors without a SQLSTATE), so those are not what is listed (tl on
+ * https://github.com/bgoleno/opportun/issues/963).
+ */
+export function isStatementError(err: unknown): boolean {
+  const e = unwrapDriverError(err);
+  return (
+    e instanceof Error &&
+    'code' in e &&
+    typeof e.code === 'string' &&
+    (STATEMENT_SQLSTATE.test(e.code) ||
+      STATEMENT_SQLITE.has(e.code) ||
+      e.code.startsWith('SQLITE_CONSTRAINT'))
+  );
 }
 
 /** True when `err` is the driver's unique-constraint violation (a lost insert race). */
