@@ -964,6 +964,34 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('The job board did not answer.');
   });
 
+  it('a job already tracked: says so, and links to the opportunity (#936)', async () => {
+    mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'POST /opportunities/opp-1/find-posting': () => ({
+        status: 409,
+        body: {
+          error: {
+            code: 'duplicate',
+            existingId: 'opp-9',
+            existingTitle: 'Staff PM',
+            existingCompany: 'Acme',
+          },
+        },
+      }),
+    });
+    renderWithProviders(
+      <ApplyPanel opp={{ ...OPP, atsJobRef: null, postingUrl: careers } as OpportunityView} />,
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This job is already tracked as Staff PM at Acme.');
+    expect(within(alert).getByRole('link', { name: 'Staff PM at Acme' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-9',
+    );
+  });
+
   it('a description of your own and no known board holding the job: says so, and where to go', async () => {
     mockApi({
       'GET /resumes': { items: [RESUME], total: 1 },
