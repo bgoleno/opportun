@@ -1555,6 +1555,28 @@ export function isLockTimeout(err: unknown): boolean {
   return e instanceof Error && 'code' in e && e.code === '55P03';
 }
 
+/**
+ * Bounds each lock wait in the rest of the caller's transaction (Postgres; a no-op on SQLite, whose
+ * write gate is the wait): the advisory locks it takes and the rows it writes. One that runs out
+ * fails with 55P03. Each wait, not their sum: a transaction with three separate slow holders in its
+ * way waits for three. Ends with the transaction (SET LOCAL). Where lockScope's timeoutMs bounds that
+ * one lock and puts the limit back, this stays (https://github.com/bgoleno/opportun/issues/914).
+ */
+export async function boundLockWaits(tx: Exec, timeoutMs: number): Promise<void> {
+  if (!isPgTransaction(tx)) return;
+  const ms = Math.max(1, Math.floor(timeoutMs));
+  await tx.execute(sql`SELECT set_config('lock_timeout', ${`${ms}ms`}, true)`);
+}
+
+/** The ways Postgres ends a wait for a lock: lock_timeout, statement_timeout, a deadlock. */
+const WAIT_ENDINGS: ReadonlySet<unknown> = new Set(['55P03', '57014', '40P01']);
+
+/** True when `err` is Postgres giving up a wait, whichever way it did (#914). See isLockTimeout. */
+export function isLockWaitEnded(err: unknown): boolean {
+  const e = unwrapDriverError(err);
+  return e instanceof Error && 'code' in e && WAIT_ENDINGS.has(e.code);
+}
+
 /** True when `err` is the driver's unique-constraint violation (a lost insert race). */
 export function isUniqueViolation(err: unknown): boolean {
   const e = unwrapDriverError(err);

@@ -36,6 +36,8 @@ export type Outcome =
       opportunityId?: string;
       /** The stage the capture moved it to, null when the stage was left alone. */
       stage?: string | null;
+      /** Sent only when what the opportunity lacked was not added (#914); absent otherwise. */
+      filled?: false;
     }
   | { kind: 'connected' }
   // What the server refused.
@@ -130,7 +132,7 @@ function success(status: number, body: unknown): Outcome {
       (typeof body.resultId === 'string' || body.resultId === null) &&
       typeof body.duplicate === 'boolean'
     ) {
-      // The four original fields are the frozen contract; the two below were added later and
+      // The four original fields are the frozen contract; the ones below were added later and
       // are carried through only when the server actually sent them, so this build reads an
       // older server without falling over.
       return {
@@ -140,6 +142,7 @@ function success(status: number, body: unknown): Outcome {
         refined: body.refined,
         ...(typeof body.opportunityId === 'string' ? { opportunityId: body.opportunityId } : {}),
         ...(typeof body.stage === 'string' || body.stage === null ? { stage: body.stage } : {}),
+        ...(body.filled === false ? { filled: false as const } : {}),
       };
     }
   }
