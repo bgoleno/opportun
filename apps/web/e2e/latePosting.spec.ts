@@ -86,7 +86,7 @@ for (const width of [375, 1280]) {
     const row = page.getByRole('listitem', { name: `${ROLE} at ${COMPANY}`, exact: true });
     await expect(row).toContainText('Linked to an opportunity already there');
     await row.getByRole('link', { name: 'View opportunity' }).click();
-    await expect(page).toHaveURL(new RegExp(`/opportunities/${tracked!.id}`));
+    await expect(page).toHaveURL((url) => url.pathname === `/opportunities/${tracked!.id}`);
     await page.getByRole('tab', { name: 'Timeline' }).click();
     await expect(page.getByText(/^Also posted via/)).toHaveCount(1);
     await expect(page.getByText('Boston, MA')).toBeVisible();
