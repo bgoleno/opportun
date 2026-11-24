@@ -50,7 +50,7 @@ async function readyOpportunity(app: FastifyInstance, c: TestClient): Promise<st
   const opp = await createOpportunity(app.db, ctxOf(c), {
     companyName: 'Example Corp',
     // A title of its own: the same company and title twice is a duplicate.
-    title: `Senior Platform Engineer ${newId().slice(-6)}`,
+    title: `Senior Platform Engineer ${newId()}`,
     sourceKind: 'manual',
   });
   await app.db
