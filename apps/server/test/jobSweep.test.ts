@@ -181,7 +181,8 @@ describe.runIf(testDialect === 'postgres')('the claim’s answer is lost (#974)'
     await sweeps();
     expect([t.seen.runs, t.seen.dead, t.said(MADE_DEAD).length]).toEqual([0, 1, 1]);
     const row = await t.rowOf(id);
-    expect(row).toMatchObject({ attempts: 1, payload: {}, locked_by: null });
+    expect(row).toMatchObject({ attempts: 1, locked_by: null });
+    expect(row.payload).toBe('{}');
     expect(row.last_error).toMatch(/nothing/);
   });
 
@@ -238,7 +239,8 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     await until(async () => (await t.statusOf(id)) === 'done');
     t.seen.ahead = 60 * 60 * 1000;
     await sweeps();
-    expect(await t.rowOf(id)).toMatchObject({ status: 'done', attempts: 1, payload: {} });
+    expect(await t.rowOf(id)).toMatchObject({ status: 'done', attempts: 1 });
+    expect((await t.rowOf(id)).payload).toBe('{}');
     expect([t.seen.runs, t.said(PUT_BACK).length]).toEqual([1, 0]);
   });
 
@@ -275,7 +277,8 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     await t.accept();
     await until(async () => (await t.statusOf(id)) === 'dead' && t.seen.dead > 0);
     await sweeps();
-    expect(await t.rowOf(id)).toMatchObject({ last_error: 'Error: failed', payload: {} });
+    expect(await t.rowOf(id)).toMatchObject({ last_error: 'Error: failed' });
+    expect((await t.rowOf(id)).payload).toBe('{}');
     expect([t.seen.runs, t.seen.dead]).toEqual([1, 1]);
   });
 
@@ -311,6 +314,7 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     const id = await t.add();
     t.start();
     await until(() => t.seen.errors.length > 0);
+    const claimedAt = (await t.rowOf(id)).locked_at;
     await t.by.query(
       "UPDATE jobs SET status = 'pending', run_at = $2, locked_by = NULL, locked_at = NULL WHERE id = $1",
       [id, Date.now() + 1e9],
@@ -319,13 +323,31 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     await t.accept();
     await sweeps();
     expect(await t.rowOf(id)).toEqual(before);
-    // For good: the same claim on the row again is nobody's outcome.
+    // For good: the very claim on the row again, and it is nobody's outcome.
     await t.by.query(
       "UPDATE jobs SET status = 'running', locked_by = $2, locked_at = $3 WHERE id = $1",
-      [id, WORKER, Date.now()],
+      [id, WORKER, claimedAt],
     );
     await until(async () => (await t.statusOf(id)) === 'pending');
     expect((await t.rowOf(id)).attempts).toBe(1);
+  });
+
+  it('a row changed between the read and the kept write is left alone', async () => {
+    const t = await setUp();
+    await t.refuse('done', '57P03');
+    const id = await t.add();
+    t.start();
+    await until(() => t.seen.errors.length > 0);
+    const pause = pauseAt('jobs.sweep.found');
+    await pause.reached;
+    await t.accept();
+    await t.by.query('UPDATE jobs SET attempts = attempts + 1 WHERE id = $1', [id]);
+    const before = await t.rowOf(id);
+    const next = pauseAt('jobs.sweep.found');
+    pause.release();
+    await next.reached;
+    expect(await t.rowOf(id)).toEqual(before);
+    next.release();
   });
 
   it('kept, then refused for what it says: dropped, and the next sweep queues the job again', async () => {
@@ -351,7 +373,8 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     await until(async () => (await t.statusOf(id)) === 'dead');
     await until(() => t.seen.dead > 0);
     expect([t.seen.runs, t.seen.dead, t.said(PUT_BACK).length]).toEqual([2, 1, 1]);
-    expect(await t.rowOf(id)).toMatchObject({ attempts: 2, payload: {} });
+    expect(await t.rowOf(id)).toMatchObject({ attempts: 2 });
+    expect((await t.rowOf(id)).payload).toBe('{}');
   });
 
   it('the first write made, its answer lost, and the rest failing: nothing changes it', async () => {
@@ -398,6 +421,18 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
       await until(async () => (await t.statusOf(id)) === 'pending');
       expect(await t.rowOf(id)).toMatchObject({ attempts: 1, locked_by: null });
       expect([t.seen.runs, t.said(PUT_BACK).length]).toEqual([1, 1]);
+    });
+
+    it('nothing is kept, though its limit ran out first: it could be written past the hold', async () => {
+      const t = await setUp({ gate: new DemoResetGate() });
+      await t.refuse('done', '57P03');
+      const id = await t.add();
+      t.start();
+      await until(() => t.seen.errors.length > 0);
+      await t.accept();
+      await until(async () => (await t.statusOf(id)) !== 'running');
+      expect(await t.rowOf(id)).toMatchObject({ status: 'pending', attempts: 1 });
+      expect(t.said(PUT_BACK)).toHaveLength(1);
     });
 
     it('one whose row the reset deleted: nothing is written', async () => {
@@ -532,6 +567,44 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
       next.release();
     },
   );
+
+  it('at its last attempt, changed between the read and the write: not dead, not settled', async () => {
+    const t = await setUp();
+    t.start();
+    await sweeps();
+    const left = row({ attempts: 3 });
+    const pause = pauseAt('jobs.sweep.found');
+    await t.app.db
+      .insert(jobs)
+      .values(left as never)
+      .run();
+    await pause.reached;
+    await t.by.query("UPDATE jobs SET status = 'done' WHERE id = $1", [left.id]);
+    pause.release();
+    await sweeps();
+    expect(await t.statusOf(left.id)).toBe('done');
+    expect([t.said(MADE_DEAD).length, t.seen.dead]).toEqual([0, 0]);
+  });
+
+  it('no job is claimed while a sweep reads: it would be in neither its set nor its gate', async () => {
+    let letGo!: () => void;
+    const held = new Promise<void>((r) => (letGo = r));
+    const t = await setUp({ body: () => held });
+    t.start();
+    await sweeps();
+    const pause = pauseAt('jobs.sweep.reading');
+    await pause.reached;
+    const id = await t.add();
+    await sweeps();
+    expect(await t.statusOf(id)).toBe('pending');
+    pause.release();
+    await until(() => t.seen.runs === 1);
+    await sweeps();
+    expect(await t.rowOf(id)).toMatchObject({ status: 'running', attempts: 1 });
+    letGo();
+    await until(async () => (await t.statusOf(id)) === 'done');
+    expect([t.seen.runs, t.said(PUT_BACK).length]).toEqual([1, 0]);
+  });
 
   it('a job of runDueJobs in the same process is left alone', async () => {
     const t = await setUp({ workerId: null });

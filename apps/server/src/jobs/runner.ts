@@ -832,6 +832,7 @@ export function startRunner(
       if (stopped) return;
       // Before the read: a job that ends meanwhile is either in this set or fails its write's guard.
       const held = new Set(inHand);
+      await racePoint('jobs.sweep.reading');
       const rows = await db
         .select({
           id: jobs.id,
