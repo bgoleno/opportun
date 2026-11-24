@@ -4,7 +4,7 @@
 // next request. The Apple Mail line reflects the last batch the connector pushed.
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Copy } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { SharedDemoNotice } from '@/components/SharedDemoNotice';
 import { FormError } from '@/components/FormError';
@@ -25,7 +25,16 @@ import { toast } from '@/components/ui/toast';
 import { api, ApiError, errorMessage } from '@/lib/api';
 import { meQuery } from '@/lib/auth';
 import { useReviewUsage } from '@/components/apply/api';
-import { ek, ExtensionSetupDialog, type ArtifactList } from './-extensionSetup';
+import {
+  answerLost,
+  createDeviceToken,
+  ek,
+  ExtensionSetupDialog,
+  lostTokenText,
+  NOT_SHOWN,
+  rereadTokens,
+  type ArtifactList,
+} from './-extensionSetup';
 
 const SCOPES = [
   { scope: 'mail:push', label: 'Apple Mail connector' },
@@ -77,6 +86,48 @@ export function relativeTime(ms: number, now: number = Date.now()): string {
   return new Date(ms).toLocaleDateString();
 }
 
+/** Creates whose answer was lost: what they made, if anything, is in the list unseen (#904). */
+interface Lost {
+  /**
+   * The names they were sent with. `settled`, once a create of that name has been shown since: how
+   * many reads of the list had finished by then, so that a later one is known to be later.
+   */
+  names: { name: string; settled: number | null }[];
+  /**
+   * Whether the list had been read before the first of them. If not, nothing in it can be told to
+   * be theirs: nothing is marked, and the page points at no token.
+   */
+  read: boolean;
+  /** The ids that cannot be theirs: the list before the first of them, and those shown since. */
+  known: string[];
+}
+
+/**
+ * The live tokens that a lost create may have made, of one name or of any. One that has been used is
+ * none: nobody has a lost one's value.
+ */
+function unseen(lost: Lost | null, list: DeviceToken[], name?: string): DeviceToken[] {
+  if (lost === null) return [];
+  return list.filter(
+    (t) =>
+      t.revokedAt === null &&
+      t.lastUsedAt === null &&
+      !lost.known.includes(t.id) &&
+      (name === undefined ? lost.names.some((n) => n.name === t.name) : t.name === name),
+  );
+}
+
+function dropNames(lost: Lost | null, done: (n: Lost['names'][number]) => boolean): Lost | null {
+  if (lost === null) return null;
+  const names = lost.names.filter((n) => !done(n));
+  if (names.length === lost.names.length) return lost;
+  return names.length === 0 ? null : { ...lost, names };
+}
+
+// A condition, not an order: another tab can have made one of the same name meanwhile.
+const foundTokenText = ({ name, settled }: Lost['names'][number]): string =>
+  `A token named "${name}" was created since then, and its value was not shown here. Unless you have it, revoke what the list marks "${NOT_SHOWN}"${settled === null ? ' and create another' : ''}.`;
+
 export function DevicesCard() {
   const qc = useQueryClient();
   const tokens = useQuery({
@@ -97,8 +148,14 @@ export function DevicesCard() {
   const [settingUp, setSettingUp] = useState(false);
   const [creating, setCreating] = useState(false);
   const [created, setCreated] = useState<string | null>(null);
+  const [lost, setLost] = useState<Lost | null>(null);
+  // As it is when a create settles, not when it started.
+  const lostNow = useRef(lost);
+  lostNow.current = lost;
+  /** Every token shown here since the page opened: one may be missing from the list for a moment. */
+  const shownIds = useRef<string[]>([]);
   const [revoking, setRevoking] = useState<DeviceToken | null>(null);
-  const refresh = () => qc.invalidateQueries({ queryKey: dk.tokens });
+  const refresh = () => rereadTokens(qc);
   const revoke = useMutation({
     mutationFn: (id: string) => api<void>(`/device-tokens/${id}`, { method: 'DELETE' }),
     // Revoking the last mail:push token disconnects Apple Mail.
@@ -106,6 +163,56 @@ export function DevicesCard() {
   });
 
   const items = tokens.data?.items ?? [];
+  const listNow = () => qc.getQueryData<{ items: DeviceToken[] }>(dk.tokens)?.items ?? [];
+  /** The ids in the list, or null when it has not been read: not read is not the same as empty. */
+  const listed = () => {
+    const state = qc.getQueryState<{ items: DeviceToken[] }>(dk.tokens);
+    if (state?.data === undefined || state.status === 'error') return null;
+    return state.data.items.map((t) => t.id);
+  };
+  function onLost(name: string, before: string[] | null): string {
+    setLost((cur) => ({
+      // From before the first lost create: a second one's list may hold the first one's token.
+      read: cur?.read ?? before !== null,
+      known: cur?.known ?? [...(before ?? []), ...shownIds.current],
+      names: [...(cur?.names ?? []).filter((n) => n.name !== name), { name, settled: null }],
+    }));
+    return lostTokenText(name, lostNow.current?.read ?? before !== null);
+  }
+  function onShown(id: string, name: string) {
+    shownIds.current.push(id);
+    const settled = qc.getQueryState(dk.tokens)?.dataUpdateCount ?? 0;
+    setLost((cur) =>
+      cur === null
+        ? null
+        : {
+            read: cur.read,
+            known: [...cur.known, id],
+            names: cur.names.map((n) => (n.name === name ? { name, settled } : n)),
+          },
+    );
+    void refresh();
+  }
+  // A settled name goes with the first later read of the list that shows nothing of it left over,
+  // whichever read that is: the one onShown starts may be cancelled by another (the dialog's own
+  // close, a revoke). Only reads that worked are counted, and one begun before was cancelled by it.
+  useEffect(() => {
+    const state = qc.getQueryState<{ items: DeviceToken[] }>(dk.tokens);
+    if (state?.data === undefined) return;
+    const { items: list } = state.data;
+    const reads = state.dataUpdateCount;
+    setLost((cur) =>
+      dropNames(
+        cur,
+        (n) => n.settled !== null && reads > n.settled && unseen(cur, list, n.name).length === 0,
+      ),
+    );
+  }, [qc, lost, tokens.dataUpdatedAt, tokens.isFetching]);
+  function dismiss() {
+    setLost(null);
+    // One the server made after the list was last read (sec on #918).
+    void refresh();
+  }
   return (
     <Card data-tour="devices-card">
       <CardHeader>
@@ -131,6 +238,23 @@ export function DevicesCard() {
         {/* Decision 132: mail stays on the demo, so a shared account says what that means. */}
         <SharedDemoNotice about="mail" />
         <AppleMailLine status={appleMail.data} />
+        {lost === null ? null : (
+          <div className="grid justify-items-start gap-2">
+            {lost.names.map((n) => (
+              <FormError
+                key={n.name}
+                message={
+                  lost.read && unseen(lost, items, n.name).length > 0
+                    ? foundTokenText(n)
+                    : lostTokenText(n.name, lost.read, n.settled !== null)
+                }
+              />
+            ))}
+            <Button size="sm" variant="outline" onClick={dismiss}>
+              Dismiss
+            </Button>
+          </div>
+        )}
         {tokens.isError ? <FormError message={errorMessage(tokens.error)} /> : null}
         {tokens.isPending ? (
           <p className="text-muted-foreground">Loading...</p>
@@ -139,7 +263,12 @@ export function DevicesCard() {
         ) : (
           <ul aria-label="Device tokens" className="grid gap-2">
             {items.map((t) => (
-              <TokenRow key={t.id} token={t} onRevoke={() => setRevoking(t)} />
+              <TokenRow
+                key={t.id}
+                token={t}
+                unseen={lost?.read === true && unseen(lost, [t]).length > 0}
+                onRevoke={() => setRevoking(t)}
+              />
             ))}
           </ul>
         )}
@@ -152,15 +281,25 @@ export function DevicesCard() {
         open={settingUp}
         onOpenChange={setSettingUp}
         displayName={me.data?.displayName ?? 'this browser'}
+        listed={listed}
+        onLost={onLost}
+        onShown={onShown}
       />
       <CreateDialog
         open={creating}
-        onOpenChange={setCreating}
-        onCreated={(token) => {
-          setCreating(false);
-          setCreated(token);
-          void refresh();
+        onOpenChange={(open) => {
+          setCreating(open);
+          // One the server made after the list was last read (sec on #918).
+          if (!open && lost !== null) void refresh();
         }}
+        listed={listed}
+        onCreated={(res) => {
+          setCreating(false);
+          setCreated(res.token);
+          onShown(res.id, res.name);
+        }}
+        onFailed={() => void refresh()}
+        onLost={onLost}
       />
       {created === null ? null : <ShowOnceDialog token={created} onDone={() => setCreated(null)} />}
       <ConfirmDialog
@@ -172,7 +311,17 @@ export function DevicesCard() {
         description="The device using this token is refused from its next request on. This cannot be undone: create a new token to reconnect it."
         confirmLabel="Revoke"
         onConfirm={async () => {
-          if (revoking !== null) await revoke.mutateAsync(revoking.id);
+          if (revoking === null) return;
+          await revoke.mutateAsync(revoking.id);
+          // A lost one revoked: nothing is left to say of its name, unless another of it is unseen.
+          setLost((cur) =>
+            dropNames(
+              cur,
+              (n) =>
+                unseen(cur, [revoking], n.name).length > 0 &&
+                unseen(cur, listNow(), n.name).every((t) => t.id === revoking.id),
+            ),
+          );
         }}
       />
     </Card>
@@ -265,13 +414,24 @@ function AppleMailLine({ status }: { status: AppleMailStatus | undefined }) {
   );
 }
 
-function TokenRow({ token, onRevoke }: { token: DeviceToken; onRevoke: () => void }) {
+function TokenRow({
+  token,
+  unseen: notShown,
+  onRevoke,
+}: {
+  token: DeviceToken;
+  unseen: boolean;
+  onRevoke: () => void;
+}) {
   const revoked = token.revokedAt !== null;
   return (
     <li aria-label={token.name} className="grid gap-1 rounded-md border px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-medium">{token.name}</span>
+        {/* The user's own words, so it can be one long one: it breaks anywhere rather than push
+            Revoke, and the page, off the screen (#921). */}
+        <span className="font-medium [overflow-wrap:anywhere]">{token.name}</span>
         {revoked ? <Badge variant="secondary">Revoked</Badge> : null}
+        {notShown ? <Badge variant="destructive">{NOT_SHOWN}</Badge> : null}
         {!revoked ? (
           <Button size="sm" variant="outline" className="ml-auto" onClick={onRevoke}>
             Revoke
@@ -303,8 +463,20 @@ interface FieldErrors {
 function CreateDialog(props: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onCreated: (token: string) => void;
+  /** The ids of the tokens in the list, or null when it has not been read. */
+  listed: () => string[] | null;
+  onCreated: (made: { id: string; name: string; token: string }) => void;
+  /** Whatever failed: the list is read again, as the token may have been made all the same. */
+  onFailed: () => void;
+  /**
+   * The token of this name may have been made, and its answer was lost; `listed` from before it.
+   * Returns what to say of it.
+   */
+  onLost: (name: string, before: string[] | null) => string;
 }) {
+  // Whether the dialog is still open when a create settles: read then, not when it started.
+  const open = useRef(props.open);
+  open.current = props.open;
   const [name, setName] = useState('');
   const [scopes, setScopes] = useState<Scope[]>(['mail:push']);
   const [password, setPassword] = useState('');
@@ -333,19 +505,29 @@ function CreateDialog(props: {
     if (Object.keys(next).length > 0) return;
     setBusy(true);
     setError(null);
+    const before = props.listed();
+    const asked = name.trim();
     try {
-      const res = await api<DeviceToken & { token: string }>('/device-tokens', {
-        method: 'POST',
-        body: { name: name.trim(), scopes, password },
+      const res = await createDeviceToken<DeviceToken & { token: string }>({
+        name: asked,
+        scopes,
+        password,
       });
       reset();
-      props.onCreated(res.token);
+      props.onCreated({ id: res.id, name: asked, token: res.token });
     } catch (err) {
-      setError(
-        err instanceof ApiError && err.code === 'invalid_password'
-          ? 'That is not your current password.'
-          : errorMessage(err),
-      );
+      props.onFailed();
+      if (answerLost(err)) {
+        // The page says so too, and alone does when the dialog was closed meanwhile.
+        const says = props.onLost(asked, before);
+        if (open.current) setError(says);
+      } else {
+        setError(
+          err instanceof ApiError && err.code === 'invalid_password'
+            ? 'That is not your current password.'
+            : errorMessage(err),
+        );
+      }
     } finally {
       setBusy(false);
     }
@@ -452,7 +634,7 @@ function ShowOnceDialog({ token, onDone }: { token: string; onDone: () => void }
   }
   return (
     <Dialog open onOpenChange={() => undefined}>
-      <DialogContent className="max-w-md" showClose={false}>
+      <DialogContent className="max-w-md" showClose={false} guardClose>
         <div className="grid gap-4">
           <DialogHeader>
             <DialogTitle>Copy your device token</DialogTitle>

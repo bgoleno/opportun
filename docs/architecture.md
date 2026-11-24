@@ -250,7 +250,6 @@ There are three strongly connected groups at the checked commit:
   - board API URLs, in the adapters, `jobs/atsDetect.ts`, `jobs/opportunityEnrich.ts` and `lib/greenhouseEmbed.ts`;
   - API hosts, in both `lib/safeFetch.ts` and `obs/outbound.ts`;
   - the ATS kind list, in `adapters/discoverySource.ts`, `jobs/atsDetect.ts` and the web.
-- **The same constant twice in the server:** `LINKEDIN_HOST`, in `lib/captureSites.ts` and `lib/linkedinCapture.ts`.
 - **Admin checks done three ways:** `fail(reply, 403)` in `routes/auth.ts`, `throw forbidden()` in `routes/backups.ts`, and a local `requireAdmin` in `routes/oauthLogin.ts`.
 - **Resume-store dispatch repeated** in `routes/resumes.ts`, `jobs/submissionSnapshot.ts` and `lib/importer.ts`, with two names for one store (`google` and `google_doc`).
 
@@ -290,10 +289,11 @@ Each seam below is what a multi-tenant, horizontally scaled service would need, 
 
 ### 8.2 Job queue and scheduling (M)
 
-- **Now:** jobs are rows in `jobs`, claimed with one `UPDATE … RETURNING` (plus `FOR UPDATE SKIP LOCKED` on Postgres, `db/dialect.ts`). A pool of 4 workers polls every second (`jobs/runner.ts`), with retries, backoff, a dedupe key, and cron schedules kept as settings rows. The claim is already safe for several workers. Three things assume one process:
+- **Now:** jobs are rows in `jobs`, claimed with one `UPDATE … RETURNING` (plus `FOR UPDATE SKIP LOCKED` on Postgres, `db/dialect.ts`). A pool of 4 workers polls every second (`jobs/runner.ts`), with retries, backoff, a dedupe key, and cron schedules kept as settings rows. The claim is already safe for several workers. Four things assume one process:
   - orphan recovery returns every `running` row to pending at startup;
   - per-kind caps are counted in a process-local map;
-  - the backup queue lives in memory.
+  - the backup queue lives in memory;
+  - the boot sweep of posting checks (`settleAbandonedChecks`, `lib/postingChecks.ts`, run from `app.ts` before the runner starts) ends every posting still `searching` that has no pending or running check job. It reads that as "nothing is left to finish it" only because no request has been served yet: a capture sets `searching` and then queues its job (`lib/captureResolve.ts`), as two writes, so a second process that was already serving requests could have a capture between them, and the sweep would end that check.
 
   `docs/adr/0004-postgres.md` keeps a second process out of scope.
 

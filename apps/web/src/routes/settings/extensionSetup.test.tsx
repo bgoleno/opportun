@@ -4,6 +4,7 @@
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { browserCloses, pressEscapeOn } from '@/test/dialog';
 import { mockApi, renderWithProviders } from '@/test/render';
 import { ExtensionSetupDialog } from './-extensionSetup';
 
@@ -268,6 +269,63 @@ describe('ExtensionSetupDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Close setup' }));
     expect(await screen.findByText(/cannot be shown again/i)).toBeInTheDocument();
     expect(closed).toBe(false);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/898: the browser closed the setup on Escape, behind
+  // the question it opened, so staying left nothing to stay on and the token was gone.
+  it.each([
+    ['Escape', pressEscapeOn],
+    ['a close the browser makes on its own', browserCloses],
+  ])('%s asks first too, and the token is still there after staying', async (_how, leave) => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    show({}, { onOpenChange });
+    await mint(user);
+    await screen.findByText(TOKEN);
+    const setup = screen.getByRole('dialog', { name: 'Set up the browser extension' });
+    leave(setup);
+    expect(await screen.findByText(/cannot be shown again/i)).toBeInTheDocument();
+    expect(setup).toHaveAttribute('open');
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByText(/cannot be shown again/i)).toBeNull());
+    expect(setup).toHaveAttribute('open');
+    expect(screen.getByText(TOKEN)).toBeInTheDocument();
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it('nothing closes it while the token is being made, and the token is shown', async () => {
+    const user = userEvent.setup();
+    const onOpenChange = vi.fn();
+    let answer!: () => void;
+    show(
+      {
+        'POST /device-tokens': () =>
+          new Promise((resolve) => {
+            answer = () => resolve({ status: 201, body: created() });
+          }),
+      },
+      { onOpenChange },
+    );
+    await mint(user);
+    await screen.findByRole('button', { name: 'Working...' });
+    const setup = screen.getByRole('dialog', { name: 'Set up the browser extension' });
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull();
+    await user.click(setup); // the backdrop
+    pressEscapeOn(setup);
+    browserCloses(setup);
+    expect(setup).toHaveAttribute('open');
+    expect(onOpenChange).not.toHaveBeenCalled();
+    answer();
+    expect(await screen.findByText(TOKEN)).toBeInTheDocument();
+  });
+
+  it('before a token is made, Escape closes it as before', async () => {
+    const onOpenChange = vi.fn();
+    show({}, { onOpenChange });
+    await screen.findByLabelText(/password/i);
+    pressEscapeOn(screen.getByRole('dialog', { name: 'Set up the browser extension' }));
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });
 

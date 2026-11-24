@@ -1,6 +1,8 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { setUnauthorizedHandler } from '@/lib/api';
 import { formatDateTime } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import type { CommunicationView } from './api';
@@ -822,9 +824,9 @@ describe('Inbox paging while the next page loads (#646 review)', () => {
     await user.click(screen.getByRole('button', { name: 'Next page' }));
     await screen.findByText('message 3');
     await user.click(screen.getByRole('button', { name: 'Next page' }));
-    // The last page is loading: messages 3 and 4 are still shown.
-    expect(await screen.findByText('Showing 5–5 of 5')).toBeInTheDocument();
-    expect(screen.queryByText(/of 5$/)?.textContent).not.toMatch(/5–6/);
+    // The last page is loading: messages 3 and 4 are still shown, and the range is theirs (#894).
+    expect(await screen.findByText('Loading page 3...')).toBeInTheDocument();
+    expect(screen.getByText('Showing 3–4 of 5')).toBeInTheDocument();
     release();
     expect(await screen.findByText('message 5')).toBeInTheDocument();
     expect(screen.getByText('Showing 5–5 of 5')).toBeInTheDocument();
@@ -1259,6 +1261,347 @@ describe('Inbox bulk Reject: a reload behind the confirmation (#841)', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Reject 2' }));
     expect(await screen.findByText('1 rejected')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(screen.queryByText('Nothing was rejected')).toBeNull();
+  });
+});
+
+// qa's pass of 0.5.0 (#894): what the Inbox says about its rows is about the rows on screen.
+describe('Inbox: what it says is true of the rows shown (#894)', () => {
+  const ALL = Array.from({ length: 5 }, (_, i) => ({
+    ...BASE,
+    id: `m${i + 1}`,
+    subject: `message ${i + 1}`,
+    opportunityId: null,
+    needsReview: true,
+  }));
+  const GMAIL = { connected: true, lastSyncAt: null, count: 0, status: null };
+  const FAILED = {
+    status: 500,
+    body: { error: { code: 'server_error', message: 'The server could not do that.' } },
+  };
+
+  /** Pages of ALL; `fails` says which list requests answer 500. */
+  function serve(fails: (call: { search: string }) => boolean) {
+    return mockApi({
+      'GET /communications': (call: { search: string }) => {
+        if (fails(call)) return FAILED;
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        return { status: 200, body: { items: ALL.slice(offset, offset + limit), total: 5 } };
+      },
+      'GET /integrations/gmail': GMAIL,
+      'POST /communications/bulk': { succeeded: 2, skipped: 0, changed: 0 },
+    });
+  }
+
+  it('a page that fails to load: the range stays the rows shown, and Try again loads it', async () => {
+    const user = userEvent.setup();
+    let failing = true;
+    serve((c) => failing && c.search.includes('offset=2'));
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Page 2 couldn't load. The server could not do that. Page 1 is still shown.",
+    );
+    expect(screen.getByText('message 1')).toBeInTheDocument();
+    expect(screen.getByText('Showing 1–2 of 5')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
+
+    // Still failing: it says so again.
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("Page 2 couldn't load.");
+    expect(screen.getByText('Showing 1–2 of 5')).toBeInTheDocument();
+
+    failing = false;
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('message 3')).toBeInTheDocument();
+    expect(screen.getByText('Showing 3–4 of 5')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    // Try again went with the error: focus is on the list, not the page body.
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it('Next from a page that failed asks for that page again', async () => {
+    const user = userEvent.setup();
+    let failing = true;
+    serve((c) => failing && c.search.includes('offset=2'));
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByRole('alert');
+    failing = false;
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(await screen.findByText('message 3')).toBeInTheDocument();
+    expect(screen.getByText('Showing 3–4 of 5')).toBeInTheDocument();
+  });
+
+  it('a first load that fails can be tried again', async () => {
+    const user = userEvent.setup();
+    let failing = true;
+    serve(() => failing);
+    renderWithProviders(<Inbox pageSize={2} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('The server could not do that.');
+    failing = false;
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+  });
+
+  it('a new filter that fails says the rows shown are from before it', async () => {
+    const user = userEvent.setup();
+    serve((c) => c.search.includes('q='));
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    await user.type(screen.getByRole('searchbox', { name: 'Keyword' }), 'beta');
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "The list couldn't refresh. The server could not do that. The messages shown are from before the filters changed.",
+    );
+    expect(screen.getByText('message 3')).toBeInTheDocument();
+    expect(screen.getByText('Showing 3–4 of 5')).toBeInTheDocument();
+    // The pages of rows no filter in the boxes asked for are not offered.
+    expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
+  });
+
+  // tl on #906: an empty page that answers another request is no rows to keep.
+  it('a step back to a page that fails says so, and keeps nothing of the emptied page', async () => {
+    const user = userEvent.setup();
+    let rows = ALL.slice(0, 3);
+    let failing = false;
+    mockApi({
+      'GET /communications': (call: { search: string }) => {
+        const params = new URLSearchParams(call.search);
+        const limit = Number(params.get('limit'));
+        const offset = Number(params.get('offset') ?? 0);
+        // The list's first page, not the tab count's own read of it.
+        if (failing && limit === 2 && offset === 0) return FAILED;
+        return {
+          status: 200,
+          body: { items: rows.slice(offset, offset + limit), total: rows.length },
+        };
+      },
+      'GET /integrations/gmail': GMAIL,
+    });
+    const { queryClient } = renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getByRole('button', { name: 'Next page' }));
+    await screen.findByText('message 3');
+    // Page 1 is no longer cached and can't be had; page 2's only message leaves.
+    queryClient.removeQueries({
+      predicate: ({ queryKey }) =>
+        queryKey[0] === 'communications' && queryKey.at(-1) === 2 && queryKey.at(-2) === 0,
+    });
+    rows = ALL.slice(0, 2);
+    failing = true;
+    await act(() => queryClient.invalidateQueries());
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/^The server could not do that\.$/);
+    expect(screen.queryByText('Loading...')).toBeNull();
+    expect(screen.queryByText(/still shown/)).toBeNull();
+    expect(screen.queryByText(/^Showing /)).toBeNull();
+    failing = false;
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a filter that fails after one that matched nothing claims nothing about either', async () => {
+    const user = userEvent.setup();
+    let failing = true;
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => (release = r));
+    mockApi({
+      'GET /communications': async (call: { search: string }) => {
+        const q = new URLSearchParams(call.search).get('q');
+        if (q === 'alpha') return { status: 200, body: { items: [], total: 0 } };
+        if (q === 'beta') {
+          await held;
+          if (failing) return FAILED;
+        }
+        return { status: 200, body: { items: ALL.slice(0, 2), total: 2 } };
+      },
+      'GET /integrations/gmail': GMAIL,
+    });
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    const box = screen.getByRole('searchbox', { name: 'Keyword' });
+    await user.click(box);
+    await user.paste('alpha');
+    await screen.findByText('No messages match these filters.');
+    await user.clear(box);
+    await user.paste('beta');
+    // While it loads, nothing has been said about "beta" yet either.
+    expect(await screen.findByText('Loading...')).toBeInTheDocument();
+    expect(screen.queryByText('No messages match these filters.')).toBeNull();
+    release();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^The server could not do that\.$/);
+    expect(screen.queryByText('No messages match these filters.')).toBeNull();
+    expect(screen.queryByText(/from before the filters changed/)).toBeNull();
+    expect(screen.queryByText('Loading...')).toBeNull();
+    failing = false;
+    await user.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['Keyword', 'keyword'],
+    ['Sender', 'sender'],
+  ])('a %s over 200 characters is refused in plain words, and lists nothing', async (box, word) => {
+    const user = userEvent.setup();
+    const { calls } = serve(() => false);
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    const input = screen.getByRole('searchbox', { name: box });
+    await user.click(input);
+    await user.paste('x'.repeat(201));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      `The ${word} filter is too long: 200 characters at most. No messages are listed until it is shorter.`,
+    );
+    expect(screen.queryByText('message 1')).toBeNull();
+    expect(screen.queryByText(/^Showing /)).toBeNull();
+    expect(screen.queryByText(/Too big/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    // Never sent: the server would only refuse it.
+    expect(calls.some((c) => c.search.includes('xxx'))).toBe(false);
+
+    // 200 characters, spaces around them aside, are sent.
+    await user.clear(input);
+    await user.paste(`  ${'y'.repeat(200)}  `);
+    await waitFor(() => expect(calls.some((c) => c.search.includes('y'.repeat(200)))).toBe(true));
+    expect(await screen.findByText('message 1')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(input).not.toHaveAttribute('aria-invalid', 'true');
+  });
+
+  it('a filter made too long behind an open confirmation says why nothing was rejected', async () => {
+    const user = userEvent.setup();
+    const { calls } = serve(() => false);
+    renderWithProviders(<Inbox pageSize={2} />);
+    await screen.findByText('message 1');
+    await user.click(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]!);
+    await user.click(screen.getByRole('searchbox', { name: 'Keyword' }));
+    await user.paste('x'.repeat(201));
+    await user.click(screen.getByRole('button', { name: /^Reject 1/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(await toastRegion().findByText('Nothing was rejected')).toBeInTheDocument();
+    expect(
+      toastRegion().getByText('No messages are listed while a filter is too long.'),
+    ).toBeInTheDocument();
+    expect(posts(calls, '/communications/bulk')).toHaveLength(0);
+  });
+
+  /** The Inbox, and a way off it that leaves the toasts up, as a route change does. */
+  function Leavable({ leaveRef }: { leaveRef: { current: () => void } }) {
+    const [here, setHere] = useState(true);
+    leaveRef.current = () => setHere(false);
+    return here ? <Inbox pageSize={2} /> : <p>Another page</p>;
+  }
+
+  async function openBulkReject(user: ReturnType<typeof userEvent.setup>) {
+    await screen.findByText('message 1');
+    for (const box of screen.getAllByRole('checkbox', { name: /Select message from/ })) {
+      await user.click(box);
+    }
+    await user.click(screen.getByRole('button', { name: /^Reject 2/ }));
+    return screen.findByRole('dialog', { name: 'Reject 2 messages?' });
+  }
+
+  it('leaving the page with the confirmation open claims nothing about the messages', async () => {
+    const user = userEvent.setup();
+    const { calls } = serve(() => false);
+    const leaveRef = { current: () => {} };
+    renderWithProviders(<Leavable leaveRef={leaveRef} />);
+    await openBulkReject(user);
+    act(() => leaveRef.current());
+    expect(await screen.findByText('Another page')).toBeInTheDocument();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.queryByText('Nothing was rejected')).toBeNull();
+    expect(posts(calls, '/communications/bulk')).toHaveLength(0);
+  });
+
+  it('a 401 on Confirm that sends the user to sign in claims nothing about the messages', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /communications': { items: ALL.slice(0, 2), total: 2 },
+      'GET /integrations/gmail': GMAIL,
+      'POST /communications/bulk': () => ({
+        status: 401,
+        body: { error: { code: 'unauthorized' } },
+      }),
+    });
+    const leaveRef = { current: () => {} };
+    setUnauthorizedHandler(() => leaveRef.current());
+    try {
+      renderWithProviders(<Leavable leaveRef={leaveRef} />);
+      const dialog = await openBulkReject(user);
+      await user.click(within(dialog).getByRole('button', { name: 'Reject 2' }));
+      expect(await screen.findByText('Another page')).toBeInTheDocument();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(screen.queryByText('Nothing was rejected')).toBeNull();
+    } finally {
+      setUnauthorizedHandler(() => {});
+    }
+  });
+
+  it('a reject that failed, then rows that leave later, does not speak of the old confirmation', async () => {
+    const user = userEvent.setup();
+    let rows = ALL.slice(0, 2);
+    mockApi({
+      'GET /communications': () => ({ status: 200, body: { items: rows, total: rows.length } }),
+      'GET /integrations/gmail': GMAIL,
+      'POST /communications/bulk': () => FAILED,
+    });
+    const { queryClient } = renderWithProviders(<Inbox pageSize={2} />);
+    const dialog = await openBulkReject(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 2' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      'The server could not do that.',
+    );
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    rows = [];
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() => expect(screen.queryByText('message 1')).toBeNull());
+    await new Promise((r) => setTimeout(r, 100));
+    expect(screen.queryByText('Nothing was rejected')).toBeNull();
+  });
+
+  it('rows that went while a reject was in flight are not spoken of when others go later', async () => {
+    const user = userEvent.setup();
+    let rows = ALL.slice(0, 2);
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    mockApi({
+      'GET /communications': () => ({ status: 200, body: { items: rows, total: rows.length } }),
+      'GET /integrations/gmail': GMAIL,
+      'POST /communications/bulk': async () => {
+        await held;
+        return FAILED;
+      },
+    });
+    const { queryClient } = renderWithProviders(<Inbox pageSize={2} />);
+    const dialog = await openBulkReject(user);
+    await user.click(within(dialog).getByRole('button', { name: 'Reject 2' }));
+    // The rows go while it is in flight, and it then fails.
+    rows = [];
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() => expect(screen.queryByText('message 1')).toBeNull());
+    release();
+    expect(await toastRegion().findByText('Reject 2 failed')).toBeInTheDocument();
+    // They come back, one is selected with no confirmation open, and it goes: nothing to say.
+    rows = ALL.slice(0, 2);
+    await act(() => queryClient.invalidateQueries());
+    await screen.findByText('message 1');
+    await user.click(screen.getAllByRole('checkbox', { name: /Select message from/ })[0]!);
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    rows = [];
+    await act(() => queryClient.invalidateQueries());
+    await waitFor(() => expect(screen.queryByText('message 1')).toBeNull());
+    await new Promise((r) => setTimeout(r, 100));
     expect(screen.queryByText('Nothing was rejected')).toBeNull();
   });
 });

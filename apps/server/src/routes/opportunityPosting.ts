@@ -24,9 +24,15 @@ import { NormalizedPostingSchema, POSTING_STATES } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
+import type { Db } from '../db/client';
 import { HttpError } from '../lib/errors';
 import { isSystemWritten, replaceAllowedByFlag } from '../lib/postingFingerprint';
-import { attachPosting, recordIdentified } from '../lib/postingAttach';
+import {
+  attachPosting,
+  attachPostingSaying,
+  POSTING_CHANGES,
+  recordIdentified,
+} from '../lib/postingAttach';
 import { confirmPosting, unconfirmPosting } from '../lib/postingConfirm';
 import { rederivePosting } from '../lib/postingRederive';
 import type { SourceContext } from '../adapters/discoverySource';
@@ -37,6 +43,7 @@ import {
   ownGreenhouseRef,
   type BodyReader,
 } from '../lib/postingSearch';
+import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import { unfinishedDedupeKeys } from '../repos/jobs';
 import { POSTING_RECONCILE_KIND } from '../lib/jobKinds';
@@ -77,6 +84,10 @@ const FindResponse = z.object({
   ]),
   /** An attach that changed nothing: a Refetch that found the same job (#835). */
   unchanged: z.literal(true).optional(),
+  /** What a Refetch changed (#866): absent on a first attach, and when `unchanged`. */
+  changed: z.array(z.enum(POSTING_CHANGES)).optional(),
+  /** 'attached' with the user's own description left as it was, not compared with the board's. */
+  keptDescription: z.literal(true).optional(),
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity: OpportunityView.optional(),
   candidate: CandidateView.optional(),
@@ -124,14 +135,40 @@ function userWritten(opp: OpportunityRowView): boolean {
   return !isSystemWritten(opp.descriptionMd, opp.descriptionFingerprint);
 }
 
-/** Whether two identities name the same job on the same board. */
-function sameRef(
-  a: { kind: string; org: string | null; externalId: string } | null | undefined,
-  b: { kind: string; org: string | null; externalId: string } | null | undefined,
-): boolean {
-  if (a == null || b == null) return a == null && b == null;
-  return a.kind === b.kind && a.org === b.org && a.externalId === b.externalId;
+/**
+ * An attach refused because its job is tracked as another of the user's opportunities (its company,
+ * title and location are that one's, repos/opportunities.ts claimDedupeKey) says which one
+ * (https://github.com/bgoleno/opportun/issues/936). Read as the user: only their own is ever named.
+ */
+async function namingTracked<T>(db: Db, ctx: UserCtx, attach: () => Promise<T>): Promise<T> {
+  try {
+    return await attach();
+  } catch (err) {
+    const existingId = err instanceof HttpError ? err.details?.existingId : undefined;
+    if (!(err instanceof HttpError) || err.code !== 'duplicate' || typeof existingId !== 'string') {
+      throw err;
+    }
+    await racePoint('posting.alreadyTracked');
+    let tracked: OpportunityRowView;
+    try {
+      tracked = await getOpportunity(db, ctx, existingId);
+    } catch {
+      // Deleted or merged meanwhile: the refusal as it was.
+      throw err;
+    }
+    throw new HttpError(409, 'duplicate', undefined, {
+      existingId,
+      existingTitle: tracked.title,
+      existingCompany: tracked.companyName,
+    });
+  }
 }
+
+/** attachPosting and attachPostingSaying, with their refusal for a tracked job naming it. */
+const attach = (...args: Parameters<typeof attachPosting>) =>
+  namingTracked(args[0], args[1], () => attachPosting(...args));
+const attachSaying = (...args: Parameters<typeof attachPostingSaying>) =>
+  namingTracked(args[0], args[1], () => attachPostingSaying(...args));
 
 export async function opportunityPostingRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
@@ -244,7 +281,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         // only ever comes from an email-linked job id, never a board read). Forwarded onto the
         // timeline entry (attachPosting) and in this response, so a person watching the moment
         // sees it in the toast and it still stands after the toast is gone.
-        const opportunity = await attachPosting(
+        const { opportunity, changed, keptDescription } = await attachSaying(
           db,
           ctx,
           id,
@@ -265,21 +302,21 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
                 },
               }
             : { readFrom: outcome.readFrom },
-          { keepDescription: true },
+          { keepDescription: true, byFindPosting: true },
         );
         const note = outcome.note === undefined ? {} : { note: outcome.note };
-        // A Refetch that found the same job, link and description changed nothing (#835, qa on
-        // #830): said so, instead of "Posting attached".
-        const unchanged =
-          current.postingState === 'confirmed' &&
-          opportunity.postingUrl === current.postingUrl &&
-          opportunity.descriptionMd === current.descriptionMd &&
-          sameRef(opportunity.atsJobRef, current.atsJobRef);
+        // A Refetch says what it changed, or that it changed nothing (#835, #866, qa on #830 and
+        // #860), instead of "Posting attached".
         return {
           outcome: 'attached' as const,
           opportunity,
           candidate: outcome.candidate,
-          ...(unchanged ? { unchanged: true as const } : {}),
+          ...(changed === null
+            ? {}
+            : changed.length === 0
+              ? { unchanged: true as const }
+              : { changed }),
+          ...(keptDescription ? { keptDescription: true as const } : {}),
           ...note,
         };
       }
@@ -338,12 +375,12 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           );
           // A row picked from the board confirms a posting the user described themselves, the
           // description kept, as Find posting's own match does (#756).
-          return attachPosting(db, ctx, id, described, 'board', undefined, identity, {
+          return attach(db, ctx, id, described, 'board', undefined, identity, {
             keepDescription: true,
           });
         }
         if (text !== undefined) {
-          return attachPosting(
+          return attach(
             db,
             ctx,
             id,
@@ -358,7 +395,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           url as string,
         );
         const out = await extract(db, ctx, url, page);
-        return attachPosting(
+        return attach(
           db,
           ctx,
           id,

@@ -5,9 +5,8 @@
 import { describe, expect, it } from 'vitest';
 // Contract checks against the server half (https://github.com/bgoleno/opportun/pull/77), pure
 // and with no IO, like extract.test.ts's LinkedIn check. Test-only imports.
-import { INDEED_JOB_KEY as SERVER_INDEED_JOB_KEY } from '../../../apps/server/src/lib/alertParsers/indeed';
 import { recognizeCapturedPage } from '../../../apps/server/src/lib/captureRecognizers';
-import { canonicalCaptureUrl, captureSiteOf, INDEED_JOB_KEY, indeedJobKey } from '../src/canonical';
+import { canonicalCaptureUrl, captureSiteOf, indeedJobKey, isLinkedInUrl } from '../src/canonical';
 import { extractIndeedJob, type ExtractResult } from '../src/extract';
 import { normalizeCapture } from '../src/normalize';
 import {
@@ -56,6 +55,27 @@ describe('captureSiteOf: which tabs may be read at all', () => {
     expect(captureSiteOf(`https://www.indeed.com/viewjob?jk=${JK}`)).toBe('indeed');
     expect(captureSiteOf(`https://indeed.com/viewjob?jk=${JK}`)).toBe('indeed');
     expect(captureSiteOf(`https://WWW.INDEED.COM/viewjob?jk=${JK}`)).toBe('indeed');
+  });
+
+  it('does not read a host with a trailing dot (#769: unlike the server, which drops one)', () => {
+    for (const href of [
+      'https://www.linkedin.com./jobs/view/1/',
+      'https://www.linkedin.com../jobs/view/1/',
+      `https://www.indeed.com./viewjob?jk=${JK}`,
+    ]) {
+      expect(captureSiteOf(href), href).toBeNull();
+      expect(indeedJobKey(href), href).toBeNull();
+      expect(canonicalCaptureUrl(href), href).toBe(href);
+    }
+    expect(isLinkedInUrl('https://www.linkedin.com./in/x')).toBe(false);
+    const list = 'https://www.linkedin.com./jobs/search/?currentJobId=1';
+    expect(canonicalCaptureUrl(list)).toBe(list);
+  });
+
+  it('keeps the LinkedIn country host when it rewrites a list view to its job', () => {
+    expect(canonicalCaptureUrl('https://uk.linkedin.com/jobs/search/?currentJobId=12')).toBe(
+      'https://uk.linkedin.com/jobs/view/12/',
+    );
   });
 
   it('leaves every other tab alone, look-alikes and Indeed country sites included', () => {
@@ -295,11 +315,6 @@ describe('what the popup sends for an Indeed job', () => {
 });
 
 describe('what the server reads from what the extension sends for Indeed', () => {
-  it('the extension and the server agree on what an Indeed job key is', () => {
-    expect(INDEED_JOB_KEY.source).toBe(SERVER_INDEED_JOB_KEY.source);
-    expect(INDEED_JOB_KEY.flags).toBe(SERVER_INDEED_JOB_KEY.flags);
-  });
-
   it.each([
     ['/viewjob', viewjobPage()],
     ['the split view, full header hidden', splitView({ compactHeaderShowing: true })],

@@ -11,6 +11,7 @@ import { render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { vi } from 'vitest';
 import { Toaster } from '@/components/ui/toast';
+import { mockProblem } from './mockProblems';
 
 export function renderWithProviders(ui: ReactNode, opts: { path?: string } = {}) {
   const queryClient = new QueryClient({
@@ -51,13 +52,47 @@ export interface ApiCall {
 
 type Handler = (call: ApiCall) => unknown;
 
+interface Answer {
+  status: number;
+  body?: unknown;
+  headers?: Record<string, string>;
+}
+const ANSWER_KEYS = new Set(['status', 'body', 'headers']);
+
 /**
- * Stubs fetch. `routes` maps "METHOD /path" (path relative to /api/v1, no query) to a
- * response body, or to a handler returning (or resolving to) {status, body} or a body.
- * Unmatched calls answer 404.
+ * What a route answers: `{status, body?, headers?}` when `status` is a number, else a 200 with the
+ * value as its body (which can have a `status` of its own, 'denied' say). Two things no server of ours
+ * answers fail the test (#941): an error's body with a status that isn't an error's, as a refusal
+ * without its status is, and a numeric status among a body's own fields.
+ */
+function answerOf(route: string, value: unknown): Answer {
+  let answer: Answer = { status: 200, body: value };
+  if (typeof value === 'object' && value !== null && 'status' in value) {
+    if (typeof value.status === 'number') {
+      const fields = Object.keys(value).filter((k) => !ANSWER_KEYS.has(k));
+      if (fields.length > 0) {
+        mockProblem(`${route} has a numeric status beside ${fields.join(', ')}: put them in body`);
+      }
+      answer = value as Answer;
+    }
+  }
+  const error = (answer.body as { error?: unknown } | null | undefined)?.error;
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  if (typeof code === 'string' && answer.status < 400) {
+    mockProblem(`${route} answers the error ${code} with ${answer.status}`);
+  }
+  return answer;
+}
+
+/**
+ * Stubs fetch. `routes` maps "METHOD /path" (path relative to /api/v1, no query) to what it answers,
+ * or to a handler returning (or resolving to) that: {status, body} or a body (answerOf). Unmatched
+ * calls answer 404.
  */
 export function mockApi(routeTable: Record<string, unknown>) {
   const routes = new Map(Object.entries(routeTable));
+  // The plain ones at once, so one that is never called is refused too.
+  for (const [key, route] of routes) if (typeof route !== 'function') answerOf(key, route);
   const calls: ApiCall[] = [];
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://localhost');
@@ -71,19 +106,8 @@ export function mockApi(routeTable: Record<string, unknown>) {
       return new Response(JSON.stringify({ error: { code: 'not_found' } }), { status: 404 });
     }
     const route = routes.get(key);
-    let status = 200;
-    let payload: unknown = route;
-    let headers: Record<string, string> = {};
-    if (typeof route === 'function') {
-      const out = await (route as Handler)(call);
-      if (typeof out === 'object' && out !== null && 'status' in out) {
-        status = (out as { status: number }).status;
-        payload = (out as { body?: unknown }).body;
-        headers = (out as { headers?: Record<string, string> }).headers ?? {};
-      } else {
-        payload = out;
-      }
-    }
+    const out = typeof route === 'function' ? await (route as Handler)(call) : route;
+    const { status, body: payload, headers = {} } = answerOf(key, out);
     if (status === 204) return new Response(null, { status, headers });
     return new Response(payload === undefined ? '' : JSON.stringify(payload), { status, headers });
   });

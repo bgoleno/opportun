@@ -15,10 +15,12 @@ import { eq } from 'drizzle-orm';
 import { communications, opportunities } from '../src/db/schema';
 import { atsJobRefOfUrl } from '../src/lib/atsJobRef';
 import { descriptionFingerprint } from '../src/lib/postingFingerprint';
+import { setRaceHook } from '../src/lib/racePoints';
 import { createCompany } from '../src/repos/companies';
 import { upsertInbound } from '../src/repos/communications';
 import {
   createOpportunity,
+  deleteOpportunity,
   getOpportunity,
   setPostingState,
   updateOpportunity,
@@ -39,7 +41,10 @@ const missingFetch = (async () => ({
 const boot = useApi(() => ({ build: { sourceFetch: missingFetch } }));
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
 
-afterEach(() => resetSources());
+afterEach(() => {
+  resetSources();
+  setRaceHook(undefined);
+});
 
 function posting(title: string, externalId: string): NormalizedPosting {
   return {
@@ -255,6 +260,27 @@ describe('POST /opportunities/:id/find-posting', () => {
       url: `/api/v1/opportunities/${id}/find-posting`,
     });
     expect(res.json()).toMatchObject({ outcome: 'none' });
+  });
+
+  it('a search for a board that could not finish answers unreachable, not no_board (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, {
+      title: 'Staff Product Manager',
+      company: 'Meridian Systems',
+      ats: false,
+    });
+    app.jobs.services.sourceFetch = (async () => {
+      throw new Error('fetch failed: ECONNREFUSED');
+    }) as unknown as typeof safeFetch;
+
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toEqual({ outcome: 'unreachable' });
+    expect((await getOpportunity(app.db, ctxOf(a), id)).postingState).toBeNull();
   });
 
   it('answers no_board with the paste hint', async () => {
@@ -491,12 +517,9 @@ describe('POST /opportunities/:id/find-posting', () => {
       location: null,
     });
     const { items } = await listActivities(app.db, ctxOf(a), id, { limit: 50, offset: 0 });
-    expect(
-      items.some(
-        (i) =>
-          i.bodyMd?.includes("Checked on the company's board; your description was kept.") === true,
-      ),
-    ).toBe(true);
+    // It said "Checked on the company's board" each time (#812); a Refetch that changes nothing now
+    // leaves the timeline as it was (#866).
+    expect(items.filter((i) => i.kind === 'link')).toEqual([]);
   });
 
   // #835 (qa on #830): a Refetch that finds the same job, link and all, changed nothing, and says
@@ -519,6 +542,280 @@ describe('POST /opportunities/:id/find-posting', () => {
       url: `/api/v1/opportunities/${id}/find-posting`,
     });
     expect(res.json()).toMatchObject({ outcome: 'attached', unchanged: true });
+    expect(res.json().changed).toBeUndefined();
+  });
+
+  const refetch = async (a: TestClient, id: string) => {
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting?seen=confirmed`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    return res.json();
+  };
+  const entries = async (app: { db: Db }, a: TestClient, id: string) =>
+    (await listActivities(app.db, ctxOf(a), id, { limit: 50, offset: 0 })).items.filter(
+      (i) => i.title === 'Job posting attached',
+    );
+
+  it('Refetches that change nothing add no timeline entry, on the board description (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    boardServes([posting('Staff Product Manager, SIEM', '7663059003')]);
+    const first = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    // The first attach is recorded, with nothing said of what it changed: it is the first.
+    expect(first.json()).toMatchObject({ outcome: 'attached' });
+    expect(first.json().changed).toBeUndefined();
+    expect(await entries(app, a, id)).toHaveLength(1);
+
+    for (let i = 0; i < 2; i += 1) {
+      expect(await refetch(a, id)).toMatchObject({ outcome: 'attached', unchanged: true });
+    }
+    expect(await entries(app, a, id)).toHaveLength(1);
+  });
+
+  it('a Refetch that changes only the description says so (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    boardServes([posting('Staff Product Manager, SIEM', '7663059003')]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    boardServes([
+      {
+        ...posting('Staff Product Manager, SIEM', '7663059003'),
+        descriptionMd: 'What We Do: now also Kafka.',
+      },
+    ]);
+
+    const body = await refetch(a, id);
+
+    expect(body).toMatchObject({ outcome: 'attached', changed: ['description'] });
+    expect(body.unchanged).toBeUndefined();
+    expect((await entries(app, a, id)).map((i) => i.bodyMd)).toContainEqual(
+      expect.stringContaining("The description was updated to the board's."),
+    );
+  });
+
+  it('a row picked on a confirmed posting names each thing it changed (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    boardServes([{ ...posting('Staff Product Manager, SIEM', '7663059003'), location: undefined }]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    const picked = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: {
+        posting: {
+          ...posting('Staff Product Manager, SIEM', '7663059004'),
+          descriptionMd: 'Another text.',
+          remote: true,
+          compNote: '$200k',
+        },
+      },
+    });
+    expect(picked.statusCode, picked.body).toBe(200);
+    const line = (await entries(app, a, id)).map((i) => i.bodyMd ?? '');
+    expect(line).toContainEqual(
+      expect.stringContaining("The posting link was updated to the board's."),
+    );
+    expect(line).toContainEqual(
+      expect.stringContaining('Took location, remote, compensation from the board.'),
+    );
+  });
+
+  it('a Refetch that fills in facts the opportunity lacked is not "nothing changed" (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    const bare = { ...posting('Staff Product Manager, SIEM', '7663059003'), location: undefined };
+    boardServes([bare]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    boardServes([{ ...bare, location: 'Berlin', remote: false, compNote: '$200k' }]);
+
+    const body = await refetch(a, id);
+
+    expect(body).toMatchObject({ changed: ['location', 'remote', 'compensation'] });
+    expect(body.unchanged).toBeUndefined();
+    expect(await entries(app, a, id)).toHaveLength(2);
+  });
+
+  // qa's 0.5.0 pass: the fields came back, and the answer was "unchanged".
+  it('a Refetch that puts back fields the user cleared names them (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    boardServes([
+      {
+        ...posting('Staff Product Manager, SIEM', '7663059003'),
+        location: 'Berlin',
+        remote: true,
+      },
+    ]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    const cleared = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/opportunities/${id}`,
+      payload: { location: null, remote: null },
+    });
+    expect(cleared.json()).toMatchObject({ location: null, remote: null });
+
+    const body = await refetch(a, id);
+
+    expect(body).toMatchObject({
+      changed: ['location', 'remote'],
+      opportunity: { location: 'Berlin', remote: true },
+    });
+    expect(body.unchanged).toBeUndefined();
+    expect((await entries(app, a, id)).map((i) => i.bodyMd)).toContainEqual(
+      expect.stringContaining('Took location, remote from the board.'),
+    );
+    // With those back, the next one changes nothing, and says so.
+    expect(await refetch(a, id)).toMatchObject({ unchanged: true });
+  });
+
+  // qa and tl on #930: a Refetch is not the user's confirmation, so a kept description leaves the
+  // state as it was, and "nothing changed" is true of the state too.
+  describe('a Refetch leaves the confirmation as it was (#866)', () => {
+    const MINE = 'my own notes on the role';
+    /** Matched on the board, then its description edited: the state says nothing of the user. */
+    async function matchedThenEdited() {
+      const { app, a } = await boot();
+      const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+      boardServes([posting('Staff Product Manager, SIEM', '7663059003')]);
+      await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+      const edited = await a.request({
+        method: 'PATCH',
+        url: `/api/v1/opportunities/${id}`,
+        payload: { descriptionMd: MINE },
+      });
+      expect(edited.json()).toMatchObject({
+        descriptionMd: MINE,
+        postingState: 'confirmed',
+        postingStateDetail: null,
+      });
+      return { app, a, id };
+    }
+    const state = async (app: { db: Db }, a: TestClient, id: string) => {
+      const o = await getOpportunity(app.db, ctxOf(a), id);
+      return [o.postingState, o.postingStateDetail, o.descriptionMd];
+    };
+
+    it('matched, then edited, nothing changed: still matched, and the answer says it was kept', async () => {
+      const { app, a, id } = await matchedThenEdited();
+      for (let i = 0; i < 2; i += 1) {
+        expect(await refetch(a, id)).toMatchObject({
+          outcome: 'attached',
+          unchanged: true,
+          keptDescription: true,
+          opportunity: { postingState: 'confirmed', postingStateDetail: null },
+        });
+      }
+      expect(await state(app, a, id)).toEqual(['confirmed', null, MINE]);
+      expect(await entries(app, a, id)).toHaveLength(1);
+      // Nothing of the user's to take back.
+      const undo = await a.request({
+        method: 'POST',
+        url: `/api/v1/opportunities/${id}/posting/unconfirm`,
+      });
+      expect(undo.statusCode).toBe(409);
+      // What user_confirmed guarded: neither a re-derive nor a check takes the text as the
+      // employer's. The board is there to be read, with other text.
+      const sctx = { fetch: missingFetch, log: { warn: () => undefined } } as never;
+      await expect(rederivePosting(app.db, ctxOf(a), id, sctx)).rejects.toMatchObject({
+        code: 'already_described',
+      });
+      await reconcilePosting(app.db, ctxOf(a), id, sctx);
+      expect(await state(app, a, id)).toEqual(['needs_review', 'edited', MINE]);
+    });
+
+    it('matched, then edited, only the link changed: named and recorded, still matched', async () => {
+      const { app, a } = await boot();
+      const id = await seed(app, a, {
+        title: 'Staff Platform Engineer',
+        postingUrl: 'https://careers.sentineledge.example/jobs?gh_jid=1003',
+        descriptionMd: MINE,
+      });
+      await storeIdentity(app, id, OWN_LINK);
+      await setPostingState(app.db, ctxOf(a), id, {
+        postingState: 'confirmed',
+        postingStateDetail: null,
+      });
+      boardServes([posting('Platform Engineer', '1003')]);
+
+      expect(await refetch(a, id)).toMatchObject({ changed: ['link'], keptDescription: true });
+
+      expect(await state(app, a, id)).toEqual(['confirmed', null, MINE]);
+      expect((await entries(app, a, id))[0]?.bodyMd).toContain('Your own description was kept.');
+    });
+
+    it('confirmed by the user, with their text: stays confirmed by them', async () => {
+      const { app, a, id } = await matchedThenEdited();
+      await setPostingState(app.db, ctxOf(a), id, {
+        postingState: 'confirmed',
+        postingStateDetail: 'user_confirmed',
+      });
+      expect(await refetch(a, id)).toMatchObject({ unchanged: true, keptDescription: true });
+      expect(await state(app, a, id)).toEqual(['confirmed', 'user_confirmed', MINE]);
+    });
+
+    it("confirmed by the user, with the board's own text: stays confirmed by them", async () => {
+      const { app, a } = await boot();
+      const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+      boardServes([posting('Staff Product Manager, SIEM', '7663059003')]);
+      await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+      const text = (await getOpportunity(app.db, ctxOf(a), id)).descriptionMd;
+      await setPostingState(app.db, ctxOf(a), id, {
+        postingState: 'confirmed',
+        postingStateDetail: 'user_confirmed',
+      });
+      const body = await refetch(a, id);
+      expect(body).toMatchObject({ unchanged: true });
+      expect(body.keptDescription).toBeUndefined();
+      expect(await state(app, a, id)).toEqual(['confirmed', 'user_confirmed', text]);
+    });
+
+    // As before: the board's text is what is stored now, and it is said.
+    it("confirmed by the user, with the board's older text: the new copy is a match", async () => {
+      const { app, a } = await boot();
+      const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+      const p = posting('Staff Product Manager, SIEM', '7663059003');
+      boardServes([p]);
+      await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+      await setPostingState(app.db, ctxOf(a), id, {
+        postingState: 'confirmed',
+        postingStateDetail: 'user_confirmed',
+      });
+      boardServes([{ ...p, descriptionMd: 'What We Do: now also Kafka.' }]);
+      expect(await refetch(a, id)).toMatchObject({ changed: ['description'] });
+      expect(await state(app, a, id)).toEqual(['confirmed', null, 'What We Do: now also Kafka.']);
+    });
+
+    // The user's choice, as before.
+    it('a row picked on a matched posting, their description kept: confirmed by them', async () => {
+      const { app, a, id } = await matchedThenEdited();
+      const picked = await a.request({
+        method: 'POST',
+        url: `/api/v1/opportunities/${id}/posting`,
+        payload: { posting: posting('Staff Product Manager, SIEM', '7663059003') },
+      });
+      expect(picked.statusCode, picked.body).toBe(200);
+      expect(await state(app, a, id)).toEqual(['confirmed', 'user_confirmed', MINE]);
+    });
+  });
+
+  it('a row picked by hand is recorded even when it changes nothing (#866)', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    const same = posting('Staff Product Manager, SIEM', '7663059003');
+    boardServes([same]);
+    await a.request({ method: 'POST', url: `/api/v1/opportunities/${id}/find-posting` });
+    const picked = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: { posting: same },
+    });
+    expect(picked.statusCode, picked.body).toBe(200);
+    expect(await entries(app, a, id)).toHaveLength(2);
   });
 
   it('a Refetch that rewrote the link names the rewrite, not "Checked" (#835)', async () => {
@@ -539,7 +836,7 @@ describe('POST /opportunities/:id/find-posting', () => {
       method: 'POST',
       url: `/api/v1/opportunities/${id}/find-posting`,
     });
-    expect(res.json()).toMatchObject({ outcome: 'attached' });
+    expect(res.json()).toMatchObject({ outcome: 'attached', changed: ['link'] });
     expect(res.json().unchanged).not.toBe(true);
     expect((await getOpportunity(app.db, ctxOf(a), id)).postingUrl).toBe(OWN_LINK);
     const { items } = await listActivities(app.db, ctxOf(a), id, { limit: 50, offset: 0 });
@@ -710,6 +1007,86 @@ describe('POST /opportunities/:id/find-posting', () => {
     });
 
     expect(res.statusCode).toBe(404);
+  });
+});
+
+// The job Find posting found is tracked already (https://github.com/bgoleno/opportun/issues/936): the
+// refusal names that opportunity, the user's own.
+describe('a job already tracked as another opportunity', () => {
+  /** One of a's tracking the job at the board's location, and another without a location. */
+  async function twice() {
+    const { app, a, b } = await boot();
+    const p = posting('Product Manager, SIEM', '7663059003');
+    const id = await seed(app, a, { title: 'Product Manager, SIEM' });
+    const tracked = await createOpportunity(app.db, ctxOf(a), {
+      companyName: 'Sentinel Edge',
+      title: 'Product Manager, SIEM',
+      location: p.location!,
+      sourceKind: 'manual',
+    });
+    boardServes([p]);
+    return { app, a, b, id, tracked: tracked.id, p };
+  }
+  const named = (existingId: string) => ({
+    error: {
+      code: 'duplicate',
+      existingId,
+      existingTitle: 'Product Manager, SIEM',
+      existingCompany: 'Sentinel Edge',
+    },
+  });
+
+  it('Find posting: refused, naming it, with nothing attached', async () => {
+    const { app, a, id, tracked } = await twice();
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toEqual(named(tracked));
+    expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+      postingUrl: null,
+      postingState: null,
+      descriptionMd: null,
+    });
+  });
+
+  it('a row picked by hand: the same', async () => {
+    const { a, id, tracked, p } = await twice();
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/posting`,
+      payload: { posting: p },
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toEqual(named(tracked));
+  });
+
+  it("another user's opportunity for the job neither refuses nor is named", async () => {
+    const { app, b, tracked, p } = await twice();
+    const id = await seed(app, b, { title: 'Product Manager, SIEM' });
+    boardServes([p]);
+    const res = await b.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ outcome: 'attached' });
+    expect(res.body).not.toContain(tracked);
+  });
+
+  // Gone between the refusal and the lookup: the refusal stands, unnamed.
+  it('one deleted as it is refused: still refused, without a name', async () => {
+    const { app, a, id, tracked } = await twice();
+    setRaceHook(async (point) => {
+      if (point === 'posting.alreadyTracked') await deleteOpportunity(app.db, ctxOf(a), tracked);
+    });
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/opportunities/${id}/find-posting`,
+    });
+    expect(res.statusCode, res.body).toBe(409);
+    expect(res.json()).toEqual({ error: { code: 'duplicate', existingId: tracked } });
   });
 });
 

@@ -64,10 +64,19 @@ const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
  * Lock order, for every path that takes more than one (tl on #154): the attempt's lock
  * (`submission:<id>`) first, then a resume's (`resume:<id>`, repos/resumeSends.ts resumeScope:
  * attest, recording a send, deleting a resume), then the user's (`user:<id>`, taken by the
- * review cap and by findOrCreateCompanySync), then rows. Discovery's two locks join the order:
- * the user's discovery lock (`discovery.ingest:<userId>`, repos/discovery.ts ingestScope: a run
- * storing a posting, and a capture, which then takes `user:<id>` straight after it, before any row)
- * comes before `user:<id>`, and the company's board-source lock (`discovery.board_source:<id>`,
+ * review cap, by findOrCreateCompanySync, and by repos/opportunities.ts: createOpportunity before it
+ * claims its key, and updateOpportunity for a company, title, location or link, #889), then rows.
+ * A transaction that writes or names two opportunities, or writes an opportunity's message and then
+ * names that opportunity, takes the user's lock first (#920): createOpportunity and the saves above,
+ * mergeOpportunities, reorderOpportunities, dismissPossibleDuplicate, reclassify and
+ * rejectCommunication; and deleteOpportunity, whose cascade reaches those rows the other way. No
+ * order of rows would do, as a save of one naming the other, and a delete of the other, need them in
+ * opposite orders. The rows after it: the opportunity's, its activities', the cascade, and the search
+ * rows last (#917). Nothing outside the database runs under it.
+ * Discovery's two locks join the order: the user's discovery lock (`discovery.ingest:<userId>`,
+ * repos/discovery.ts ingestScope: a run storing a posting, and a capture, which then takes
+ * `user:<id>` straight after it, before any row) comes before `user:<id>`, and the company's
+ * board-source lock (`discovery.board_source:<id>`,
  * jobs/atsDetect.ts) is taken alone in its transaction. Every advisory lock comes before any
  * row write: a row write's cascade or foreign-key check can wait on a row another transaction
  * locked, so a lock taken after a write can close a cycle with one taken before (sec on #164:

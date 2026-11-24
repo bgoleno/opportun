@@ -67,6 +67,13 @@ export interface JobHandler<P> {
   maxAttempts: number;
   run(db: Db, payload: P, ctx: JobContext): Promise<void>;
   /**
+   * The job has just been marked dead, whatever killed it (its retries ran out, or it was orphaned
+   * or spent when the runner started: jobs/runner.ts): settles what its run would have, so nothing
+   * waits for an outcome that will not come (#869). A throw is logged and changes nothing about
+   * the job. Not called for a payload that no longer validates, nor for a job cancelled on demand.
+   */
+  onDead?(db: Db, payload: P, ctx: { userId: string | null }): Promise<void>;
+  /**
    * Payload fields that carry content the app does not keep, removed from the stored row when
    * the job finishes (done or dead). `comms.classify` carries the message body this way: the
    * body is not persisted anywhere else, so the job row must not become the copy that outlives

@@ -3,7 +3,15 @@
 // top-layer backdrop without injecting styles (Radix Dialog's scroll lock does, and the
 // CSP blocks it).
 import { X } from 'lucide-react';
-import { createContext, useContext, useEffect, useId, useRef, type ReactNode } from 'react';
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import type * as React from 'react';
 import { cn } from '@/lib/utils';
 
@@ -40,12 +48,26 @@ function DialogContent({
   className,
   children,
   showClose = true,
+  guardClose = false,
+  onCancel,
   onClose,
   onClick,
   ...props
-}: Omit<React.ComponentProps<'dialog'>, 'open'> & { showClose?: boolean }) {
+}: Omit<React.ComponentProps<'dialog'>, 'open'> & {
+  showClose?: boolean;
+  /**
+   * For a dialog whose parent may refuse to close it: one that shows something once, or that must
+   * wait for a request (#898). Escape only asks (`onOpenChange(false)`), and a close the browser
+   * makes anyway is shown again unless the parent agreed to it. Without this the browser closes
+   * the dialog on Escape whatever the parent answers, and the parent, still `open`, can neither
+   * show it again nor show the next one.
+   */
+  guardClose?: boolean;
+}) {
   const { open, setOpen, titleId, descriptionId } = useDialog();
   const ref = useRef<HTMLDialogElement>(null);
+  // Counts the browser's own closes, so the effect below runs after one that was refused.
+  const [nativeCloses, setNativeCloses] = useState(0);
 
   useEffect(() => {
     const el = ref.current;
@@ -57,20 +79,30 @@ function DialogContent({
       if (typeof el.close === 'function') el.close();
       else el.removeAttribute('open');
     }
-  }, [open]);
+  }, [open, nativeCloses]);
 
   return (
     // Caller props are spread first so they can never replace the close wiring below;
-    // caller onClose/onClick handlers still run, before the dialog's own.
+    // caller onCancel/onClose/onClick handlers still run, before the dialog's own.
     <dialog
       {...props}
       ref={ref}
       data-slot="dialog-content"
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
+      onCancel={(e) => {
+        onCancel?.(e);
+        // A file input's own `cancel` bubbles to here: only the dialog's is Escape.
+        if (!guardClose || e.target !== e.currentTarget) return;
+        e.preventDefault();
+        setOpen(false);
+      }}
       onClose={(e) => {
         onClose?.(e);
         setOpen(false);
+        // Escape is not always refusable (a second one, with nothing clicked or typed since, is
+        // not), so the browser may have closed it all the same.
+        if (guardClose) setNativeCloses((n) => n + 1);
       }}
       onClick={(e) => {
         onClick?.(e);
@@ -121,13 +153,16 @@ function DialogFooter({ className, ...props }: React.ComponentProps<'div'>) {
   );
 }
 
+// Local change: the title and the description break anywhere. Either can hold someone's words (a
+// name, a subject, an address), and one long word widened the dialog's content past its edge,
+// buttons included (https://github.com/bgoleno/opportun/issues/921).
 function DialogTitle({ className, ...props }: React.ComponentProps<'h2'>) {
   const { titleId } = useDialog();
   return (
     <h2
       id={titleId}
       data-slot="dialog-title"
-      className={cn('text-lg leading-none font-semibold', className)}
+      className={cn('text-lg leading-none font-semibold [overflow-wrap:anywhere]', className)}
       {...props}
     />
   );
@@ -139,7 +174,7 @@ function DialogDescription({ className, ...props }: React.ComponentProps<'p'>) {
     <p
       id={descriptionId}
       data-slot="dialog-description"
-      className={cn('text-sm text-muted-foreground', className)}
+      className={cn('text-sm text-muted-foreground [overflow-wrap:anywhere]', className)}
       {...props}
     />
   );

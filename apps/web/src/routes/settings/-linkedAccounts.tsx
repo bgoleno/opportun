@@ -10,7 +10,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { toast } from '@/components/ui/toast';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, errorMessage } from '@/lib/api';
 import { oauthProvidersQuery, providerLabel, type OAuthProvider } from '@/lib/oauth';
 import { PasswordDialog, passwordError } from './-twoFactor';
 
@@ -72,7 +72,12 @@ export function LinkedAccountsCard(props: {
     ...configured,
     ...accounts.map((a) => a.provider).filter((p) => !configured.includes(p)),
   ];
-  if (providers.data === undefined || linked.data === undefined || shown.length === 0) {
+  // An error is said even when what it is about was the last one listed (#896).
+  if (
+    providers.data === undefined ||
+    linked.data === undefined ||
+    (shown.length === 0 && error === null)
+  ) {
     return null;
   }
   const hasPassword = linked.data.hasPassword;
@@ -104,6 +109,18 @@ export function LinkedAccountsCard(props: {
       ) {
         setPending(null);
         setError(err.code === 'last_method' ? LAST_METHOD : PASSWORD_REQUIRED);
+        return null;
+      }
+      // Changed elsewhere: unlinked already, or no longer set up by the administrator (#896). Trying
+      // again here would not help, so the dialog closes and the list is read again.
+      if (
+        err instanceof ApiError &&
+        (err.code === 'not_linked' || err.code === 'provider_not_configured')
+      ) {
+        setPending(null);
+        setError(errorMessage(err));
+        void qc.invalidateQueries({ queryKey: linkedAccountsQuery.queryKey });
+        void qc.invalidateQueries({ queryKey: oauthProvidersQuery.queryKey });
         return null;
       }
       return passwordError(err);

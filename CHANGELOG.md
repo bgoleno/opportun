@@ -9,6 +9,137 @@ when the milestone's work was merged.
 
 ## Unreleased
 
+### Pipeline board
+
+- **Pipeline board: a card moved by keyboard is picked up in its own column and reaches every
+  column on a board narrower than its columns.** In 0.5.0 it could not reach every column at 768
+  and 1024 px, or at wider widths with Dismissed and Closed expanded. Left and Right now scroll the next
+  column into view, and the card is announced in the column it is over. Pointer drags are
+  unchanged. At 768 px with both end columns expanded the chain has no width left, so no chain
+  column is on screen, though the card still steps through all of them
+  ([#886](https://github.com/bgoleno/opportun/issues/886),
+  [#902](https://github.com/bgoleno/opportun/issues/902); PR
+  [#900](https://github.com/bgoleno/opportun/pull/900)).
+
+### Opportunities and posting links
+
+- **A description you save at the very moment a background posting check writes is kept.** The
+  check writes only while the description is still the one it read. When it is not, the check
+  writes nothing, including no location, link or duplicate key, and the timeline says it skipped
+  the description: "The description changed while the board was being checked, so the board search
+  left it as it is."
+  ([#856](https://github.com/bgoleno/opportun/issues/856); PR
+  [#883](https://github.com/bgoleno/opportun/pull/883)).
+- **While a background check reads the company's board, the Apply panel and the Resume tab say so
+  instead of suggesting Find posting.** The refusal to search again, "Opportun is still checking
+  this posting on the company's board", goes away when the check ends
+  ([#870](https://github.com/bgoleno/opportun/issues/870); PR
+  [#885](https://github.com/bgoleno/opportun/pull/885)).
+
+- **Posting check: one that could not finish says so and offers Find posting, instead of showing as
+  being checked for good, and deleting or merging an opportunity during its check no longer leaves
+  a dead job.** A posting left `searching` by a check whose job died, was pruned or was lost to a
+  crash is ended when the server starts and when the job dies, with the timeline note "The check of
+  the company's board did not finish. Use Find posting to check again." A check whose opportunity is
+  gone ends quietly and is not retried
+  ([#869](https://github.com/bgoleno/opportun/issues/869),
+  [#897](https://github.com/bgoleno/opportun/issues/897); PR
+  [#922](https://github.com/bgoleno/opportun/pull/922)).
+- **Postgres: saving an opportunity never puts back a company or duplicate key that another save
+  changed meanwhile.** A description, link or state save leaves them alone, and two edits at the
+  same moment no longer leave a wrong duplicate key. After a company is renamed on its own page, a
+  description save no longer recomputes its opportunities' keys
+  ([#889](https://github.com/bgoleno/opportun/issues/889); PR
+  [#910](https://github.com/bgoleno/opportun/pull/910)).
+- **Postgres: deleting an opportunity while it is being saved no longer fails with an internal
+  error, and the delete always happens.** Adding an activity, a referral ask, a next step or a file
+  to an opportunity that is being deleted, or moving it to another stage, says it is not found,
+  with nothing written
+  ([#917](https://github.com/bgoleno/opportun/issues/917),
+  [#925](https://github.com/bgoleno/opportun/issues/925); PRs
+  [#923](https://github.com/bgoleno/opportun/pull/923),
+  [#929](https://github.com/bgoleno/opportun/pull/929)).
+
+### Sign-in and settings
+
+- **Pressing Escape, or closing while the request is running, no longer loses two-factor recovery
+  codes or a new device token.** The recovery codes stay until "I saved them", and a new device
+  token until "I saved it", so the next token's dialog shows too. While two-factor activation is
+  running, nothing closes its dialog. The extension setup's "Close before the extension has checked
+  in?" question now appears on top of the setup, and the setup cannot be closed while its token is
+  being made. Other dialogs still close on Escape
+  ([#898](https://github.com/bgoleno/opportun/issues/898); PR
+  [#901](https://github.com/bgoleno/opportun/pull/901)).
+- **The dialog with a member's temporary password closes only with Done.** It shows the password
+  once, so Escape, a click outside it or a native close no longer take it away before you have
+  copied it: the corner X is gone and Escape is refused
+  ([#903](https://github.com/bgoleno/opportun/issues/903); PR
+  [#907](https://github.com/bgoleno/opportun/pull/907)).
+- **A device token whose create answer was lost is listed, and the page says what to do.** If
+  creating a token fails halfway, in the token dialog or the extension setup, the list is read
+  again. A token the server made without its answer arriving shows in it, marked "Not shown here"
+  when it can be told apart, with a note to revoke it and create another. Its value can no longer
+  be shown. A refusal, a wrong password for example, is said as before
+  ([#904](https://github.com/bgoleno/opportun/issues/904); PR
+  [#918](https://github.com/bgoleno/opportun/pull/918)).
+
+### Inbox
+
+- **Inbox: when a page fails to load, the range shown is still the rows on screen, and you can try
+  again.** A failed page says so ("Page 2 couldn't load. ... Page 1 is still shown.") with **Try
+  again**, and **Next** asks for that page again. While a page loads, the range stays the rows on
+  screen. A new filter that fails keeps the rows and the selection and says the messages are from
+  before the filters changed
+  ([#894](https://github.com/bgoleno/opportun/issues/894); PR
+  [#906](https://github.com/bgoleno/opportun/pull/906)).
+- **Inbox: leaving the page with bulk Reject open no longer says the messages are gone, and a
+  filter over 200 characters is refused in plain words.** The keyword filter says it is too long,
+  200 characters at most, and no messages are listed until it is shorter. It is never sent
+  ([#894](https://github.com/bgoleno/opportun/issues/894); PR
+  [#906](https://github.com/bgoleno/opportun/pull/906)).
+- **Inbox: a suggested move that is refused says why, linking or reclassifying a message rejected
+  elsewhere is refused, and the confirmations for linking, unlinking, Not spam and Reclassify
+  show.** A refused move gives one of three reasons: the message was rejected, it is no longer
+  linked, or the suggestion was used, ignored or changed. A message rejected elsewhere is refused
+  with "This message has been rejected, so it was left as it is." and nothing is written
+  ([#895](https://github.com/bgoleno/opportun/issues/895); PR
+  [#916](https://github.com/bgoleno/opportun/pull/916)).
+- **Inbox: linking, unlinking or reclassifying a message says how it ended when its dialog was
+  closed first, and no longer closes another dialog opened meanwhile on a row that stays.** A
+  failure shows as a message when the dialog is not on screen, and once
+  ([#919](https://github.com/bgoleno/opportun/issues/919); PR
+  [#926](https://github.com/bgoleno/opportun/pull/926)).
+
+### Docs
+
+- **Docs: the Settings guide covers Linked accounts and what checking an AI key sends; the Inbox
+  guide covers paging, Sync now without a reload and the bulk reject outcomes; the demo
+  deployment page and the design page are corrected.** Under Security, the Settings guide explains
+  **Link** and **Unlink** (each asks for your current password, and Unlink is refused without a
+  password) and what a password reset does to linked providers. It also says that checking an
+  Anthropic key sends one tiny test message for each distinct model your settings use, and that an
+  OpenAI or OpenAI-compatible key sends a model-list request. The Inbox guide explains a tab with
+  more than 200 messages ("Showing x–y of N", **Previous** and **Next**), the new mail and
+  counts that appear after **Sync now**, and the "changed elsewhere and left as they are" outcome.
+  The demo deployment page says every default task policy is `anthropic` and that a dedicated
+  account's requests wait for the nightly reset and can delay it. The design page names the
+  connector's `/api/v1/connector/mail/batch` endpoint, the Workday adapter and the Google packages
+  ([#605](https://github.com/bgoleno/opportun/issues/605),
+  [#739](https://github.com/bgoleno/opportun/issues/739),
+  [#744](https://github.com/bgoleno/opportun/issues/744),
+  [#772](https://github.com/bgoleno/opportun/issues/772),
+  [#891](https://github.com/bgoleno/opportun/issues/891); PRs
+  [#625](https://github.com/bgoleno/opportun/pull/625),
+  [#877](https://github.com/bgoleno/opportun/pull/877),
+  [#881](https://github.com/bgoleno/opportun/pull/881),
+  [#884](https://github.com/bgoleno/opportun/pull/884),
+  [#899](https://github.com/bgoleno/opportun/pull/899)).
+- **Docs: the architecture notes list the boot sweep of posting checks among the things that
+  assume one process.** It ends every posting still `searching` that has no pending or running
+  check job, which is safe only because no request has been served yet
+  ([#924](https://github.com/bgoleno/opportun/issues/924); PR
+  [#928](https://github.com/bgoleno/opportun/pull/928)).
+
 ## 0.5.0 (2026-11-22)
 
 This release includes everything in

@@ -11,10 +11,10 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { toast } from '@/components/ui/toast';
 import { errorMessage } from '@/lib/api';
 import { stageLabel } from '@/lib/opportunities';
-import { useOpportunitySearch, useReclassify, type CommunicationView } from './api';
+import { useOpportunitySearch, type CommunicationView } from './api';
+import { useReclassifyInDialog } from './useReclassifyInDialog';
 
 /** Search the caller's opportunities and link (or unlink) the message. */
 export function LinkDialog(props: {
@@ -25,20 +25,14 @@ export function LinkDialog(props: {
   const { comm } = props;
   const [q, setQ] = useState(comm.companyName ?? '');
   const results = useOpportunitySearch(props.open ? q : '');
-  const relink = useReclassify();
+  const relink = useReclassifyInDialog(comm.id, props.open, () => props.onOpenChange(false));
 
   function link(opportunityId: string | null) {
-    relink.mutate(
-      { id: comm.id, input: { opportunityId } },
-      {
-        onSuccess: () => {
-          toast({
-            title: opportunityId ? 'Message linked' : 'Message unlinked',
-            variant: 'success',
-          });
-          props.onOpenChange(false);
-        },
-      },
+    relink.save(
+      { opportunityId },
+      opportunityId === null
+        ? { done: 'Message unlinked', failed: 'Message not unlinked' }
+        : { done: 'Message linked', failed: 'Message not linked' },
     );
   }
 

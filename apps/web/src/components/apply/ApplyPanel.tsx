@@ -8,8 +8,11 @@ import { greenhouseJidOf } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { postingErrorMessage } from '@/components/opportunity/AlreadyTracked';
 import {
+  CHECK_ENDED,
   isPostingSearching,
+  useCheckOver,
   useChecksEnded,
   useFindPosting,
   type FindPostingResult,
@@ -32,7 +35,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { ApiError, errorMessage } from '@/lib/api';
+import { toast } from '@/components/ui/toast';
+import { ApiError } from '@/lib/api';
 import { formatDate, formatDateTime, stageLabel, type OpportunityView } from '@/lib/opportunities';
 import {
   appliedAttempt,
@@ -59,21 +63,75 @@ export function usableResumes(resumes: Resume[], opportunityId: string): Resume[
   );
 }
 
-/** What the panel says after Find posting, by its answer (#398). */
-const FIND_SAID = new Map<FindPostingResult['outcome'], string>([
-  ['attached', 'Posting attached.'],
-  ['identified', 'Recognised on Greenhouse.'],
-  ['candidates', 'Several postings could be this job. Choose it on the Details tab.'],
-  ['none', "This job was not found on the company's board. Paste the posting on the Details tab."],
-  [
-    'no_board',
-    'No job board is known for this company yet. Add its careers page on the Details tab.',
-  ],
-]);
+/**
+ * What the panel says after Find posting, by its answer (#398): one sentence for each, so there is
+ * never a silent button (#893). An answer added without one does not compile.
+ */
+function findSaid(result: FindPostingResult): string {
+  switch (result.outcome) {
+    case 'attached':
+      // A posting confirmed already was read again (#866): what that did, as the Details tab says.
+      // A description of the user's is kept without comparing it, so it is not said to match.
+      if (result.unchanged === true) {
+        return result.keptDescription === true
+          ? 'Nothing changed. Your own description was kept.'
+          : "Nothing changed: the posting matches the company's board.";
+      }
+      if (result.changed === undefined) return 'Posting attached.';
+      return result.keptDescription === true
+        ? 'Posting updated from the board. Your own description was kept.'
+        : 'Posting updated from the board.';
+    case 'identified':
+      return 'Recognised on Greenhouse.';
+    case 'already_confirmed':
+      return 'This posting was confirmed already. This page is up to date now.';
+    case 'candidates':
+      return result.candidates?.length === 1
+        ? // Find posting offering exactly one posting to choose (tl on #414).
+          "A posting on the company's board could be this job. Check it on the Details tab."
+        : 'Several postings could be this job. Choose it on the Details tab.';
+    case 'none':
+      return "This job was not found on the company's board. Paste the posting on the Details tab.";
+    case 'unreachable':
+      // Find posting stays there to try again (#866).
+      return "The company's board couldn't be read just now, so nothing was checked. Try Find posting again.";
+    case 'no_board':
+      return 'No job board is known for this company. Paste the posting on the Details tab.';
+    default:
+      // A server newer than this page.
+      result.outcome satisfies never;
+      return 'Find posting answered something this page does not know yet. Reload the page.';
+  }
+}
 
-/** Find posting offering exactly one posting to choose (tl on #414). */
-const ONE_CANDIDATE =
-  "A posting on the company's board could be this job. Check it on the Details tab.";
+/** The answers that change the posting itself: the panel then offers something else. */
+const CHANGES_THE_PANEL: readonly FindPostingResult['outcome'][] = [
+  'attached',
+  'identified',
+  'already_confirmed',
+];
+
+/**
+ * Whether an answer is still about this opportunity (#893). One that changed the posting holds
+ * while the posting is as it left it, whatever the panel offers now; the rest, while Find posting
+ * is still what the panel offers and no check has ended since (its own result counts then).
+ */
+function stillSaid(
+  result: FindPostingResult,
+  opp: OpportunityView,
+  reason: string | null,
+  checkEndedSince: boolean,
+): boolean {
+  if (!CHANGES_THE_PANEL.includes(result.outcome)) {
+    return reason === EMBEDDED_GREENHOUSE && !checkEndedSince;
+  }
+  const left = result.opportunity;
+  return (
+    left === undefined ||
+    ((left.postingState ?? null) === (opp.postingState ?? null) &&
+      (left.postingUrl ?? null) === (opp.postingUrl ?? null))
+  );
+}
 
 const NOT_ON_A_KNOWN_BOARD =
   'This job was not found on a Greenhouse board known for this company. Check the posting link on the Details tab.';
@@ -180,7 +238,8 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const reasonId = useId();
   const find = useFindPosting(opp.id);
   const checksEnded = useChecksEnded(opp.postingState);
-  /** checksEnded when Find posting was pressed: its refusal for a check holds until that moves on. */
+  const checkOver = useCheckOver(opp.id);
+  /** checksEnded when Find posting was pressed: what it said holds until that moves on. */
   const [foundAt, setFoundAt] = useState(0);
   const [howOpen, setHowOpen] = useState(false);
   // A click on the refused button (#395): it says so, rather than doing nothing. Kept as the
@@ -189,8 +248,10 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
   const [stopping, setStopping] = useState(false);
   const cancel = useCancelSubmission(opp.id);
 
-  // Find posting refused for a check that has since ended (#870): no longer true, so not shown.
-  const refusalOver = isPostingSearching(find.error) && foundAt !== checksEnded;
+  // A check that has ended since Find posting was pressed has its own result: a refusal for it is
+  // no longer true (#870). An answer's own change of the posting counts as one too (stillSaid).
+  const checkEndedSince = foundAt !== checksEnded;
+  const refusalOver = isPostingSearching(find.error) && checkEndedSince;
 
   // Feature off, on the demo, or not loaded: nothing of the feature shows.
   if (submissions.data === null || submissions.data === undefined) return null;
@@ -307,7 +368,13 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                   disabled={find.isPending}
                   onClick={() => {
                     setFoundAt(checksEnded);
-                    find.mutate(opp.postingState ?? 'none');
+                    find.mutate(opp.postingState ?? 'none', {
+                      onError: (err) => {
+                        if (!isPostingSearching(err) || !checkOver()) return;
+                        find.reset();
+                        toast(CHECK_ENDED);
+                      },
+                    });
                   }}
                 >
                   {find.isPending ? 'Searching...' : 'Find posting'}
@@ -322,19 +389,20 @@ export function ApplyPanel({ opp }: { opp: OpportunityView }) {
                   </p>
                 ) : find.isError && !refusalOver ? (
                   <p role="alert" className="text-sm text-destructive">
-                    {errorMessage(find.error)}
-                  </p>
-                ) : find.data !== undefined ? (
-                  <p role="status" className="text-sm text-muted-foreground">
-                    {find.data.outcome === 'candidates' && find.data.candidates?.length === 1
-                      ? ONE_CANDIDATE
-                      : (FIND_SAID.get(find.data.outcome) ?? '')}
+                    {postingErrorMessage(find.error)}
                   </p>
                 ) : null}
               </>
             ) : null}
           </>
         )}
+        {/* Out of the branches above: an answer can take Find posting away (#893). */}
+        {find.data !== undefined && stillSaid(find.data, opp, reason, checkEndedSince) ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            {findSaid(find.data)}
+            {find.data.note === undefined ? '' : ` ${find.data.note}`}
+          </p>
+        ) : null}
       </div>
     );
   }

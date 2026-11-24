@@ -64,35 +64,37 @@ export function InboxRow({
     isTerminal(comm.opportunityStage) &&
     !isTerminal(proposal);
 
+  // The promise, not mutate()'s callbacks, here and in the row's dialogs (#895, as #678 for Reject):
+  // the lists reload before the outcome is reported, and a row that leaves with the reload takes
+  // callbacks passed to mutate() with it. A promise's handlers run whatever has unmounted.
   function acceptProposal(reopen: boolean) {
-    accept.mutate(
-      { id: comm.id, reopen },
-      {
-        onSuccess: (res) =>
-          toast({
-            title: `Moved to ${stageLabel(res.stage)}`,
-            description: comm.opportunityTitle ?? undefined,
-            variant: 'success',
-          }),
-        onError: (err) =>
-          toast({
-            title: 'Stage not changed',
-            description: stageErrorMessage(err),
-            variant: 'destructive',
-          }),
-      },
+    void accept.mutateAsync({ id: comm.id, reopen }).then(
+      (res) =>
+        toast({
+          title: `Moved to ${stageLabel(res.stage)}`,
+          description: comm.opportunityTitle ?? undefined,
+          variant: 'success',
+        }),
+      (err: unknown) =>
+        toast({
+          title: 'Stage not changed',
+          description: stageErrorMessage(err),
+          variant: 'destructive',
+        }),
     );
   }
 
   function notSpam() {
-    reclassify.mutate(
-      { id: comm.id, input: { classification: 'solicitation', outreachKind: 'targeted' } },
-      {
-        onSuccess: () => toast({ title: 'Moved to Needs review', variant: 'success' }),
-        onError: (err) =>
+    void reclassify
+      .mutateAsync({
+        id: comm.id,
+        input: { classification: 'solicitation', outreachKind: 'targeted' },
+      })
+      .then(
+        () => toast({ title: 'Moved to Needs review', variant: 'success' }),
+        (err: unknown) =>
           toast({ title: 'Not changed', description: errorMessage(err), variant: 'destructive' }),
-      },
-    );
+      );
   }
 
   return (

@@ -1,7 +1,7 @@
 // One line of feedback for the popup per Outcome. Pure, unit-tested. Takes no settings, so
 // it can never echo the token.
+import { CAPTURE_SITES, type CaptureSiteId } from '@opportun/core/captureSites';
 import type { Outcome } from './api';
-import type { CaptureSiteId } from './canonical';
 
 export interface Rendered {
   tone: 'success' | 'info' | 'warning' | 'error';
@@ -11,7 +11,8 @@ export interface Rendered {
 const NOT_LOADED =
   'the page had not finished loading. Wait for it (scroll the profile or job description into view) and try again.';
 
-const siteLabel = (site: CaptureSiteId): string => (site === 'indeed' ? 'Indeed' : 'LinkedIn');
+const siteLabel = (site: CaptureSiteId): string =>
+  CAPTURE_SITES.find((s) => s.id === site)?.label ?? site;
 
 /**
  * A job whose title is longer than the server can store as a posting (300 characters, its
@@ -100,9 +101,19 @@ export function renderOutcome(outcome: Outcome, site: CaptureSiteId = 'linkedin'
       if (outcome.opportunityId === undefined) {
         return { tone: 'success', text: 'Captured to Opportun.' };
       }
-      return outcome.stage == null
-        ? { tone: 'success', text: 'Added to an opportunity you already track.' }
-        : { tone: 'success', text: `Added to your pipeline as ${stageLabel(outcome.stage)}.` };
+      return {
+        tone: 'success',
+        text: [
+          outcome.stage == null
+            ? 'Added to an opportunity you already track.'
+            : `Added to your pipeline as ${stageLabel(outcome.stage)}.`,
+          // Saved, with what it would have filled in left out (#914). Not "capture it again": that
+          // would be recorded as a second capture.
+          ...(outcome.filled === false
+            ? ["Its details could not be added just now. Add them on the opportunity's page."]
+            : []),
+        ].join(' '),
+      };
     case 'connected':
       return { tone: 'success', text: 'Connected: the server accepted the token.' };
     case 'refused':

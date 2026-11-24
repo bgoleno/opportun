@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { CAPTURE_SITES, linkOnHost } from '@opportun/core/captureSites';
 import { buildManifest, type BuildStamp } from '../src/manifest';
 
 const PUBLIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
@@ -13,6 +14,17 @@ const STAMP: BuildStamp = {
 };
 
 describe('buildManifest', () => {
+  // The permissions stay written out in manifest.ts, www hosts only, narrower than the hosts the
+  // sites' links can name (#769).
+  it('asks for hosts of the capture sites only, and for each site', () => {
+    const asked = (
+      buildManifest('chrome', '1.2.3', STAMP) as { host_permissions: string[] }
+    ).host_permissions.map((p) => new URL(p.replace(/\*$/, '')));
+    const siteOf = (url: URL) => CAPTURE_SITES.find((s) => linkOnHost(url, s.pageHosts))?.id;
+    for (const url of asked) expect(siteOf(url), url.href).toBeDefined();
+    for (const site of CAPTURE_SITES) expect(asked.map(siteOf), site.id).toContain(site.id);
+  });
+
   it.each(['chrome', 'firefox'] as const)('%s: MV3, popup only, least privilege', (target) => {
     const m = buildManifest(target, '1.2.3', STAMP) as Record<string, unknown>;
     expect(m.manifest_version).toBe(3);

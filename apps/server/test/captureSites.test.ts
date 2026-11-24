@@ -2,19 +2,12 @@
 // different ways, so matching them on a dedupe key built from company, title and location
 // fails whenever the AI refine step did not run (no key, budget spent, provider error): the
 // capture then carries no location at all. Identity is exact and needs no AI.
-import type { NormalizedPosting } from '@opportun/core';
+import { CAPTURE_SITES, indeed, INDEED_JOB_KEY, type NormalizedPosting } from '@opportun/core';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { INDEED_JOB_KEY, parseIndeedAlert } from '../src/lib/alertParsers/indeed';
-import {
-  CAPTURE_SITES,
-  postingIdentity,
-  siteLabel,
-  siteOfLabel,
-  siteOfUrl,
-  type CaptureSite,
-} from '../src/lib/captureSites';
+import { parseIndeedAlert } from '../src/lib/alertParsers/indeed';
+import { postingIdentity, siteLabel, siteOfLabel, siteOfUrl } from '../src/lib/captureSites';
 
 const posting = (over: Partial<NormalizedPosting>): NormalizedPosting => ({
   company: 'Initech',
@@ -80,6 +73,21 @@ describe('postingIdentity', () => {
     ).toBeNull();
   });
 
+  // #769: the host rules differ on purpose, so moving them to the site registry keeps each.
+  it('reads a host with one trailing dot, and not with two', () => {
+    for (const [href, id] of [
+      ['https://www.linkedin.com./jobs/view/1/', 'linkedin:1'],
+      ['https://www.indeed.com./viewjob?jk=0000000000000a01', 'indeed:0000000000000a01'],
+    ] as const) {
+      // An id beside it that the URL's own id must win over.
+      const posted = posting({ externalId: '0000000000000b02', postingUrl: href });
+      expect(postingIdentity(posted), href).toBe(id);
+      const twoDots = href.replace('.com.', '.com..');
+      expect(postingIdentity({ ...posted, postingUrl: twoDots }), twoDots).toBeNull();
+      expect(siteOfUrl(twoDots), twoDots).toBeNull();
+    }
+  });
+
   it('refuses a job id that is not one', () => {
     expect(
       postingIdentity(posting({ postingUrl: 'https://www.linkedin.com/jobs/view/not-an-id/' })),
@@ -136,8 +144,6 @@ describe('siteOfLabel', () => {
 
 // https://github.com/bgoleno/opportun/issues/73. Job keys here are obviously fake hex.
 describe('postingIdentity: Indeed', () => {
-  const indeed = CAPTURE_SITES.find((s) => s.id === 'indeed') as CaptureSite;
-
   it('gives every lead the Indeed alert parser makes an identity of indeed:<jk>', async () => {
     const text = await readFile(join(__dirname, 'fixtures/alerts/indeed-alert.txt'), 'utf8');
     const leads = parseIndeedAlert(text);
@@ -159,11 +165,11 @@ describe('postingIdentity: Indeed', () => {
     const url = (jk: string) => new URL(`https://www.indeed.com/viewjob?jk=${jk}`);
     for (const jk of ['0000000a', '0000000000000a01', '0'.repeat(32), '00000000000000AF']) {
       expect(INDEED_JOB_KEY.test(jk), jk).toBe(true);
-      expect(indeed.jobIdFromUrl(url(jk)), jk).toBe(jk.toLowerCase());
+      expect(indeed.jobFromUrl(url(jk))?.id, jk).toBe(jk.toLowerCase());
     }
     for (const jk of ['000000a', '0'.repeat(33), '000000000000000g', '']) {
       expect(INDEED_JOB_KEY.test(jk), jk).toBe(false);
-      expect(indeed.jobIdFromUrl(url(jk)), jk).toBeNull();
+      expect(indeed.jobFromUrl(url(jk)), jk).toBeNull();
     }
   });
 
@@ -175,7 +181,7 @@ describe('postingIdentity: Indeed', () => {
       'https://www.indeed.com/cmp/Example-Corp',
       'https://www.indeed.com/viewjob',
     ]) {
-      expect(indeed.jobIdFromUrl(new URL(href)), href).toBeNull();
+      expect(indeed.jobFromUrl(new URL(href)), href).toBeNull();
     }
   });
 

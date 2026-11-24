@@ -46,6 +46,10 @@ export function formatRecoveryCode(code: string): string {
   return `${code.slice(0, 5)}-${code.slice(5)}`;
 }
 
+/** At setup there is no recovery code yet, so none is suggested (#896). */
+const INVALID_SETUP_CODE =
+  "That code is not valid. Check that your device's clock is right, then enter the code the app shows now.";
+
 function codeError(err: unknown): string {
   return err instanceof ApiError && err.code === 'invalid_code'
     ? INVALID_CODE_TEXT
@@ -136,6 +140,7 @@ export function TwoFactorCard() {
       {enrollment === null ? null : (
         <EnrollDialog
           enrollment={enrollment}
+          onActivated={() => void qc.invalidateQueries({ queryKey: twoFactorQuery.queryKey })}
           onDone={() => {
             setEnrollment(null);
             void qc.invalidateQueries({ queryKey: twoFactorQuery.queryKey });
@@ -235,6 +240,8 @@ export function PasswordDialog(props: {
 
 function EnrollDialog(props: {
   enrollment: Enrollment & { password: string };
+  /** Two-factor is on, as of now: the recovery codes are still on screen. */
+  onActivated: () => void;
   onDone: () => void;
 }) {
   const { enrollment } = props;
@@ -261,11 +268,14 @@ function EnrollDialog(props: {
         body: { code: parsed.data, password: enrollment.password },
       });
       setRecoveryCodes(res.recoveryCodes);
+      props.onActivated();
     } catch (err) {
       setError(
         err instanceof ApiError && err.code === 'invalid_password'
           ? passwordError(err)
-          : codeError(err),
+          : err instanceof ApiError && err.code === 'invalid_code'
+            ? INVALID_SETUP_CODE
+            : errorMessage(err),
       );
     } finally {
       setBusy(false);
@@ -286,11 +296,12 @@ function EnrollDialog(props: {
     <Dialog
       open
       onOpenChange={(open) => {
-        // The codes are shown once: closing is only through "I saved them".
-        if (!open && recoveryCodes === null) props.onDone();
+        // The codes are shown once: closing is only through "I saved them". And not while they are
+        // on their way: closed then, two-factor would be on with no codes ever shown (#898).
+        if (!open && recoveryCodes === null && !busy) props.onDone();
       }}
     >
-      <DialogContent className="max-w-md" showClose={recoveryCodes === null}>
+      <DialogContent className="max-w-md" showClose={recoveryCodes === null && !busy} guardClose>
         {recoveryCodes === null ? (
           <form onSubmit={(e) => void activate(e)} noValidate className="grid gap-4">
             <DialogHeader>
@@ -342,7 +353,7 @@ function EnrollDialog(props: {
               )}
             </FormField>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={props.onDone}>
+              <Button type="button" variant="outline" disabled={busy} onClick={props.onDone}>
                 Cancel
               </Button>
               <Button type="submit" disabled={busy}>

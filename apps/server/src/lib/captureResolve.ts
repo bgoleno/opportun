@@ -19,12 +19,21 @@
 import { enqueue } from './jobQueue';
 import { dedupeKey, type NormalizedPosting, type OpportunityStage } from '@opportun/core';
 import { and, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
-import { isLockTimeout, lockScope, withTransaction, type Db, type Exec } from '../db/client';
+import type { FastifyBaseLogger } from 'fastify';
+import {
+  boundLockWaits,
+  isLockWaitEnded,
+  lockScope,
+  withTransaction,
+  type Db,
+  type Exec,
+} from '../db/client';
 import { ilike, jsonText } from '../db/dialect';
 import { discoveryResults, opportunities } from '../db/schema';
 import { POSTING_RECONCILE_KIND } from './jobKinds';
 import { sanitizePosting } from './postingSanitize';
 import { CAPTURE_SLOT } from './captureLimit';
+import { HttpError } from './errors';
 import { racePoint } from './racePoints';
 import { postingIdentity, siteLabel } from './captureSites';
 import { sourceLabel } from './sourceLabels';
@@ -58,6 +67,8 @@ export interface CaptureInput {
   captureText: string;
   /** Which site it came from, for the timeline entry and the merge heading (D5). */
   siteId: string;
+  /** Says which step after the save gave up a wait (#914). */
+  log?: Pick<FastifyBaseLogger, 'warn'>;
 }
 
 export interface CaptureResolution {
@@ -69,6 +80,8 @@ export interface CaptureResolution {
   stageMovedTo: OpportunityStage | null;
   /** Other leads for the same job, accepted against the same opportunity (D23). */
   linkedLeadIds: string[];
+  /** False when the capture is saved and the details the opportunity lacked are not (#914). */
+  filled: boolean;
 }
 
 /** Stages a capture advances to `interested`. Everything else is left exactly as it is (D3). */
@@ -295,7 +308,7 @@ async function recordFoldedLead(
 
 /** The capture's own text on the timeline, before any description is written (D12). */
 async function recordCapture(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   opportunityId: string,
   input: CaptureInput,
@@ -320,9 +333,16 @@ async function recordCapture(
  * its own fingerprint, so a re-capture would have overwritten the employer's copy with the
  * aggregator's page text and then skipped the re-search that would have restored it. The ATS
  * copy wins every conflict (design D4), and a capture fills missing fields only (D15, D24).
+ *
+ * A location that would make it another opportunity of the user's (its company, title and that
+ * location, 409 duplicate) is left out, and the rest is filled, as the posting check does
+ * (lib/postingReconcile): the capture is recorded by now, so refusing it would have it recorded again
+ * with each retry (em and tl on https://github.com/bgoleno/opportun/issues/914). It is not said:
+ * `filled: false` is for what can be added by hand, and this would be refused there too. Called in one
+ * transaction: the first try is a savepoint, and a wait that ends in the second undoes both.
  */
 async function fillOpportunity(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   opp: OpportunityView,
   posting: NormalizedPosting,
@@ -337,7 +357,17 @@ async function fillOpportunity(
   if (opp.location == null && posting.location != null) patch.location = posting.location;
   if (opp.remote == null && posting.remote != null) patch.remote = posting.remote;
   if (opp.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
-  if (Object.keys(patch).length > 0) await updateOpportunity(db, ctx, opp.id, patch);
+  if (Object.keys(patch).length === 0) return;
+  try {
+    await updateOpportunity(db, ctx, opp.id, patch);
+  } catch (err) {
+    if (!(err instanceof HttpError) || err.code !== 'duplicate' || patch.location === undefined) {
+      throw err;
+    }
+    const rest = { ...patch };
+    delete rest.location;
+    if (Object.keys(rest).length > 0) await updateOpportunity(db, ctx, opp.id, rest);
+  }
 }
 
 /**
@@ -351,7 +381,7 @@ const forceIfKeptApart = (keptApartFrom: OpportunityView | null): { force?: bool
 
 /** Says on the new opportunity's timeline which similar one it was kept apart from, and why. */
 async function recordKeptApart(
-  db: Db,
+  db: Exec,
   ctx: UserCtx,
   opportunityId: string,
   other: OpportunityView,
@@ -378,10 +408,12 @@ async function advance(
   db: Db,
   ctx: UserCtx,
   opportunityId: string,
-): Promise<OpportunityStage | null> {
-  const moved = await withTransaction(
+  waitMs: number,
+): Promise<OpportunityView | null> {
+  return await withTransaction(
     db,
     async (tx) => {
+      await boundLockWaits(tx, waitMs);
       const { stage } = await getOpportunity(tx, ctx, opportunityId);
       if (!ADVANCES_FROM.has(stage)) return null;
       await racePoint('captureResolve.advance.locked');
@@ -394,11 +426,8 @@ async function advance(
       });
     },
     // A bounded wait for the lock (#309): resolveCapture runs in the user's capture slot.
-    { scope: ingestScope(ctx), lockTimeoutMs: CAPTURE_SLOT.lockTimeoutMs },
+    { scope: ingestScope(ctx), lockTimeoutMs: waitMs },
   );
-  if (moved === null) return null;
-  await afterStageChange(db, ctx, moved);
-  return 'interested';
 }
 
 /** Stores the capture as a new accepted lead of the user's extension channel source. */
@@ -440,6 +469,14 @@ function fillFrom(lead: NormalizedPosting, capture: NormalizedPosting): Normaliz
   }
   return filled;
 }
+
+/** What is logged for a step after the save that gave up a wait (#914): its name, nothing else. */
+type GaveUp =
+  | 'saved capture: the kept-apart note gave up a lock wait'
+  | 'saved capture: the fill gave up a lock wait'
+  | 'saved capture: the stage move gave up a lock wait'
+  | 'saved capture: what follows a stage move gave up a lock wait'
+  | 'saved capture: the posting state gave up a lock wait';
 
 interface Settled {
   opportunity: OpportunityView;
@@ -560,6 +597,13 @@ async function settleLead(
     await recordFoldedLead(tx, ctx, opportunity.id, other);
     linkedLeadIds.push(other.id);
   }
+  // Said to be the system's with the description itself: a description without its fingerprint reads
+  // as the user's own for good (tl on #955). The row is nobody else's yet, so nothing waits.
+  if (createdOpportunity && opportunity.descriptionMd != null && opportunity.descriptionMd !== '') {
+    opportunity = await updateOpportunity(tx, ctx, opportunity.id, {
+      descriptionFingerprint: descriptionFingerprint(opportunity.descriptionMd),
+    });
+  }
   return { opportunity, resultId, createdOpportunity, keptApartFrom, linkedLeadIds };
 }
 
@@ -586,42 +630,88 @@ export async function resolveCapture(
 
   const { opportunity, resultId, createdOpportunity, keptApartFrom, linkedLeadIds } = settled;
 
-  await recordCapture(db, ctx, opportunity.id, { ...input, posting });
-  if (createdOpportunity && keptApartFrom !== null) {
-    await recordKeptApart(db, ctx, opportunity.id, keptApartFrom, input.siteId);
-  }
-
-  if (createdOpportunity) {
-    // The create path already stored the description; record that the system wrote it.
-    if (opportunity.descriptionMd != null && opportunity.descriptionMd !== '') {
-      await updateOpportunity(db, ctx, opportunity.id, {
-        descriptionFingerprint: descriptionFingerprint(opportunity.descriptionMd),
-      });
+  await racePoint('captureResolve.settled');
+  // Bounded as the locks above: nothing is on the timeline yet, so a wait that runs out is
+  // capture_busy (withCaptureSlot), and the capture made again is recorded once (#914). It finds
+  // what settleLead made.
+  await withTransaction(db, async (tx) => {
+    await boundLockWaits(tx, CAPTURE_SLOT.lockTimeoutMs);
+    await recordCapture(tx, ctx, opportunity.id, { ...input, posting });
+  });
+  // The capture is saved from here on: settleLead's transaction and the entry are committed. So no
+  // wait below makes the answer an error: "try again" would be untrue, and a retry would record it
+  // twice (tl on https://github.com/bgoleno/opportun/pull/318, and on
+  // https://github.com/bgoleno/opportun/issues/914). A step that cannot have its locks in time is
+  // skipped. The one exception is the check's own job, queued at the end: swallowing that would leave
+  // `searching` with no check behind it, so it may throw, as it always could.
+  // One budget for them all: each step waits for what is left as it starts, and 1 ms when nothing is,
+  // so a step nobody blocks still goes through. A step with several waits can overrun it, the fill by
+  // its attempt's, user's and row's if three holders block it one after another: some 15 s, and 1 ms
+  // for each step after.
+  await racePoint('captureResolve.recorded');
+  const deadline = Date.now() + CAPTURE_SLOT.lockTimeoutMs;
+  const waitMs = (): number => Math.max(1, deadline - Date.now());
+  /** The step's outcome, or null when it gave up a wait. Any other error throws. */
+  async function unlessBlocked<T>(
+    gaveUp: GaveUp,
+    fn: () => Promise<T>,
+  ): Promise<{ value: T } | null> {
+    try {
+      return { value: await fn() };
+    } catch (err) {
+      if (!isLockWaitEnded(err)) throw err;
+      input.log?.warn({ 'opportun.opportunity.id': opportunity.id }, gaveUp);
+      return null;
     }
-  } else {
-    await fillOpportunity(db, ctx, opportunity, posting);
+  }
+  const bounded = <T>(fn: (tx: Exec) => Promise<T>): Promise<T> =>
+    withTransaction(db, async (tx) => {
+      await boundLockWaits(tx, waitMs());
+      return await fn(tx);
+    });
+
+  if (createdOpportunity && keptApartFrom !== null) {
+    await unlessBlocked('saved capture: the kept-apart note gave up a lock wait', () =>
+      bounded((tx) => recordKeptApart(tx, ctx, opportunity.id, keptApartFrom, input.siteId)),
+    );
   }
 
-  // The capture is saved here: the transaction above committed it.
+  let filled = true;
+  if (!createdOpportunity) {
+    // updateOpportunity keeps its own lock order (the attempt, the user, rows): a savepoint in this
+    // transaction, which holds nothing before it.
+    const fill = await unlessBlocked('saved capture: the fill gave up a lock wait', () =>
+      bounded((tx) => fillOpportunity(tx, ctx, opportunity, posting)),
+    );
+    filled = fill !== null;
+  }
+
+  // Before the stage move, whose lock a run or an alert may hold.
   await racePoint('captureResolve.saved');
-  // advance takes the ingest lock again, with the bounded wait. If a run or an alert holds it now
-  // and is slow, only the stage move waits for the next capture: answering capture_busy ("try
-  // again") for a capture that is saved would be untrue, and a retry would record it twice (tl on
-  // https://github.com/bgoleno/opportun/pull/318). The posting is still reconciled below.
-  let stageMovedTo: Awaited<ReturnType<typeof advance>>;
-  try {
-    stageMovedTo = await advance(db, ctx, opportunity.id);
-  } catch (err) {
-    if (!isLockTimeout(err)) throw err;
-    stageMovedTo = null;
+  const stage = await unlessBlocked('saved capture: the stage move gave up a lock wait', () =>
+    advance(db, ctx, opportunity.id, waitMs()),
+  );
+  const moved = stage?.value ?? null;
+  // Its own step: the move is committed, whatever becomes of what follows it. A company's lookup
+  // lost here is queued again by the opportunity's next move.
+  if (moved !== null) {
+    await unlessBlocked('saved capture: what follows a stage move gave up a lock wait', () =>
+      afterStageChange(db, ctx, moved),
+    );
   }
 
   const current = await getOpportunity(db, ctx, opportunity.id);
   if (current.postingState !== 'confirmed') {
-    await setPostingState(db, ctx, opportunity.id, {
-      postingState: 'searching',
-      postingStateDetail: null,
-    });
+    await unlessBlocked('saved capture: the posting state gave up a lock wait', () =>
+      bounded((tx) =>
+        setPostingState(tx, ctx, opportunity.id, {
+          postingState: 'searching',
+          postingStateDetail: null,
+        }),
+      ),
+    );
+    // Queued whatever was skipped: without `searching` the check still runs, and nothing on the page
+    // says one does, so Find posting is not refused meanwhile.
     await enqueue(
       db,
       POSTING_RECONCILE_KIND,
@@ -639,7 +729,8 @@ export async function resolveCapture(
     opportunityId: opportunity.id,
     resultId,
     createdOpportunity,
-    stageMovedTo,
+    stageMovedTo: moved === null ? null : 'interested',
     linkedLeadIds,
+    filled,
   };
 }

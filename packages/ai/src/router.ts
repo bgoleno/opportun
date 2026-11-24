@@ -93,6 +93,9 @@ interface CallInfo {
 export function sanitizeDetail(detail: string, apiKey: string | undefined): string {
   let out = detail;
   if (apiKey !== undefined && apiKey.length > 0) out = out.split(apiKey).join('[redacted]');
+  // No message echoes the AI key or any part of it (https://github.com/bgoleno/opportun/issues/896).
+  const bare = apiKey?.trim() ?? '';
+  if (bare !== '') out = out.split(bare).join('[redacted]');
   out = out.replace(/\b(sk|key|token)[-_][A-Za-z0-9_-]{8,}/gi, '[redacted]');
   out = out.replace(/\s+/g, ' ').trim();
   return out.length > MAX_ERROR_DETAIL ? `${out.slice(0, MAX_ERROR_DETAIL)}...` : out;
