@@ -377,13 +377,14 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
       }
       if (result.outcome === 'attached') {
         const title = result.candidate?.posting.title ?? opp.title;
+        const rest = [...kept, ...note].join(' ');
         // #114: a single confident match from a board read only in part (result.note) is
         // attached with no dialog in between, so the toast is the only place the person sees
         // this in the moment. It is also recorded on the timeline (attachPosting, server side)
         // since the toast itself is gone in a few seconds and the truncation stays true after.
         toast({
           title: 'Posting attached',
-          description: [title, ...[...kept, ...note].map((l) => `. ${l}`)].join(''),
+          description: rest === '' ? title : `${title}. ${rest}`,
           variant: 'success',
         });
         return;

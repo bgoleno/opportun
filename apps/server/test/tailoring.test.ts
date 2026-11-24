@@ -176,6 +176,31 @@ describe('tailoring sessions', () => {
     expect(next.json().messages).toEqual([]);
   });
 
+  it('finishing a session finished already is refused in plain words, and changes nothing (#927)', async () => {
+    const { a } = await boot();
+    const { resume, sessionId } = await setup(a);
+    const finish = () =>
+      a.request({ method: 'POST', url: `/api/v1/tailoring/${sessionId}/complete` });
+    expect((await finish()).statusCode).toBe(200);
+    // Moved on since: a second finish must not put it back in review.
+    const moved = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/resumes/${resume.id}`,
+      payload: { status: 'final' },
+    });
+    expect(moved.statusCode, moved.body).toBe(200);
+
+    const again = await finish();
+
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toEqual({
+      code: 'session_closed',
+      message: 'This tailoring session was already finished. There is nothing more to do.',
+    });
+    const now = await a.request({ method: 'GET', url: `/api/v1/resumes/${resume.id}` });
+    expect(now.json().status).toBe('final');
+  });
+
   it('puts every active resume rule, fetched live, into the system prompt', async () => {
     const { a } = await boot();
     const { sessionId } = await setup(a);
