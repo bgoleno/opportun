@@ -94,9 +94,17 @@ export interface PrefillAttempt {
 
 export type PrefillMiss = 'no_matching_attempt' | 'several_handed_off' | 'review_stale';
 
+/** Why a review is stale, where the server says (#1057): its opportunity was merged away. */
+export interface StaleCause {
+  cause?: 'merged';
+}
+/** Any other cause is one this version does not know, and is read as none. */
+const staleCause = (v: Record<string, unknown>): StaleCause =>
+  v.cause === 'merged' ? { cause: 'merged' } : {};
+
 export type CurrentResult =
   | { kind: 'attempt'; attempt: PrefillAttempt }
-  | { kind: 'none'; reason: PrefillMiss }
+  | ({ kind: 'none'; reason: PrefillMiss } & StaleCause)
   | { kind: 'unauthorized' }
   | { kind: 'no_scope' }
   | { kind: 'unavailable' }
@@ -121,7 +129,11 @@ function parseCurrent(body: unknown): CurrentResult | null {
   if (!isRecord(body)) return null;
   if (body.attempt === null) {
     return typeof body.reason === 'string' && MISSES.includes(body.reason)
-      ? { kind: 'none', reason: body.reason as PrefillMiss }
+      ? {
+          kind: 'none',
+          reason: body.reason as PrefillMiss,
+          ...(body.reason === 'review_stale' ? staleCause(body) : {}),
+        }
       : null;
   }
   const a = body.attempt;
@@ -238,7 +250,7 @@ export const RESUME_MISSES: readonly ResumeMiss[] = [
 export type ResumeResult =
   | { kind: 'file'; base64: string }
   | { kind: 'none'; why: ResumeMiss | null }
-  | { kind: 'review_stale' };
+  | ({ kind: 'review_stale' } & StaleCause);
 
 /**
  * The reason for a snapshot state that is not ready (#653), the same from /current and a 409.
@@ -286,7 +298,7 @@ export async function fetchResume(
       body = undefined;
     }
     const error = isRecord(body) && isRecord(body.error) ? body.error : {};
-    if (error.code === 'review_stale') return { kind: 'review_stale' };
+    if (error.code === 'review_stale') return { kind: 'review_stale', ...staleCause(error) };
     return none(missOfState(error.snapshotState));
   }
   if (res.status !== 200 || res.arrayBuffer === undefined) return none('resume_not_downloaded');
@@ -504,9 +516,11 @@ export function renderPrefillStop(
             ? // A re-application from a second opportunity can be handed off while the first still
               // is (qa, tl on #183): which one is meant cannot be known here, so nothing is filled.
               `You have two applications open for this job. In Opportun, record the earlier one (I submitted it, or I did not submit it), then try again. ${nothing}`
-            : stop.reason === 'review_stale'
-              ? `This application changed after you reviewed it. Review it again in Opportun. ${nothing}`
-              : `None of your applications was handed off to this posting. Start it from Opportun's Apply step, then try again. ${nothing}`,
+            : stop.reason === 'review_stale' && stop.cause === 'merged'
+              ? `The opportunity of this application was merged into another after you opened it, so it is no longer filled. In Opportun, press Review it again on it, or finish the form yourself. ${nothing}`
+              : stop.reason === 'review_stale'
+                ? `This application changed after you reviewed it. Review it again in Opportun. ${nothing}`
+                : `None of your applications was handed off to this posting. Start it from Opportun's Apply step, then try again. ${nothing}`,
       };
     case 'other_posting':
       return {

@@ -19,7 +19,10 @@ import {
   greenhouse,
   greenhouseBoardJobUrl,
   greenhouseJidOf,
+  namedAgainst,
+  withoutTrailingPunctuation,
   type JobRef,
+  type PinnedJob,
 } from '@opportun/core';
 
 export interface AtsJobRef {
@@ -85,36 +88,6 @@ function fromBoardPath(board: AtsBoard, url: URL): Omit<AtsJobRef, 'url'> | null
  * punctuation (`.,;:!?`, and a `)` that closes no `(`, #549) is not part of it, as the text scan
  * always read it (sec at 23f3a37).
  */
-/**
- * `address` without the punctuation a sentence leaves after a pasted URL: trailing `.,;:!?` and a
- * `)` that closes no `(`. Exported for the handoff's own check (#620): a destination this would
- * change is refused, so the address checked is the address opened.
- */
-export function withoutTrailingPunctuation(address: string): string {
-  // Dropped by loops, not a regular expression, so it stays linear whatever the address holds.
-  // A `)` is trailing punctuation only when it closes no `(` (#549): a URL pasted out of "(...)"
-  // keeps its job id, and a Workday ".../San-Jose-CA-(Remote)/..." or a balanced "(...)" at the
-  // end stays as written. Matched left to right (#562), so a stray `)` earlier in the query is not
-  // counted against a balanced `(d)` at the end.
-  const strayClose = new Set<number>();
-  let open = 0;
-  for (let i = 0; i < address.length; i++) {
-    const c = address.charAt(i);
-    if (c === '(') open += 1;
-    else if (c === ')') {
-      if (open > 0) open -= 1;
-      else strayClose.add(i);
-    }
-  }
-  let end = address.length;
-  while (end > 0) {
-    const last = address.charAt(end - 1);
-    if ('.,;:!?'.includes(last) || (last === ')' && strayClose.has(end - 1))) end -= 1;
-    else break;
-  }
-  return address.slice(0, end);
-}
-
 /**
  * The job an address names on a board, read only from the board host and its own path: never
  * from `gh_jid` or another query parameter, and with no punctuation dropped. For the handoff's
@@ -202,30 +175,15 @@ export function postingAtsJobRef(postingUrl: string | null | undefined): AtsJobR
   return { ...ref, org: board.slug };
 }
 
-/** The job an application was started for, which it keeps. */
-export interface PinnedJob {
-  atsKind: string;
-  atsRef: string | null;
-  atsExternalId: string;
-}
-
 /**
- * Whether an opportunity names another job than an application was started for: by its stored
- * identity, else by its posting link (#1055, tl). One that names no job (no link, or a link no site
- * reads) does not name another. A careers page's `gh_jid` names its job and no board, where the
- * application has the board's: that is no difference, so the kind and the job id decide. A stored
- * identity is compared whole, the board without case.
+ * Whether an opportunity names another job than an application was started for (#1055, tl): one that
+ * names none does not. The screens' notice is the same comparison (core's namedAgainst).
  */
 export function namesAnotherJob(
   opp: { atsJobRef: AtsJobRef | null | undefined; postingUrl: string | null },
   pinned: PinnedJob,
 ): boolean {
-  const stored = opp.atsJobRef ?? null;
-  const ref = stored ?? (opp.postingUrl === null ? null : atsJobRefOfUrl(opp.postingUrl));
-  if (ref === null) return false;
-  if (ref.kind !== pinned.atsKind || ref.externalId !== pinned.atsExternalId) return true;
-  if (stored === null && ref.org === null) return false;
-  return (ref.org ?? '').toLowerCase() !== (pinned.atsRef ?? '').toLowerCase();
+  return namedAgainst(opp, pinned, atsJobRefOfUrl) === 'another';
 }
 
 /**

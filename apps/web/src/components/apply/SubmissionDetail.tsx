@@ -24,7 +24,7 @@ import {
 import { EmailEvidence } from './EmailEvidence';
 import { PageEvidence } from './PageEvidence';
 import { OutcomeActions, REPORTABLE } from './OutcomeActions';
-import { SubmissionStatusChip } from './parts';
+import { openedOnceText, SubmissionStatusChip } from './parts';
 
 /** What the status means, in words (design S7's status table); null where the page says enough. */
 function statusBanner(s: SubmissionView): string | null {
@@ -39,7 +39,9 @@ function statusBanner(s: SubmissionView): string | null {
       return 'This could not be completed. Nothing was submitted.';
     case 'abandoned':
       return s.failureReason === 'review_expired'
-        ? 'Your review expired before the form was opened. Nothing was sent.'
+        ? s.handedOffAt == null
+          ? 'Your review expired before the form was opened. Nothing was sent.'
+          : `Your review expired. ${openedOnceText(s.handedOffAt)}`
         : 'You stopped before submitting. Nothing was sent.';
     case 'draft':
     case 'reviewed':

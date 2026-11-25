@@ -183,6 +183,26 @@ describe('S7: status and evidence', () => {
       'This could not be completed. Nothing was submitted.',
     ],
     [
+      'abandoned, its review expired',
+      {
+        status: 'abandoned',
+        failureReason: 'review_expired',
+        submittedAt: null,
+        handedOffAt: null,
+      },
+      'Your review expired before the form was opened. Nothing was sent.',
+    ],
+    [
+      'abandoned, its review expired, and opened before it (#1057)',
+      {
+        status: 'abandoned',
+        failureReason: 'review_expired',
+        submittedAt: null,
+        handedOffAt: NOW - 1000,
+      },
+      `Your review expired. You opened this application on ${formatDateTime(NOW - 1000)}. If you submitted it then, don't send it again.`,
+    ],
+    [
       'abandoned',
       { status: 'abandoned', failureReason: 'cancelled_by_user', submittedAt: null },
       'You stopped before submitting. Nothing was sent.',

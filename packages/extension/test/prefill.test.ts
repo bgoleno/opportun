@@ -247,6 +247,9 @@ const listed = (s: ReturnType<typeof setup>, heading: string): string[] => {
     : Array.from(ul.querySelectorAll('li')).map((li) => li.textContent ?? '');
 };
 
+const MERGED =
+  'The opportunity of this application was merged into another after you opened it, so it is no longer filled. In Opportun, press Review it again on it, or finish the form yourself. Nothing was filled.';
+
 describe('the section shows only on a Greenhouse posting tab', () => {
   it('shown over the posting, hidden elsewhere, decided from the address alone', async () => {
     const on = setup({});
@@ -460,6 +463,13 @@ describe('acceptance 1, 3 and 5: fill from the reviewed attempt, then report', (
     expect(valueOf(s.page.doc, 'first_name')).toBe('');
     expect(s.$('status').textContent).toMatch(/changed after you reviewed it/);
     expect(s.$('status').dataset.tone).toBe('error');
+  });
+
+  it('a copy refused as merged away since (#1057) says so', async () => {
+    const s = setup({ snapshot: json(409, { error: { code: 'review_stale', cause: 'merged' } }) });
+    await clickFill(s);
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    expect(s.$('status').textContent).toBe(MERGED);
   });
 
   it('a copy with an empty file name is not fetched (tl on #187)', async () => {
@@ -687,7 +697,22 @@ describe('every stop before a fill says why, and fills nothing', () => {
     [
       'a stale review',
       json(200, { attempt: null, reason: 'review_stale' }),
-      /changed after you reviewed it/,
+      /^This application changed after you reviewed it\. Review it again in Opportun\. Nothing was filled\.$/,
+    ],
+    [
+      'a stale review, as its opportunity was merged (#1057)',
+      json(200, { attempt: null, reason: 'review_stale', cause: 'merged' }),
+      new RegExp(`^${MERGED}$`),
+    ],
+    [
+      'a stale review for a cause this version does not know',
+      json(200, { attempt: null, reason: 'review_stale', cause: '<b>else</b>' }),
+      /^This application changed after you reviewed it\. Review it again in Opportun\. Nothing was filled\.$/,
+    ],
+    [
+      'a cause beside another reason',
+      json(200, { attempt: null, reason: 'no_matching_attempt', cause: 'merged' }),
+      /^None of your applications was handed off to this posting/,
     ],
     [
       'a token without apply:assist (403)',
@@ -1047,6 +1072,28 @@ describe('#402 slice 2: the fill waits for lists, and the report lists every cho
     expect(next.deps.runFill).not.toHaveBeenCalled();
   });
 
+  it('that is not written over on opening, when the review is stale as well (#1057)', async () => {
+    const store = memoryStore();
+    const first = setup({ checkStore: store });
+    first.deps.runFill = vi.fn(() => new Promise<null>(() => undefined));
+    await mountPopup(first.doc, first.deps);
+    await settleOpen(first);
+    first.$('prefill').click();
+    await vi.waitFor(() => expect(first.$('status').textContent).toBe(FILLING));
+
+    const next = setup({
+      checkStore: store,
+      current: json(200, { attempt: null, reason: 'review_stale', cause: 'merged' }),
+    });
+    await mountPopup(next.doc, next.deps);
+    await vi.waitFor(() => expect(next.get).toHaveBeenCalledTimes(1));
+    await settleOpen(next);
+    expect(next.$('status').textContent).toBe(FILL_UNSEEN);
+    // Pressed, it says why.
+    next.$('prefill').click();
+    await vi.waitFor(() => expect(next.$('status').textContent).toBe(MERGED));
+  });
+
   it('every option chosen is listed first, as "field: the text chosen"', async () => {
     const s = setup({ snapshot: json(404, {}) });
     s.deps.runFill = vi.fn(async () => ({
@@ -1187,8 +1234,30 @@ describe('#403: opening the popup on the handed-off posting fills it, once', () 
     expect(valueOf(s.page.doc, 'first_name')).toBe('');
   });
 
+  // Where it filled before the merge, it said nothing (qa on #1057).
+  it.each([
+    ['merged', { cause: 'merged' }, MERGED],
+    [
+      'for another cause',
+      {},
+      'This application changed after you reviewed it. Review it again in Opportun. Nothing was filled.',
+    ],
+  ])('a stale review, %s: said on open, and nothing is filled', async (_n, over, words) => {
+    const s = setup({ current: json(200, { attempt: null, reason: 'review_stale', ...over }) });
+    await open(s);
+    await vi.waitFor(() => expect(s.$('status').textContent).toBe(words));
+    expect(s.$('status').dataset.tone).toBe('error');
+    expect(s.deps.runFill).not.toHaveBeenCalled();
+    // In the popup only: the page is as it was, and one lookup was all.
+    expect(valueOf(s.page.doc, 'first_name')).toBe('');
+    expect(s.page.doc.body.textContent).not.toContain('merged into another');
+    expect(s.get).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect((s.$('prefill') as HTMLButtonElement).disabled).toBe(false));
+  });
+
   it.each([
     ['a miss', json(200, { attempt: null, reason: 'no_matching_attempt' })],
+    ['two applications', json(200, { attempt: null, reason: 'several_handed_off' })],
     ['a server error', json(500, {})],
     ['a revoked token', json(401, {})],
     [

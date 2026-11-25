@@ -48,7 +48,16 @@ import {
   type SubmissionView,
 } from './api';
 import { OutcomeActions, REPORTABLE } from './OutcomeActions';
-import { PostingChangedNotice, postingMoved, SubmissionStatusChip } from './parts';
+import {
+  MergedDraftNotice,
+  OpenedOnceNotice,
+  openedOnceText,
+  PostingChangedNotice,
+  postingMoved,
+  ReviewItAgain,
+  ReviewLapsedNotice,
+  SubmissionStatusChip,
+} from './parts';
 
 /** The stages an attempt may start at (the server's SUBMISSION_ELIGIBLE_STAGES). */
 const ELIGIBLE_STAGES: readonly string[] = ['interested', 'preparing', 'applied'];
@@ -465,7 +474,11 @@ export function attemptPlace(
   if (live.status === 'reviewed') {
     return {
       step: 'review',
-      text: 'Your review is saved. Nothing has been sent anywhere.',
+      // Opened before it was reviewed again, it may have been sent (#1057).
+      text:
+        live.handedOffAt == null
+          ? 'Your review is saved. Nothing has been sent anywhere.'
+          : 'Your review is saved.',
       action: `Continue to open ${ats}`,
     };
   }
@@ -507,6 +520,17 @@ function InProgress({
       <p className="text-sm text-muted-foreground">{text}</p>
       {/* The posting changed under the attempt (#144): say so where the user starts from. */}
       {postingMoved(live, opp) ? <PostingChangedNotice live={live} opp={opp} /> : null}
+      <MergedDraftNotice live={live} />
+      <OpenedOnceNotice live={live} />
+      {live.reviewLapsed ? (
+        <>
+          <ReviewLapsedNotice live={live}>
+            If you submitted it, say so in Instructions. If not, finish the form there, or review it
+            again to have it filled.
+          </ReviewLapsedNotice>
+          <ReviewItAgain live={live} opportunityId={opportunityId} />
+        </>
+      ) : null}
       <Button asChild className="w-full">
         <Link to="/opportunities/$id/apply" params={{ id: opportunityId }} search={{ step }}>
           {action}
@@ -586,8 +610,10 @@ function LastAttempt({ latest }: { latest: SubmissionView }) {
   if (latest.status === 'abandoned' && latest.failureReason === 'review_expired') {
     return (
       <p className="text-sm text-muted-foreground">
-        Your last review expired before the form was opened. Starting again keeps your details and
-        answers.
+        {latest.handedOffAt == null
+          ? 'Your last review expired before the form was opened.'
+          : `Your last review expired. ${openedOnceText(latest.handedOffAt)}`}{' '}
+        Starting again keeps your details and answers.
       </p>
     );
   }

@@ -2,6 +2,8 @@
 // which one survives, then merge this one into it and open the kept opportunity.
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
+import { isLive, useOpportunitySubmissions } from '@/components/apply/api';
+import { MergeMovesApplication } from '@/components/apply/parts';
 import { useOpportunitySearch } from '@/components/comms/api';
 import { FormError } from '@/components/FormError';
 import { Button } from '@/components/ui/button';
@@ -42,6 +44,9 @@ export function MergeDialog(props: {
   const [target, setTarget] = useState<OpportunityView | null>(null);
   const results = useOpportunitySearch(props.open ? q : '');
   const merge = useMergeOpportunity();
+  // What becomes of its application (#1057). Nothing is said where assisted apply is off.
+  const applications = useOpportunitySubmissions(opp.id).data?.items ?? [];
+  const live = applications.find(isLive);
   const navigate = useNavigate();
   const candidates = results.data?.items.filter((o) => o.id !== opp.id) ?? [];
 
@@ -122,9 +127,12 @@ export function MergeDialog(props: {
               <DialogTitle>Merge these opportunities?</DialogTitle>
               <DialogDescription>
                 The activities, next steps, messages, resumes and files of the merged opportunity
-                move to the kept one, which keeps the more advanced stage. This cannot be undone.
+                {/* A live one has its own sentence, below. */}
+                {applications.length > 0 && live === undefined ? ', and its application,' : ''} move
+                to the kept one, which keeps the more advanced stage. This cannot be undone.
               </DialogDescription>
             </DialogHeader>
+            <MergeMovesApplication opportunityId={opp.id} />
             <dl className="grid gap-2 text-sm">
               <div className="grid gap-0.5 rounded-md border p-3">
                 <dt className="text-xs text-muted-foreground">Merged away (deleted)</dt>

@@ -5,6 +5,7 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import { AlertTriangle } from 'lucide-react';
 import { useState } from 'react';
+import { MergeMovesApplication } from '@/components/apply/parts';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/components/ui/toast';
 import { ApiError, errorMessage } from '@/lib/api';
@@ -67,6 +68,7 @@ function PossibleDuplicateRow(props: { opp: OpportunityView; otherId: string }) 
         </Link>
         .
       </span>
+      {confirming ? <MergeMovesApplication opportunityId={opp.id} /> : null}
       {confirming ? (
         <div className="flex items-center gap-2">
           <span>This cannot be undone.</span>

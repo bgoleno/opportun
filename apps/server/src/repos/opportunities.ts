@@ -26,6 +26,7 @@ import {
   type ClosedReason,
   type DismissReason,
   type OpportunityStage,
+  type PinnedJob,
   type PostingState,
   type PostingStateDetail,
   type SourceKind,
@@ -46,7 +47,7 @@ import {
   resumeSends,
   SCHEMA_DIALECT,
 } from '../db/schema';
-import { namesAnotherJob, postingAtsJobRefKeeping, type PinnedJob } from '../lib/atsJobRef';
+import { namesAnotherJob, postingAtsJobRefKeeping } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
 import {
   attemptIdsOf,

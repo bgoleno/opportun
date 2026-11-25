@@ -74,6 +74,41 @@ describe('PossibleDuplicateBanner', () => {
     await waitFor(() => expect(router.state.location.pathname).toBe('/opportunities/opp-2'));
   });
 
+  // The same merge, so the same is said of an application (#1057).
+  it.each([
+    [
+      'open on the employer’s site',
+      'handed_off',
+      'Its application is open on boards.greenhouse.io. It moves too, but the extension will no longer fill it: finish it and record it first, or review it again afterwards.',
+    ],
+    ['a draft', 'draft', 'Its application to Greenhouse moves too, and has to be reviewed again.'],
+    ['submitted', 'submitted', null],
+  ])('the confirm step says what becomes of its application: %s', async (_, status, said) => {
+    const { user, api, queryClient } = setup(OPP, {
+      'GET /opportunities/opp-1/submissions': {
+        items: [
+          {
+            id: 'sub-1',
+            opportunityId: 'opp-1',
+            status,
+            atsKind: 'ats_greenhouse',
+            destinationUrl: 'https://boards.greenhouse.io/examplecorp/jobs/1002',
+          },
+        ],
+        total: 1,
+      },
+    });
+    await user.click(await screen.findByRole('button', { name: 'Merge' }));
+    await screen.findByRole('button', { name: 'Merge this opportunity in' });
+    await waitFor(() =>
+      expect(api.calls.some((c) => c.path === '/opportunities/opp-1/submissions')).toBe(true),
+    );
+    // Read, and drawn: what is not said then is not said.
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    if (said === null) expect(document.body).not.toHaveTextContent(/Its application/);
+    else await waitFor(() => expect(document.body).toHaveTextContent(said));
+  });
+
   it('dismisses as not a duplicate, which is a persisted call, not just local state', async () => {
     const { api, user } = setup(OPP, {
       'POST /opportunities/opp-1/dismiss-duplicate': { ...OPP, possibleDuplicates: [] },

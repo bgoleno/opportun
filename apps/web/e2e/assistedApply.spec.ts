@@ -5,11 +5,14 @@
 // by a stub page (stubOtherHosts), so the handoff's new tab never reaches a real ATS (Opportun
 // never submits; the e2e never even visits).
 import { expect, test, type Page, type PlaywrightWorkerArgs } from '@playwright/test';
+import { BASE_URL } from '../playwright.config';
 import {
   captureGreenhouseOpportunity,
   card,
   choose,
+  createCaptureToken,
   createOpportunity,
+  PASSWORD,
   registerBaseResume,
   registerUser,
   stubOtherHosts,
@@ -183,6 +186,111 @@ test('apply: choose a resume, add details, review everything, open the form, and
     .click();
   await expect(page.getByText(/Submission status: Confirmed/)).toBeVisible();
   await expect(page.getByText(/You marked this confirmed on/)).toBeVisible();
+});
+
+// qa's steps on https://github.com/bgoleno/opportun/issues/1057, criterion 1, to a filled form: what the
+// extension is given is asked of the server as it asks.
+test('opened, and then its opportunity merged: told what happened, reviewed again, and given to fill', async ({
+  page,
+  context,
+  playwright,
+}) => {
+  const { id, panel } = await readyOpportunity(page, playwright);
+  const token = await createCaptureToken(page, PASSWORD, /^Assisted apply/);
+  const extension = await playwright.request.newContext({
+    baseURL: BASE_URL,
+    extraHTTPHeaders: { authorization: `Bearer ${token}` },
+  });
+  const current = async () =>
+    (await (
+      await extension.get(
+        `/api/v1/connector/apply/current?url=${encodeURIComponent('https://boards.greenhouse.io/vandelay/jobs/1002')}`,
+      )
+    ).json()) as { attempt: Record<string, unknown> | null; reason: string | null; cause?: string };
+  /** From the review to the employer's form (a stub), and back. */
+  const reviewAndOpen = async (p: Page) => {
+    await p.getByRole('checkbox', { name: /I will press Submit myself/ }).check();
+    const popup = p.waitForEvent('popup');
+    await p.getByRole('button', { name: /^Confirm review and open/ }).click();
+    const tab = await popup;
+    await tab.waitForURL('https://boards.greenhouse.io/vandelay/jobs/1002');
+    await tab.close();
+    await expect(p.getByText(/Opportun has not submitted anything/)).toBeVisible();
+  };
+  try {
+    await page.goto(`/opportunities/${id}`);
+    await panel.getByRole('link', { name: 'Apply on Greenhouse' }).click();
+    await page.getByRole('button', { name: 'Next: Details' }).click();
+    await page.getByLabel('Full name').fill('Jane Example');
+    await page.getByLabel('Email').fill('jane@example.com');
+    await page.getByRole('button', { name: 'Next: Review' }).click();
+    await expect(page.getByRole('link', { name: /download the saved copy/i })).toBeVisible({
+      timeout: 30_000,
+    });
+    await reviewAndOpen(page);
+    expect((await current()).attempt).not.toBeNull();
+
+    // In another tab, merged into one made by hand. This one is left on the last step.
+    const other = await context.newPage();
+    await other.goto('/pipeline');
+    const kept = { company: 'Vandelay Industries', title: 'Platform Engineer (referral)' };
+    await createOpportunity(other, kept);
+    await other.goto(`/opportunities/${id}`);
+    await other.getByRole('button', { name: 'More actions' }).click();
+    await other.getByRole('menuitem', { name: 'Merge into...' }).click();
+    await other
+      .getByRole('button', { name: new RegExp('Platform Engineer \\(referral\\)') })
+      .click();
+    const dialog = other.getByRole('dialog', { name: 'Merge these opportunities?' });
+    await expect(dialog).toContainText(
+      'Its application is open on boards.greenhouse.io. It moves too, but the extension will no longer fill it',
+    );
+    await dialog.getByRole('button', { name: 'Merge', exact: true }).click();
+    await expect(other.getByRole('heading', { level: 1, name: kept.title })).toBeVisible();
+    const keptId = new URL(other.url()).pathname.split('/').pop() as string;
+    expect(await current()).toEqual({ attempt: null, reason: 'review_stale', cause: 'merged' });
+
+    // The kept one's panel, and the tab left on the merged one.
+    const keptPanel = other.getByRole('region', { name: 'Assisted apply' });
+    await expect(keptPanel).toContainText(
+      'Its opportunity was merged into this one after you opened it. The extension no longer fills it',
+    );
+    await expect(keptPanel).not.toContainText('The posting changed after you started');
+    // Coming back to it reads it again: what the browser sends for that, as nothing hides a tab here.
+    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    await page.waitForURL(`**/opportunities/${keptId}/apply?step=open`);
+    await expect(
+      page.getByText('merged into this one after you opened it', { exact: false }),
+    ).toBeVisible();
+
+    await keptPanel.getByRole('link', { name: 'Instructions' }).click();
+    await expect(
+      other.getByText(/It still goes to boards\.greenhouse\.io, REQ 1002/),
+    ).toBeVisible();
+    await expect(other.getByText(/It fills in what you reviewed/)).toHaveCount(0);
+    await other.getByRole('button', { name: 'Review it again' }).click();
+    await other
+      .getByRole('dialog', { name: 'Review this application again?' })
+      .getByRole('button', { name: 'Review it again' })
+      .click();
+    await other.waitForURL(`**/opportunities/${keptId}/apply?step=review`);
+    await expect(
+      other.getByText('Check everything, then review it again.', { exact: false }),
+    ).toBeVisible();
+    await expect(other.getByText(/^You opened this application on/)).toBeVisible();
+    await expect(other.getByText('Jane Example', { exact: true }).first()).toBeVisible();
+    await reviewAndOpen(other);
+    const given = await current();
+    expect(given).toMatchObject({ reason: null });
+    expect(given.attempt).toMatchObject({ opportunityId: keptId, firstRead: true });
+    // And then nothing untrue of its posting, which the kept one has none of (tl on #1072).
+    await other.goto(`/opportunities/${keptId}`);
+    await expect(keptPanel.getByText('Opened on ATS')).toBeVisible();
+    await expect(keptPanel).not.toContainText(/The posting changed|merged into this one/);
+    await other.close();
+  } finally {
+    await extension.dispose();
+  }
 });
 
 // Phone widths (#135 criterion 8 asks 390; 320 is the narrowest mobile.spec.ts measures). Each
