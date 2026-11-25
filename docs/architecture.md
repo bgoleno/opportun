@@ -289,7 +289,7 @@ Each seam below is what a multi-tenant, horizontally scaled service would need, 
 ### 8.2 Job queue and scheduling (M)
 
 - **Now:** jobs are rows in `jobs`, claimed with one `UPDATE … RETURNING` (plus `FOR UPDATE SKIP LOCKED` on Postgres, `db/dialect.ts`). A pool of 4 workers polls every second (`jobs/runner.ts`), with retries, backoff, a dedupe key, and cron schedules kept as settings rows. The claim is already safe for several workers. Four things assume one process:
-  - orphan recovery returns every `running` row to pending at startup;
+  - orphan recovery returns every `running` row to pending at startup. On Postgres the runner also looks every minute for `running` rows of its own worker id that it has not in hand (a claim's answer lost with its connection, an end that could not be written) and ends them; the claims in hand, and the ends it keeps to write, are in memory;
   - per-kind caps are counted in a process-local map;
   - the backup queue lives in memory;
   - the boot sweep of posting checks (`settleAbandonedChecks`, `lib/postingChecks.ts`, run from `app.ts` before the runner starts) ends every posting still `searching` that has no pending or running check job. It reads that as "nothing is left to finish it" only because no request has been served yet: a capture sets `searching` and then queues its job (`lib/captureResolve.ts`), as two writes, so a second process that was already serving requests could have a capture between them, and the sweep would end that check.
