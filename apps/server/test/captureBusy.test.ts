@@ -652,6 +652,12 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
       });
       expect(other.statusCode, other.body).toBe(201);
       const { opportunityId: first } = other.json<{ opportunityId: string }>();
+      // Open, it is the role, and the capture would join it (#1037).
+      await app.db
+        .update(opportunities)
+        .set({ stage: 'closed' })
+        .where(eq(opportunities.id, first))
+        .run();
       const res = await pushHolding(app, bearer, 'captureResolve.recorded', async () => {
         const rows = await app.db
           .select({ id: opportunities.id })
