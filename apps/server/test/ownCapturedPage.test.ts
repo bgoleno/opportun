@@ -513,6 +513,29 @@ describe.each(SITES)('the captured page that is read, on %s', (site) => {
     expect(await reads(app, a, id)).toEqual(both('own1'));
   });
 
+  it('another opportunity’s pages say nothing, its own or joined ones', async () => {
+    const { app, a } = await boot();
+    await onBoard(app, a);
+    const id = await capture(app, a, OWN, HERE, 'own1');
+    const second = await capture(app, a, BOSTON, HERE, 'second1', { title: 'Another Role' });
+    expect(second).not.toBe(id);
+    await capture(app, a, [site, 4], THERE, 'second2', { title: 'Another Role' });
+    expect(await reads(app, a, id)).toEqual(both('own1'));
+    expect((await capturedPage(app.db, ctxOf(a), second))?.text).toBe(textOf(site, 'second1'));
+
+    // One with none of its own, and one with none at all.
+    const hand = await byHand(app, a, { title: 'A Third Role' });
+    await capture(app, a, [site, 5], THERE, 'third1', { title: 'A Third Role' });
+    const none = await byHand(app, a, { title: 'A Fourth Role' });
+    await capture(app, a, OWN, HERE, 'own2');
+    expect(await reads(app, a, id)).toEqual(both('own2'));
+    expect((await capturedPage(app.db, ctxOf(a), hand))?.text).toBe(textOf(site, 'third1'));
+    expect(await capturedPage(app.db, ctxOf(a), none)).toBeNull();
+    await expect(rederive(app, a, none, async () => [])).rejects.toMatchObject({
+      code: 'no_capture',
+    });
+  });
+
   it('another user’s results and pages say nothing', async () => {
     const { app, a, b } = await boot();
     await onBoard(app, a);
