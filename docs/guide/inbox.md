@@ -83,20 +83,21 @@ A message that met a spent budget, or an AI provider that did not answer, is cla
 itself, for 30 days from when Opportun received it. Until then it is in no tab of the inbox. Opportun
 looks every hour, takes the newest message first, and begins a call only while the day's spend on this
 task is under half of its budget, so new mail is not held up. A message whose classification failed for
-another reason is tried again once a UTC day; one the AI gave no usable answer for is not.
+another reason is tried again once a UTC day. A message the AI gave no usable answer for waits until
+you add a key (below).
 
 - **It goes to the AI provider you use when it is classified,** which may not be the one you used when
   it came.
-- **What is read:** Opportun keeps no full text for it. A Gmail message is read again from the Gmail
-  account connected then, and only its short snippet is used if it is gone or is not the same message
-  (by its sender, subject and date). Apple Mail and LinkedIn messages are classified from the snippet.
+- **What is read:** Opportun keeps no full text of new mail. A Gmail message is read again from the Gmail
+  account connected then, and only its short snippet is used if it cannot be read or is not the same
+  message (by its sender, subject and date). Apple Mail and LinkedIn messages are classified from the snippet.
   A job alert email is read again the same way, and no leads are made from a snippet.
 - **If your mail filters would keep it out by then,** for its sender or for private content, it is not
   sent and is not tried again, even if you take the filter back.
-- **If your provider refuses your key,** no more mail is sent until you add or delete an AI key, press
-  **Validate** and the key is good, or save or reset the model for `comms.classify`.
+- **If your provider refuses your key,** no more mail is sent to be classified (the short check of new
+  mail goes on) until you add or delete an AI key, press **Validate** under **Settings > AI > Provider
+  keys** and the key is good, or save or reset the model for `comms.classify`.
 - **Adding an AI key** also queues what is older than 30 days and what got no usable answer.
-- **What you do stands.** A message you reclassify or reject meanwhile is left as you left it.
 
 ## The five tabs
 
