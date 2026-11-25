@@ -12,6 +12,7 @@ import { submissionsEnabled, type Config } from './config';
 import { closeDatabase, connectDatabase, pingDatabase, type Db } from './db/client';
 import { configureGateWatchdog, gateHeldError } from './db/gate';
 import { SCHEMA_DIALECT } from './db/schema';
+import { httpStopPlugin } from './plugins/httpStop';
 import { obsHttpPlugin } from './plugins/obsHttp';
 import { securityPlugin } from './plugins/security';
 import { AI_CALL_LIMIT_MS, demoResetHoldPlugin } from './plugins/demoResetHold';
@@ -206,6 +207,8 @@ export interface BuildOptions {
     /** How long before a hold's bound its stop signal fires (#684). */
     stopMarginMs?: number;
   };
+  /** Instead of HTTP_STOP_MS (plugins/httpStop.ts): tests set a short one. */
+  httpStopMs?: number;
   /** Replaces the googleapis-backed client (tests inject a fake: no network). */
   google?: GoogleApi;
   /** Replaces the Google Docs document store. */
@@ -338,6 +341,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   app.setSerializerCompiler(serializerCompiler);
   // First, so its onRequest runs before every other hook and times the whole request (#343).
   await app.register(obsHttpPlugin);
+  await app.register(httpStopPlugin, { boundMs: opts.httpStopMs });
   await app.register(cookie);
   await app.register(securityPlugin, { hsts: cfg.baseUrl.startsWith('https:') });
 
