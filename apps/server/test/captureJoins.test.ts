@@ -625,6 +625,201 @@ describe.each(SITES)('a capture on %s of another place of an open role', (site) 
   });
 });
 
+// What a second capture is judged by (tl on https://github.com/bgoleno/opportun/pull/1062).
+describe.each(SITES)('captured again, on %s', (site) => {
+  const other = site === 'linkedin' ? 'indeed' : 'linkedin';
+  const FULL = { remote: true, compNote: '$1' };
+  const P: At = [site, 2];
+  /** As a check that has found nothing left it, so that another one shows. */
+  const CHECKED = { postingState: 'needs_review', postingStateDetail: 'none_found' };
+  const THRICE = (place: string) =>
+    [
+      ['with its place', [place, place, place]],
+      ['its place read by turns', [place, null, place]],
+      ['its place not read again', [place, null, null]],
+    ] as const;
+
+  it.each(THRICE(THERE))(
+    'another site’s posting of a place that joined: its own result, said once, %s',
+    async (_what, places) => {
+      const { app, a } = await boot();
+      const id = (await capture(app, a, [site, 1], HERE)).opportunityId;
+      const joined = await capture(app, a, P, THERE);
+      await set(app, id, { postingUrl: null, ...CHECKED });
+      const facts = (await opportunitiesOf(app, a)).map(own);
+      const checks = await checksOf(app, id);
+      const O: At = [other, 9];
+      const said: unknown[] = [];
+      const results = new Set<string>();
+      for (const place of places) {
+        const done = await capture(app, a, O, place, FULL);
+        expect(done).toMatchObject({ opportunityId: id, createdOpportunity: false });
+        said.push(done.anotherPosting);
+        results.add(done.resultId);
+        expect((await opportunitiesOf(app, a)).map(own)).toEqual(facts);
+      }
+      expect(said).toEqual([true, undefined, undefined]);
+      expect(results.size).toBe(1);
+      expect(results.has(joined.resultId)).toBe(false);
+      expect(await resultsOf(app, a)).toHaveLength(3);
+      expect(
+        (await entriesOf(app, id, 'link')).filter((e) => e.externalUrl === urlOf(O)),
+      ).toHaveLength(1);
+      expect(await checksOf(app, id)).toEqual(checks);
+    },
+  );
+
+  describe('a role made by hand, which its first posting stands for', () => {
+    it.each([...THRICE(HERE), ['its place read never', [null, null, null]] as const])(
+      'another id of it, %s: fills nothing',
+      async (_what, places) => {
+        const { app, a } = await boot();
+        const id = await byHand(app, a);
+        await capture(app, a, [site, 1], HERE);
+        await set(app, id, { postingUrl: null, ...CHECKED });
+        const facts = (await opportunitiesOf(app, a)).map(own);
+        const checks = await checksOf(app, id);
+        const said: unknown[] = [];
+        for (const place of places) {
+          const done = await capture(app, a, P, place, FULL);
+          expect(done.opportunityId).toBe(id);
+          said.push(done.anotherPosting);
+          expect((await opportunitiesOf(app, a)).map(own)).toEqual(facts);
+        }
+        expect(said).toEqual([true, undefined, undefined]);
+        expect(await checksOf(app, id)).toEqual(checks);
+        // The first one is the role's own, before and after.
+        for (const place of places) {
+          const done = await capture(app, a, [site, 1], place, FULL);
+          expect([done.opportunityId, done.anotherPosting]).toEqual([id, undefined]);
+        }
+        expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+          ...FULL,
+          postingUrl: urlOf([site, 1]),
+          postingState: 'searching',
+        });
+      },
+    );
+
+    it('not one of another place that joined before it', async () => {
+      const { app, a } = await boot();
+      const id = await byHand(app, a);
+      expect((await capture(app, a, [site, 1], THERE)).anotherPosting).toBe(true);
+      await capture(app, a, P, HERE);
+      await set(app, id, { ...CHECKED });
+      expect((await capture(app, a, P, HERE, FULL)).anotherPosting).toBeUndefined();
+      expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+        ...FULL,
+        postingState: 'searching',
+      });
+      // And the one of the other place stays another.
+      const facts = (await opportunitiesOf(app, a)).map(own);
+      await set(app, id, { compNote: null });
+      await capture(app, a, [site, 1], THERE, FULL);
+      expect((await opportunitiesOf(app, a)).map(own)).toEqual(
+        facts.map((f) => ({ ...f, compNote: null })),
+      );
+    });
+
+    // What the first one is stored with does not matter, nor what has become of the role's place.
+    it.each([
+      ['the first one stored with no place', null, HERE],
+      ['the role’s place taken off since', HERE, null],
+    ])('%s: the other fills nothing the second time', async (_what, first, after) => {
+      const { app, a } = await boot();
+      const id = await byHand(app, a);
+      await capture(app, a, [site, 1], first);
+      await capture(app, a, P, HERE);
+      await set(app, id, { postingUrl: null, location: after, ...CHECKED });
+      const facts = (await opportunitiesOf(app, a)).map(own);
+      expect((await capture(app, a, P, HERE, FULL)).anotherPosting).toBeUndefined();
+      expect((await opportunitiesOf(app, a)).map(own)).toEqual(facts);
+    });
+
+    it('one that does not contradict it, of no known place, fills the second time too', async () => {
+      const { app, a } = await boot();
+      const id = await byHand(app, a);
+      await capture(app, a, [site, 1], HERE);
+      await capture(app, a, [other, 9], null);
+      await capture(app, a, [other, 9], null, FULL);
+      expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject(FULL);
+    });
+
+    it('with no place of its own: the oldest of any', async () => {
+      const { app, a } = await boot();
+      const id = await byHand(app, a, { location: null });
+      await capture(app, a, [site, 1], null);
+      await set(app, id, { postingUrl: null, ...CHECKED });
+      const facts = (await opportunitiesOf(app, a)).map(own);
+      for (let i = 0; i < 3; i += 1) {
+        await capture(app, a, P, null, FULL);
+        expect((await opportunitiesOf(app, a)).map(own)).toEqual(facts);
+      }
+      expect((await capture(app, a, [site, 1], null, FULL)).anotherPosting).toBeUndefined();
+      expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject(FULL);
+    });
+  });
+
+  it.each([
+    ['the board or the user', 'Austin, Texas, United States'],
+    ['the user, as another place', 'Remote'],
+  ])(
+    'the page of what it came from, which has no id, its place respelled by %s: no other posting',
+    async (_who, respelled) => {
+      const { app, a } = await boot();
+      const id = await accept(
+        a,
+        await card(app, a, P, HERE, {
+          externalId: null,
+          postingUrl: 'https://jobs.example.com/r/abc',
+          descriptionMd: PAGE,
+        }),
+      );
+      await capture(app, a, P, HERE);
+      await set(app, id, { location: respelled, remote: null, compNote: null });
+      for (let i = 0; i < 3; i += 1) {
+        await set(app, id, CHECKED);
+        const done = await capture(app, a, P, HERE, FULL);
+        expect([done.opportunityId, done.anotherPosting]).toEqual([id, undefined]);
+        expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+          ...FULL,
+          location: respelled,
+          postingState: 'searching',
+        });
+      }
+      expect(await resultsOf(app, a)).toHaveLength(1);
+    },
+  );
+
+  it('a card with no id, captured at another place: said once, with one entry of it', async () => {
+    const { app, a } = await boot();
+    const id = (await capture(app, a, [site, 1], HERE)).opportunityId;
+    await card(app, a, P, THERE, {
+      externalId: null,
+      postingUrl: 'https://jobs.example.com/r/abc',
+    });
+    for (let i = 0; i < 3; i += 1) {
+      const done = await capture(app, a, P, THERE);
+      expect([done.opportunityId, done.anotherPosting]).toEqual([id, undefined]);
+    }
+    const links = await entriesOf(app, id, 'link');
+    expect(links.filter((e) => (e.title ?? '').startsWith('Also posted'))).toHaveLength(1);
+  });
+
+  it('a page with no id at another place: one result, said once', async () => {
+    const { app, a } = await boot();
+    const id = (await capture(app, a, [site, 1], HERE)).opportunityId;
+    const said: unknown[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      const done = await capture(app, a, P, THERE, { externalId: null, postingUrl: null });
+      expect(done.opportunityId).toBe(id);
+      said.push(done.anotherPosting);
+    }
+    expect(said).toEqual([true, undefined, undefined]);
+    expect(await resultsOf(app, a)).toHaveLength(2);
+  });
+});
+
 // The owner, on the issue: another id of one site at the role's own place is that role too, while it is
 // open. #73 kept it apart; from one that is over, or at another level, it still is.
 describe.each(SITES)('a capture on %s of another id at the place of an open role', (site) => {

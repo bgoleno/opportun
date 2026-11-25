@@ -69,7 +69,8 @@ whole title, at another place, or at the same place with another job id) joins i
 that is open, at any stage but Closed and Dismissed; if several fit, the oldest. The popup says that the
 page is another posting of that job, and the opportunity's timeline gets the page and an **Also
 posted via ...** entry with its place and link. Its own link, location and pay stay as they are, and the
-page gives it a description only when it has none. If two openings of one title are separate to you,
+page gives it a description only when it has none. (The page of a Discovery card you have not decided
+fills in what the opportunity lacks, as Accept does.) If two openings of one title are separate to you,
 add the second with **New opportunity** on the Pipeline page.
 
 A different job that only looks like one you track is kept apart instead: for example a

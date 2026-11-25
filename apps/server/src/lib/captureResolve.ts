@@ -46,6 +46,7 @@ import { racePoint } from './racePoints';
 import { boardFromUrl } from './atsBoard';
 import { postingIdentity, siteLabel, siteOfUrl } from './captureSites';
 import { sourceLabel } from './sourceLabels';
+import { capturedInto } from './openOpportunity';
 import { descriptionFingerprint } from './postingFingerprint';
 import { createActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
@@ -572,7 +573,9 @@ async function openOfCard(
  * What it says of its place, its link and its pay is then not the opportunity's.
  *
  * One found by its id is judged by what was stored of it (`sameId`), not by how its place reads this
- * time, and never when it is the one the opportunity came from.
+ * time. It is never another when what was found of it (`found`, by id or key) is the result the
+ * opportunity came from, whatever either's place reads as since. With no result of that kind, the oldest
+ * of this place behind it stands for it: an opportunity made by hand has its first posting's facts.
  */
 async function isKnownOther(
   tx: Exec,
@@ -580,12 +583,21 @@ async function isKnownOther(
   opp: OpportunityView,
   posting: NormalizedPosting,
   identity: string | null,
-  sameId: readonly DiscoveryResultView[],
+  found: readonly DiscoveryResultView[] = [],
+  sameId: readonly DiscoveryResultView[] = [],
 ): Promise<boolean> {
-  if (sameId.some((r) => r.id === opp.sourceRef)) return false;
   const placeOf = (location: string | null | undefined): string | null =>
     (location ?? '').trim() === '' ? null : dedupeKey('', '', location);
   const own = placeOf(opp.location);
+  const behind = await leadsBehind(tx, ctx, opp.id);
+  const ofThisPlace = behind.filter((r) => {
+    const place = placeOf(r.posting.location);
+    return own === null || place === null || place === own;
+  });
+  const origin =
+    behind.find((r) => r.id === opp.sourceRef) ??
+    ofThisPlace.sort((x, y) => x.createdAt - y.createdAt)[0];
+  if (found.some((r) => r.id === origin?.id)) return false;
   const places = (sameId.length > 0 ? sameId.map((r) => r.posting) : [posting]).map((p) =>
     placeOf(p.location),
   );
@@ -593,11 +605,7 @@ async function isKnownOther(
   if (identity === null) return false;
   const contradicts = (r: DiscoveryResultView): boolean =>
     identitiesContradict(identity, identityBeside(identity, r));
-  const behind = await leadsBehind(tx, ctx, opp.id);
-  if (sameId.length > 0) {
-    const origin = behind.find((r) => r.id === opp.sourceRef);
-    return origin !== undefined && contradicts(origin);
-  }
+  if (sameId.length > 0) return origin !== undefined && contradicts(origin);
   const here = own !== null && places.includes(own);
   const key = dedupeKey(posting.company, posting.title, posting.location);
   const asked = here ? behind.filter((r) => !isElsewhere(r, key)) : behind;
@@ -1009,7 +1017,7 @@ async function settleLead(
     const key = dedupeKey(posting.company, posting.title, posting.location);
     opportunity = await openOfCard(tx, ctx, key, posting, keptApartFrom);
     if (opportunity !== null) {
-      knownOther = await isKnownOther(tx, ctx, opportunity, posting, identity, []);
+      knownOther = await isKnownOther(tx, ctx, opportunity, posting, identity);
       anotherPosting = true;
     }
     const lead = await createLead(tx, ctx, posting);
@@ -1038,11 +1046,15 @@ async function settleLead(
     // Re-capturing a job already tracked reuses the lead that recorded it rather than piling
     // up one extension lead per capture.
     const holder = opportunity;
+    const found = match.accepted.filter((r) => r.opportunityId === holder.id);
     const sameId = match.acceptedById.filter((r) => r.opportunityId === holder.id);
-    knownOther = await isKnownOther(tx, ctx, holder, posting, identity, sameId);
+    knownOther = await isKnownOther(tx, ctx, holder, posting, identity, found, sameId);
+    // Another posting has a result of its own, found by its id the next time: one that its key alone
+    // finds is a third posting's. Nothing more can find a page with no id.
+    const reusable = knownOther && identity !== null ? sameId[0] : found[0];
     // Said by the first capture of a posting, as the place is.
-    anotherPosting = knownOther && sameId.length === 0;
-    const reusable = match.accepted.find((r) => r.opportunityId === holder.id);
+    anotherPosting =
+      knownOther && reusable === undefined && (await capturedInto(tx, ctx, posting)) !== holder.id;
     if (reusable !== undefined) {
       resultId = reusable.id;
     } else {
