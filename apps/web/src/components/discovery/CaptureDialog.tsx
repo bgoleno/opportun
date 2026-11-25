@@ -4,7 +4,9 @@
 //
 // Server answers handled here: 422 with a hint (LinkedIn, Indeed and other unfetchable pages:
 // paste the text instead), 503 ai_unavailable (fall back to the New Opportunity dialog), 409
-// duplicate (with the opportunity it was linked to, when there is one: #971), 429 rate_limited (the user's capture budget, shared with the browser extension:
+// duplicate (with the opportunity it was linked to, when there is one: #971), 409 company_denied (the
+// posting was stored as dismissed: https://github.com/bgoleno/opportun/issues/1044), 429 rate_limited
+// (the user's capture budget, shared with the browser extension:
 // https://github.com/bgoleno/opportun/issues/272).
 // Server text (hints, messages) and posting fields are rendered as text only.
 import { Link } from '@tanstack/react-router';
@@ -37,6 +39,8 @@ type Failure =
   | { kind: 'decided'; message: string }
   /** Another location of a job in the pipeline: linked to it, and there is no card (#971). */
   | { kind: 'linked'; opportunityId: string }
+  /** The company is on the denied list: what was sent is stored as dismissed, no failure (#1044). */
+  | { kind: 'denied'; company: string | null; sent: CaptureVars }
   | { kind: 'other'; message: string };
 
 const TEXT_MAX = 200_000;
@@ -70,7 +74,7 @@ function limitMessage(err: ApiError): string {
   return `Capture limit for your account reached${size}. Try again in ${wait}.`;
 }
 
-function toFailure(err: unknown): Failure {
+function toFailure(err: unknown, sent: CaptureVars): Failure {
   if (err instanceof ApiError) {
     if (err.status === 429 && err.code === 'rate_limited') {
       return { kind: 'other', message: limitMessage(err) };
@@ -98,6 +102,14 @@ function toFailure(err: unknown): Failure {
     }
     // The lead was completed or decided somewhere else (#968): no second try can succeed.
     if (err.code === 'not_capturable') return { kind: 'decided', message: errorMessage(err) };
+    if (err.code === 'company_denied') {
+      const company = err.details.company;
+      return {
+        kind: 'denied',
+        company: typeof company === 'string' && company !== '' ? company : null,
+        sent,
+      };
+    }
     if (err.code === 'duplicate') {
       const id = err.details.existingId;
       if (typeof id === 'string' && id !== '') return { kind: 'linked', opportunityId: id };
@@ -134,6 +146,14 @@ export function CaptureDialog(props: {
     setFieldError(undefined);
   }
 
+  // The same once more could only be a duplicate. Compared with what was sent: the field can be
+  // edited while a capture runs.
+  const storedAlready =
+    failure?.kind === 'denied' &&
+    (mode === 'url'
+      ? 'url' in failure.sent && failure.sent.url === url.trim()
+      : 'text' in failure.sent && failure.sent.text === text.trim());
+
   async function submit(e: FormEvent) {
     e.preventDefault();
     setFailure(null);
@@ -169,7 +189,7 @@ export function CaptureDialog(props: {
       });
       props.onClose();
     } catch (err) {
-      setFailure(toFailure(err));
+      setFailure(toFailure(err, body));
     }
   }
 
@@ -263,6 +283,18 @@ export function CaptureDialog(props: {
               </Link>
             </div>
           ) : null}
+          {failure?.kind === 'denied' ? (
+            <div
+              role="alert"
+              className="rounded-md border border-primary/40 bg-accent px-3 py-2 text-sm [overflow-wrap:anywhere] text-accent-foreground"
+            >
+              {failure.company ?? 'The company'} is on your denied list, so the posting was put in
+              Decided as dismissed.{' '}
+              <Link to="/discovery/decided" className="font-medium underline underline-offset-2">
+                View Decided
+              </Link>
+            </div>
+          ) : null}
           {failure?.kind === 'paste_text' ? (
             <div
               role="alert"
@@ -307,7 +339,10 @@ export function CaptureDialog(props: {
             <Button type="button" variant="outline" onClick={props.onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={capture.isPending || failure?.kind === 'decided'}>
+            <Button
+              type="submit"
+              disabled={capture.isPending || failure?.kind === 'decided' || storedAlready}
+            >
               {capture.isPending ? 'Capturing...' : 'Capture'}
             </Button>
           </DialogFooter>
