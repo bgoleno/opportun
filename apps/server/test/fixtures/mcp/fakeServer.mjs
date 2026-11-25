@@ -3,11 +3,43 @@
 //   jobs     answers tools/call "search_jobs" with a result list (and echoes its arguments)
 //   hostile  answers with markup, injection text and 1 MB strings
 //   env      answers with the names of its environment variables
-//   hang     never answers anything and ignores SIGTERM (the client must SIGKILL it)
+//   hang     never answers anything and ignores SIGTERM and its input's end (the client must SIGKILL it)
+//   family   <server> <child> <file>: starts a child of its own in its group, and goes on once the child
+//            has written its pid to <file>. The server `answers` as in jobs (and ends when asked),
+//            `leaves` (ends by itself, having answered nothing) or is as in `hang`. The child is
+//            `stubborn` (ignores SIGTERM) or `slow` (ends 300 ms after it).
+import { spawn } from 'node:child_process';
+import { existsSync, renameSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 
-const mode = process.argv[2] ?? 'jobs';
-if (mode === 'hang') process.on('SIGTERM', () => undefined);
+const [, , first = 'jobs', server = '', kind = '', file = ''] = process.argv;
+const mode = first === 'family' ? server : first;
+
+if (mode === 'child') {
+  // What the family's server started: argv is child <kind> <file>.
+  const [, , , childKind, childFile] = process.argv;
+  process.on('SIGTERM', () => {
+    if (childKind === 'slow') setTimeout(() => process.exit(0), 300);
+  });
+  setInterval(() => undefined, 1_000);
+  // Whole or not at all, as the test reads it.
+  writeFileSync(`${childFile}.part`, String(process.pid));
+  renameSync(`${childFile}.part`, childFile);
+  await new Promise(() => undefined);
+}
+
+if (mode === 'hang') {
+  process.on('SIGTERM', () => undefined);
+  setInterval(() => undefined, 1_000);
+}
+if (first === 'family') {
+  spawn(process.execPath, [fileURLToPath(import.meta.url), 'child', kind, file], {
+    stdio: 'ignore',
+  });
+  while (!existsSync(file)) await new Promise((r) => setTimeout(r, 10));
+  if (mode === 'leaves') process.exit(0);
+}
 
 function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
@@ -83,4 +115,6 @@ rl.on('line', (line) => {
     send({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'method not found' } });
   }
 });
-rl.on('close', () => process.exit(0));
+rl.on('close', () => {
+  if (mode !== 'hang') process.exit(0);
+});
