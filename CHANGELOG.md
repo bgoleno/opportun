@@ -9,7 +9,7 @@ when the milestone's work was merged.
 
 ## Unreleased
 
-## 0.5.1 (2026-11-23)
+## 0.5.1 (2026-11-24)
 
 This release includes everything in
 [v0.5.0](https://github.com/bgoleno/opportun/releases/tag/v0.5.0), tagged on 2026-11-22, and what
