@@ -78,6 +78,7 @@ describe('outboundTargetFor: a literal map, tested per host (#343)', () => {
       ['api.smartrecruiters.com', 'ats_smartrecruiters'],
       ['apply.workable.com', 'ats_workable'],
       ['acme.wd5.myworkdayjobs.com', 'ats_workday'],
+      ['acme.wd5.myworkdayjobs.com.', 'ats_workday'],
       ['oauth2.googleapis.com', 'google'],
       ['www.googleapis.com', 'google'],
       ['gmail.googleapis.com', 'google'],
@@ -89,6 +90,10 @@ describe('outboundTargetFor: a literal map, tested per host (#343)', () => {
       ['evil-api.lever.co', 'public_site'],
       ['myworkdayjobs.com.evil.example', 'public_site'],
       ['myworkdayjobs.com', 'public_site'],
+      // A host of another shape than a board's is never fetched as one.
+      ['acme.myworkdayjobs.com', 'public_site'],
+      ['wd5.myworkdayjobs.com', 'public_site'],
+      ['x.acme.wd5.myworkdayjobs.com', 'public_site'],
       ['example.com', 'public_site'],
     ];
     for (const [host, target] of cases) {

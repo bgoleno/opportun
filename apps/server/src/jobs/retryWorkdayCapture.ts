@@ -1,7 +1,7 @@
 // Retries the detail fetch for a Workday posting left bare after it failed once (issue #101).
 //
-// Why the obvious paths do not already do this: workdaySource.fetchPostings' known.has(id)
-// check (adapters/sources/workday.ts) skips re-fetching a posting's detail once any row with
+// Why the obvious paths do not already do this: Workday's listBoard's known.has(id)
+// check (sites/workday.ts) skips re-fetching a posting's detail once any row with
 // that external id exists, bare or not, and jobs/leadResolve.ts's recovery route goes through
 // the exact same generator with the same knownExternalIds wiring. Neither a normal discovery
 // run nor the one mechanism meant to recover a needs_capture lead ever gives a failed detail
@@ -11,12 +11,12 @@
 // Teaching knownExternalIds to distinguish "known and described" from "known but bare" would
 // change a capability every current and future discovery adapter shares; this is instead a
 // dedicated path only the recovery route uses, keyed directly off a row's own stored
-// postingUrl (parsed the same way a link in free text is, lib/atsJobRef's workdayPosting), with
+// postingUrl (parsed the same way a link in free text is, packages/core's workdayPosting), with
 // no listing walk and nothing else in discovery touched.
 //
 // Two bounds, for two different failure modes:
 //
-//   Per host, per run (CAPTURE_RETRY_MAX_PER_HOST_PER_RUN): workdaySource.fetchPostings' own
+//   Per host, per run (CAPTURE_RETRY_MAX_PER_HOST_PER_RUN): its listBoard's own
 //   WORKDAY_MAX_DETAILS_PER_RUN cap is per-tenant for free, because one run only ever talks to
 //   one source's host. This sweep is global -- one run can hold bare rows from many different
 //   tenants -- so without its own per-host limit, an instance that has accumulated enough of
@@ -34,19 +34,24 @@
 //   value and the two web call sites that branch on resolution (QueueRow's chip, QueueDialogs'
 //   manual-capture offer, which capture_failed gets too: the one thing left that can still fill
 //   in a description by hand).
-import { boardFromUrl } from '../lib/atsBoard';
-import { dedupeKey, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
+import { boardConfig, boardFromUrl } from '../lib/atsBoard';
+import {
+  dedupeKey,
+  NormalizedPostingSchema,
+  workdayPosting,
+  type NormalizedPosting,
+} from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   fetchWorkdayDetail,
   mapWorkdayPosting,
   WORKDAY_PAGE_SIZE,
+  workdayBoard,
   type WorkdayBoard,
-} from '../adapters/sources/workday';
+} from '../sites/workday';
 import type { Db } from '../db/client';
 import { discoveryResults } from '../db/schema';
-import { workdayPosting } from '../lib/atsJobRef';
 import { sanitizePosting } from '../lib/postingSanitize';
 import { requireService, type JobHandler } from './registry';
 
@@ -74,9 +79,7 @@ function workdayTargetOf(
 ): { board: WorkdayBoard; externalPath: string } | null {
   if (postingUrl == null) return null;
   const found = boardFromUrl(postingUrl);
-  if (found === null || found.kind !== 'ats_workday' || found.host === undefined) return null;
-  const cut = found.slug.indexOf('/');
-  if (cut < 0) return null;
+  if (found?.kind !== 'ats_workday') return null;
   let url: URL;
   try {
     url = new URL(postingUrl);
@@ -85,10 +88,7 @@ function workdayTargetOf(
   }
   const path = workdayPosting(url);
   if (path === null) return null;
-  return {
-    board: { host: found.host, tenant: found.slug.slice(0, cut), site: found.slug.slice(cut + 1) },
-    externalPath: path.externalPath,
-  };
+  return { board: workdayBoard(boardConfig(found)), externalPath: path.externalPath };
 }
 
 /**

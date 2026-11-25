@@ -124,7 +124,8 @@ opportunity would otherwise trigger the same match again.
 Dismissing or closing asks for a reason before anything is saved. Cancel and the opportunity
 stays where it was.
 
-- **Dismiss** reasons: Seniority, Compensation, Location, Industry, Company, Stale, Other.
+- **Dismiss** reasons: Seniority, Compensation, Location, Industry, Role fit, Company, Stale,
+  Not interested, Duplicate, Other.
   Dismissal reasons feed discovery's prompt refinement (see
   [Discovery](discovery.md#dismissal-learning)).
 - **Close** reasons: Accepted, Rejected, Withdrawn, Ghosted.

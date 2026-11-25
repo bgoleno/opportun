@@ -16,14 +16,16 @@ import {
   type SourceContext,
 } from '../src/adapters/discoverySource';
 import {
+  fetchWorkdayDetail,
+  fetchWorkdayPage,
   WORKDAY_DETAIL_FAILURES_IN_A_ROW,
   WORKDAY_MAX_DETAILS_PER_RUN,
   WORKDAY_PAGE_SIZE,
   workdayDetailUrl,
   workdayJobsUrl,
-  workdaySource,
+  workdayModule,
   WorkdayUnavailableError,
-} from '../src/adapters/sources/workday';
+} from '../src/sites/workday';
 import { discoveryRuns } from '../src/db/schema';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import {
@@ -33,6 +35,7 @@ import {
   type safeFetch,
   type SafeFetchOptions,
 } from '../src/lib/safeFetch';
+import { boardConfig, boardFromUrl } from '../src/lib/atsBoard';
 import { createSource, getSourceRow, listResults } from '../src/repos/discovery';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
@@ -101,7 +104,7 @@ async function collect(
   config: unknown = CONFIG,
 ): Promise<NormalizedPosting[]> {
   const out: NormalizedPosting[] = [];
-  for await (const item of workdaySource.fetchPostings({ fetch, log: silentLog }, config, null)) {
+  for await (const item of workdayModule.api!.listBoard!({ fetch, log: silentLog }, config, null)) {
     expect(item.nextCursor).toBeNull();
     out.push(item.posting);
   }
@@ -120,6 +123,77 @@ function page(from: number, count: number, total: number): string {
     })),
   });
 }
+
+describe('workday board links and the probe', () => {
+  const board = { site: 'workday', slug: 'globexnetworks/globexexternalcareers', host: HOST };
+
+  it('reads no board from a link that names no site of the tenant on it', () => {
+    for (const path of [
+      '/',
+      '/en-US',
+      '/wday/cxs/othertenant/globexexternalcareers/jobs',
+      '/wday/globexnetworks/globexexternalcareers',
+      '/bad%20site',
+    ]) {
+      expect(boardFromUrl(`https://${HOST}${path}`), path).toBeNull();
+    }
+    expect(boardFromUrl(`https://${HOST}/wday/cxs/globexnetworks/globexexternalcareers`)).toEqual({
+      kind: 'ats_workday',
+      slug: board.slug,
+      host: HOST,
+    });
+  });
+
+  it('is a wrong config, with no value in what it says, when a board is not one of its site', () => {
+    for (const bad of [
+      { kind: 'ats_workday' as const, slug: 'secretish/site' },
+      { kind: 'ats_workday' as const, slug: 'secretish/site', host: HOST },
+      { kind: 'ats_lever' as const, slug: 'secretish/../x' },
+    ]) {
+      expect(() => boardConfig(bad)).toThrow(SourceConfigError);
+      expect(() => boardConfig(bad)).not.toThrow(/secretish/);
+    }
+  });
+
+  it('is served, not there, or has given no answer', async () => {
+    const probe = (status: number, body: string) =>
+      workdayModule.api!.probe!(
+        { fetch: fakeWorkday(() => ({ status, body })).fetch, log: silentLog },
+        board,
+      );
+    expect(await probe(200, fixture('workday-jobs.json'))).toBe('yes');
+    expect(await probe(200, JSON.stringify({ total: 0, jobPostings: [] }))).toBe('no');
+    expect(await probe(404, '')).toBe('no');
+    // The service window, and anything else unexpected: detection retries.
+    for (const status of [301, 400, 403, 406, 422, 429, 500, 503]) {
+      expect(await probe(status, ''), `${status}`).toBe('unknown');
+    }
+    expect(await probe(200, 'not json')).toBe('unknown');
+  });
+
+  it('asks nothing of a board whose host is not the tenant it names, however it was made', async () => {
+    for (const bad of [
+      { ...CONFIG, tenant: 'othertenant' },
+      { ...CONFIG, host: 'othertenant.wd5.myworkdayjobs.com' },
+      { ...CONFIG, host: `x.${HOST}` },
+      { ...CONFIG, host: 'globexnetworks.evil.example' },
+      { ...CONFIG, site: '../x' },
+    ]) {
+      const { calls, fetch } = fakeWorkday(fixtureBoard);
+      const path = '/job/Santa-Clara-CA/Engineer_JR-000001';
+      await expect(fetchWorkdayDetail({ fetch }, bad, path)).rejects.toThrow(SourceConfigError);
+      await expect(fetchWorkdayPage({ fetch }, bad, 0, 1)).rejects.toThrow(SourceConfigError);
+      await expect(collect(fetch, bad)).rejects.toThrow(SourceConfigError);
+      expect(calls, JSON.stringify(bad)).toEqual([]);
+    }
+  });
+
+  it("asks for one posting, of the board's own host alone", async () => {
+    const { calls, fetch } = fakeWorkday(fixtureBoard);
+    await workdayModule.api!.probe!({ fetch, log: silentLog }, board);
+    expect(calls.map((c) => [c.url, c.opts.allowHosts])).toEqual([[JOBS, [{ exact: HOST }]]]);
+  });
+});
 
 describe('workday adapter: the CXS contract (probed 2026-10-17)', () => {
   it('builds the listing and detail URLs from the board config and externalPath', () => {
@@ -147,7 +221,8 @@ describe('workday adapter: the CXS contract (probed 2026-10-17)', () => {
 
     expect(calls.map((c) => c.url)).toEqual([JOBS, DETAIL_PAN, DETAIL_REMOTE]);
     for (const c of calls) {
-      expect(c.opts.allowHosts).toEqual([HOST]);
+      // The board's own host alone, never the site's pattern (tl and sec on #769).
+      expect(c.opts.allowHosts).toEqual([{ exact: HOST }]);
       expect(c.opts.headers).toEqual({ accept: 'application/json' });
       expect(c.opts.allowPublic).toBeUndefined();
     }
@@ -296,7 +371,7 @@ describe('workday adapter: the CXS contract (probed 2026-10-17)', () => {
 describe('workday adapter: configuration', () => {
   it('is registered as a built-in that survives resetSources', () => {
     resetSources();
-    expect(getSource('ats_workday')).toBe(workdaySource);
+    expect(getSource('ats_workday')?.fetchPostings).toBe(workdayModule.api!.listBoard);
     expect(ATS_SOURCE_KINDS).toContain('ats_workday');
   });
 
@@ -519,7 +594,7 @@ describe('discovery.run with the Workday adapter', () => {
     // The adapter alone: 200 details, the rest left for later, and a log line saying so.
     const log = { ...silentLog, info: (o: unknown) => infos.push(o) } as typeof silentLog;
     const out: NormalizedPosting[] = [];
-    for await (const item of workdaySource.fetchPostings({ fetch, log }, CONFIG, null)) {
+    for await (const item of workdayModule.api!.listBoard!({ fetch, log }, CONFIG, null)) {
       out.push(item.posting);
     }
     expect(details()).toBe(WORKDAY_MAX_DETAILS_PER_RUN);

@@ -117,9 +117,7 @@ describe('findPosting on a Workday board', () => {
     expect(out.candidate.posting.descriptionMd).not.toMatch(/[<>]/);
     // The link names the posting's path: its detail is fetched directly, no listing read.
     expect(calls.map((c) => c.url)).toEqual([DETAIL_PAN]);
-    expect(
-      calls.every((c) => c.opts.allowHosts.length === 1 && c.opts.allowHosts[0] === HOST),
-    ).toBe(true);
+    expect(calls.map((c) => c.opts.allowHosts)).toEqual([[{ exact: HOST }]]);
   });
 
   it('title-matches the board and describes only the single confident candidate', async () => {

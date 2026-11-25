@@ -5,15 +5,18 @@
 //
 // Postings are third-party data (sanitized by the server but untrusted): every component that
 // shows one renders its fields as plain text, never as markdown or HTML.
-import type {
-  DiscoverySourceKind,
-  Disposition,
-  DismissReason,
-  NormalizedPosting,
-  PrefilterOutcome,
-  PrefilterRule,
-  RankSkipReason,
-  Resolution,
+import {
+  workday,
+  WORKDAY_HOST,
+  WorkdayConfig,
+  type DiscoverySourceKind,
+  type Disposition,
+  type DismissReason,
+  type NormalizedPosting,
+  type PrefilterOutcome,
+  type PrefilterRule,
+  type RankSkipReason,
+  type Resolution,
 } from '@opportun/core';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -183,20 +186,13 @@ export const AtsConfigSchema = z
   })
   .strict();
 
-// A Workday board (FR-D10), mirroring apps/server/src/adapters/discoverySource.ts WorkdayConfig
-// and the Workday branch of jobs/atsDetect.ts boardFromUrl: the datacenter label (wd1, wd5, wd12)
-// is part of the host and is read from the URL, never guessed.
-const WORKDAY_HOST = /^([a-z0-9][a-z0-9-]{0,62})\.wd[0-9]{1,3}\.myworkdayjobs\.com$/;
-const WORKDAY_SITE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
-const WORKDAY_LOCALE = /^[a-z]{2}-[A-Z]{2}$/;
-
-export interface WorkdayConfig {
-  host: string;
-  tenant: string;
-  site: string;
-}
-
-/** The Workday board a career site or posting URL names, or null when it names none. */
+/**
+ * The Workday board a career site or posting link names, as a source config, or null when it names
+ * none (FR-D10). The rules are the site's (packages/core/src/sites/workday.ts): the datacenter label
+ * (wd1, wd5, wd12) is part of the host and is read from the link, never guessed. What is pasted here
+ * is the career site itself: its API's address, and the second domain the server also reads, are not
+ * taken.
+ */
 export function workdayConfigFromUrl(raw: string): WorkdayConfig | null {
   let url: URL;
   try {
@@ -204,13 +200,14 @@ export function workdayConfigFromUrl(raw: string): WorkdayConfig | null {
   } catch {
     return null;
   }
-  const host = url.hostname.toLowerCase();
-  const tenant = WORKDAY_HOST.exec(host)?.[1];
-  if (tenant === undefined) return null;
-  const segments = url.pathname.split('/').filter((s) => s.length > 0);
-  const site = WORKDAY_LOCALE.test(segments[0] ?? '') ? segments[1] : segments[0];
-  if (site === undefined || site === 'wday' || !WORKDAY_SITE.test(site)) return null;
-  return { host, tenant, site };
+  if (!WORKDAY_HOST.test(url.hostname)) return null;
+  const board = workday.board!.fromUrl(url);
+  if (board === null) return null;
+  const config = WorkdayConfig.parse(workday.board!.configOf(board));
+  // `wday` is the API's address, never a site, with or without a locale before it.
+  return url.pathname.split('/').find((s) => s !== '') === 'wday' || config.site === 'wday'
+    ? null
+    : config;
 }
 
 // The MCP schema below mirrors apps/server/src/adapters/sources/mcpConfig.ts field for field
@@ -597,6 +594,11 @@ export function useCapture() {
     onError: async (err) => {
       if (err instanceof ApiError && err.code === 'not_capturable') {
         await qc.invalidateQueries({ queryKey: discoveryKeys.queue });
+      }
+      // Stored as dismissed (#1044): a Decided list read before is out of date. Not waited for: the
+      // dialog says what happened at once.
+      if (err instanceof ApiError && err.code === 'company_denied') {
+        void qc.invalidateQueries({ queryKey: discoveryKeys.decided('dismissed') });
       }
     },
   });

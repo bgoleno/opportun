@@ -1,7 +1,13 @@
 // Ashby's network half (https://github.com/bgoleno/opportun/issues/769), moved unchanged from
 // adapters/sources/ashby.ts (FR-D1). One request lists the board's jobs (no pagination); jobs the
 // company marks unlisted are skipped. Its identity is packages/core/src/sites/ashby.ts.
-import { ashby, ASHBY_API_HOST, type BoardRef, type NormalizedPosting } from '@opportun/core';
+import {
+  ashby,
+  ASHBY_API_HOST,
+  exactHosts,
+  type BoardRef,
+  type NormalizedPosting,
+} from '@opportun/core';
 import { arr, atsOrg, fetchBoardJson, obj, str, timeMs } from '../adapters/sources/atsCommon';
 import { askBoard, linksOf, servesJobs, slugOf } from './boardApi';
 import type { SiteModule } from './types';
@@ -47,7 +53,7 @@ export const ashbyModule: SiteModule = {
     async *listBoard(sctx, config) {
       const org = atsOrg(config);
       const url = urls.board({ site: ashby.id, slug: org }, { content: true });
-      const body = await fetchBoardJson(sctx, url, ashby.fetchHosts[0]!, 'Ashby', org);
+      const body = await fetchBoardJson(sctx, url, exactHosts(ashby.fetchHosts)[0]!, 'Ashby', org);
       for (const job of arr(obj(body).jobs)) {
         if (obj(job).isListed === false) continue;
         yield { posting: mapAshbyJob(job, org), nextCursor: null };

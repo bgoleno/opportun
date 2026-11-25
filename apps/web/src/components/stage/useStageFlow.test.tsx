@@ -1,7 +1,7 @@
 // #432: a move that waits on the reason dialog reports its outcome once it is known, through the
 // real StageReasonDialog: true when the server confirms the move, false when the dialog is
 // cancelled, and nothing while a server error leaves the dialog open for another answer.
-import type { OpportunityStage } from '@opportun/core';
+import { MANUAL_DISMISS_REASONS, type OpportunityStage } from '@opportun/core';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -57,6 +57,18 @@ function setup(to: OpportunityStage, stage: (call: ApiCall) => unknown) {
 
 const stageCalls = (calls: ApiCall[]) =>
   calls.filter((c) => c.method === 'POST' && c.path.endsWith('/stage'));
+
+// As the review queue's two dialogs (queueRow.test.tsx): not the system's own (#1048).
+it('Dismissed offers the reasons a person can give', async () => {
+  const { user } = setup('dismissed', () => ({}));
+  await user.click(await screen.findByRole('button', { name: 'Move it' }));
+  const dialog = await screen.findByRole('dialog', { name: 'Dismiss opportunity' });
+  const offered = within(within(dialog).getByLabelText('Reason'))
+    .getAllByRole('option')
+    .map((o) => (o as HTMLOptionElement).value)
+    .filter((v) => v !== '');
+  expect(offered).toEqual([...MANUAL_DISMISS_REASONS]);
+});
 
 describe('useStageFlow: the outcome of a move that waits for a reason (#432)', () => {
   it('reports moved once, when the server confirms, and not before', async () => {

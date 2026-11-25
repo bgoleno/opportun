@@ -420,11 +420,11 @@ interface DocumentStore {
      host and is not derivable from the tenant. A reference alone is already useful: it
      records the posting URL on an opportunity, names the requisition, and deduplicates
      reposts.
-  2. _Board adapter._ `adapters/sources/workday.ts` implementing `DiscoverySource` over
+  2. _Board adapter._ `sites/workday.ts` implementing `DiscoverySource` over
      the CXS endpoints, `POST /wday/cxs/<tenant>/<site>/jobs` (listing, paged by
      `offset`/`limit`) and `GET /wday/cxs/<tenant>/<site>/job/<externalPath>` (one
      posting, description as HTML in `jobPostingInfo.jobDescription`), through
-     `sctx.fetch` with the myworkdayjobs host allowlisted, mapped into
+     `sctx.fetch` with the board's own host alone allowlisted, mapped into
      `NormalizedPosting` and sanitized by the engine like every other source. New source
      kind `ats_workday` in `DISCOVERY_SOURCE_KINDS` (a text column, so no migration) and
      in `ATS_SOURCE_KINDS`.
@@ -487,7 +487,7 @@ interface DocumentStore {
   `{"appliedFacets":{},"limit":N,"offset":N,"searchText":""}`, paged at the site's default of 20) and the detail (`GET /wday/cxs/<tenant>/<site>/job/<externalPath without its leading
 /job/>`, description HTML in `jobPostingInfo.jobDescription`). The adapter calls both with
   plain JSON requests, no browser session or landing-page visit. The verified contract is recorded at the top of
-  `adapters/sources/workday.ts`; the reference extractor lives in `lib/atsJobRef.ts`, URL-only
+  `sites/workday.ts`, and what its links mean in `packages/core/src/sites/workday.ts`; the reference extractor lives in `lib/atsJobRef.ts`, URL-only
   board detection in `jobs/atsDetect.ts`, and the find-posting flow reads Workday too. The
   blocked first attempt and its observed signals are kept above because they document the
   service window that the adapter and detection must keep treating as transient. The

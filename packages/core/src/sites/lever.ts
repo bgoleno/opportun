@@ -1,7 +1,7 @@
 // Lever (https://github.com/bgoleno/opportun/issues/769): the identity half of its site module.
 // Its network half is apps/server/src/sites/lever.ts. The rules below are moved unchanged from
 // apps/server/src/lib/atsBoard.ts (boardFromUrl) and lib/atsJobRef.ts.
-import { ATS_JOB_ID, ATS_SLUG, AtsOrgConfig } from './ats';
+import { ATS_JOB_ID, ATS_SLUG, AtsOrgConfig, orgBoards } from './ats';
 import {
   linkOnHost,
   segmentsOf,
@@ -46,6 +46,7 @@ export const lever: SiteIdentity = {
   board: {
     fromUrl: boardFromUrl,
     configSchema: AtsOrgConfig,
+    ...orgBoards('lever'),
     pageUrl(board) {
       if (!ATS_SLUG.test(board.slug)) throw new Error('not a Lever board slug');
       return `https://jobs.lever.co/${board.slug}`;

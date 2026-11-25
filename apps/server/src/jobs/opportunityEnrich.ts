@@ -19,12 +19,12 @@ import { enqueue } from '../lib/jobQueue';
 import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../lib/titleMatch';
 import { boardConfig, boardFromUrl } from '../lib/atsBoard';
 import { AiUnavailableError, CaptureOutputSchema, renderPrompt, runStructured } from '@opportun/ai';
-import { decodeEntities, newId } from '@opportun/core';
+import { decodeEntities, exactHosts, newId, workdayPosting } from '@opportun/core';
 import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { htmlToText } from '../adapters/gmail';
 import { siteOfKind } from '../sites';
-import { fetchWorkdayDetail, workdayBoard } from '../adapters/sources/workday';
+import { fetchWorkdayDetail, workdayBoard } from '../sites/workday';
 import type { Db } from '../db/client';
 import { activities, communications, companies, opportunities, roleTargets } from '../db/schema';
 import { buildAiDeps } from '../lib/ai';
@@ -39,7 +39,6 @@ import type { UserCtx } from '../repos/base';
 import { getActivePrompt } from '../repos/prompts';
 import { updateOpportunity } from '../repos/opportunities';
 import { sanitizeDescriptionText } from '../lib/postingSanitize';
-import { workdayPosting } from '../lib/atsJobRef';
 import { requireService, type JobContext, type JobHandler } from './registry';
 import { continuesTrace } from '../obs/workflow';
 
@@ -429,7 +428,10 @@ export async function boardAnchors(
   }
   let res;
   try {
-    res = await fetch(url, { allowHosts: site.identity.fetchHosts, maxBytes: BOARD_MAX_BYTES });
+    res = await fetch(url, {
+      allowHosts: exactHosts(site.identity.fetchHosts),
+      maxBytes: BOARD_MAX_BYTES,
+    });
   } catch {
     return [];
   }

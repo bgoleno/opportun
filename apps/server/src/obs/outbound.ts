@@ -17,7 +17,7 @@
 //
 // With collection off, or inside the exporter's own requests (runSuppressed), it calls straight
 // through after one check.
-import { SITES } from '@opportun/core';
+import { hostMatchesRule, SITES, type HostRule } from '@opportun/core';
 import { fixedServiceHosts, HTTP_METHODS, OTHER, type OutboundTarget } from './catalog';
 import { isCollecting, isSuppressed, obs } from './index';
 
@@ -153,8 +153,8 @@ function statusOf(err: unknown): number | undefined {
 
 /**
  * The target of a safeFetch request (tl on #343): the caller's own when it names one, else
- * from a literal host map. Never a suffix match on a host a user could configure, except the
- * one Workday wildcard (a tenant's board lives on its own subdomain). This picks the target
+ * from a literal host map. Never a suffix match on a host a user could configure, except a
+ * site's own fetch pattern (a Workday tenant's board lives on its own host). This picks the target
  * only: server.address still comes from the catalog's fixed list alone, so a tenant's host
  * never appears.
  */
@@ -169,11 +169,20 @@ export function outboundTargetFor(req: {
   const host = req.url.hostname.toLowerCase().replace(/\.$/, '');
   const known = TARGET_BY_HOST.get(host);
   if (known !== undefined) return known;
-  if (host.endsWith(WORKDAY_SUFFIX) && host.length > WORKDAY_SUFFIX.length) return 'ats_workday';
-  return 'public_site';
+  return (
+    SITE_PATTERNS.find(([rule]) => hostMatchesRule(req.url.hostname, rule))?.[1] ?? 'public_site'
+  );
 }
 
-const WORKDAY_SUFFIX = '.myworkdayjobs.com';
+// A site whose boards are each on a host of their own (Workday): its fetch pattern, so a host the
+// fetch would take reads the same here.
+const SITE_PATTERNS: [HostRule, OutboundTarget][] = SITES.flatMap((site) =>
+  site.sourceKind === undefined
+    ? []
+    : site.fetchHosts.flatMap((rule): [HostRule, OutboundTarget][] =>
+        'exact' in rule ? [] : [[rule, site.sourceKind as OutboundTarget]],
+      ),
+);
 
 // A registered site's exact fetch hosts are its own target, its source kind (#769); the rest are
 // written out until their sites move (step 6).
