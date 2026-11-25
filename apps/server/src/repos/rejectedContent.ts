@@ -32,6 +32,8 @@ export const CLEARED_ON_REJECT = {
   bodySource: null,
   needsReview: false,
   proposedTransition: null,
+  classifyWait: null,
+  classifyTriedAt: null,
 } as const satisfies Partial<typeof communications.$inferInsert>;
 
 /** How acceptProposal began its note while it said which message the suggestion came from. */

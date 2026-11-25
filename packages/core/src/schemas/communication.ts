@@ -28,6 +28,24 @@ export type CommChannel = (typeof COMM_CHANNELS)[number];
 export const BODY_SOURCES = ['payload', 'stored', 'refetched', 'snippet'] as const;
 export type BodySource = (typeof BODY_SOURCES)[number];
 
+/**
+ * Why a message that passed the filter has no classification, once its first job is over
+ * (https://github.com/bgoleno/opportun/issues/1050). Null: it is classified, or that job is not over.
+ * A later try takes the first three, and `trying` from an earlier UTC day: that try ended with its
+ * process. `blocked`: the user has blocked its sender or its kind since, so it is never tried again.
+ */
+export const CLASSIFY_WAITS = [
+  'budget_exceeded',
+  'provider_error',
+  'failed',
+  'trying',
+  'key_rejected',
+  'no_key',
+  'invalid_output',
+  'blocked',
+] as const;
+export type ClassifyWait = (typeof CLASSIFY_WAITS)[number];
+
 /** An ingested copy of a message; the user's mailbox is never modified (FR-M8). */
 export const CommunicationSchema = z.object({
   id: IdSchema,

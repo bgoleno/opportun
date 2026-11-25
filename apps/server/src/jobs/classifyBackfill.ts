@@ -1,11 +1,12 @@
 // comms.classify_backfill job. Messages synced while the user had no AI key were skipped by the
 // classifier (reason no_key) and stay unclassified; when an ai_api_key secret is added, this job
-// queues comms.classify for each of them. It reads in (createdAt, id) order, 100 at a time, and
-// only rows with classification IS NULL. Classify jobs are deduped per message, so a second key
-// add while earlier ones are still pending queues nothing new.
+// queues comms.classify for each of them. It reads newest first, in (sentAt, id) order, 100 at a time,
+// and only rows with classification IS NULL that no later try takes by itself (jobs/classifyWaiting,
+// #1050). Classify jobs are deduped per message, so a second key add while earlier ones are still
+// pending queues nothing new.
 import { enqueueClassify } from '../lib/mailClassifyQueue';
 import { enqueue } from '../lib/jobQueue';
-import { and, asc, eq, gt, isNull, ne, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, lt, ne, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { communications } from '../db/schema';
@@ -28,18 +29,11 @@ export async function enqueueClassifyBackfill(db: Db, ctx: UserCtx): Promise<str
 }
 
 /**
- * A keyset cursor on id alone would be correct only while a row inserted after pagination begins
- * can never receive an id that sorts below one already passed -- true today because every id is
- * a uuidv7, but not a property this table's own schema promises (issue #286). createdAt is the
- * column actually meant to carry creation order, so the cursor is a tuple on it, with id only as
- * a tiebreak for two rows stamped in the same millisecond.
- *
- * No new index backs (createdAt, id): neither it nor the old id-only cursor is covered by one of
- * communications' existing indexes (all keyed on user_id, channel/thread or opportunity_id, none
- * on classification or createdAt), so this is the same filter-then-sort plan as before, not a
- * regression. Worth a migration if this job ever stops being trigger-driven and batched.
+ * Newest first, so that what the budget allows today goes to the newest (#1050). The cursor is a tuple
+ * on the order's own column, with id as the tiebreak for two messages of one millisecond: an id alone
+ * carries an order this table's schema does not promise (issue #286).
  */
-type Cursor = { createdAt: number; id: string } | null;
+type Cursor = { sentAt: number; id: string } | null;
 
 /** Enqueues comms.classify for every unclassified message of the user; returns how many. */
 export async function backfillClassify(db: Db, ctx: UserCtx): Promise<number> {
@@ -47,7 +41,7 @@ export async function backfillClassify(db: Db, ctx: UserCtx): Promise<number> {
   let queued = 0;
   for (;;) {
     const batch = await db
-      .select({ id: communications.id, createdAt: communications.createdAt })
+      .select({ id: communications.id, sentAt: communications.sentAt })
       .from(communications)
       .where(
         and(
@@ -59,15 +53,21 @@ export async function backfillClassify(db: Db, ctx: UserCtx): Promise<number> {
           // header to the model: the body is gone, but "this user hears from a clinic" is
           // exactly the fact the filter exists to keep local.
           or(isNull(communications.triageDecision), ne(communications.triageDecision, 'filtered')),
+          // Not one that waits, or it would be tried twice; nor one whose key was refused, which the
+          // key change ends, nor one the user has blocked since.
+          or(
+            isNull(communications.classifyWait),
+            inArray(communications.classifyWait, ['no_key', 'invalid_output']),
+          ),
           after === null
             ? undefined
             : or(
-                gt(communications.createdAt, after.createdAt),
-                and(eq(communications.createdAt, after.createdAt), gt(communications.id, after.id)),
+                lt(communications.sentAt, after.sentAt),
+                and(eq(communications.sentAt, after.sentAt), lt(communications.id, after.id)),
               ),
         ),
       )
-      .orderBy(asc(communications.createdAt), asc(communications.id))
+      .orderBy(desc(communications.sentAt), desc(communications.id))
       .limit(CLASSIFY_BACKFILL_BATCH)
       .all();
     for (const row of batch) {
@@ -76,7 +76,7 @@ export async function backfillClassify(db: Db, ctx: UserCtx): Promise<number> {
     }
     const last = batch.at(-1);
     if (last === undefined || batch.length < CLASSIFY_BACKFILL_BATCH) return queued;
-    after = { createdAt: last.createdAt, id: last.id };
+    after = { sentAt: last.sentAt, id: last.id };
   }
 }
 

@@ -1009,6 +1009,7 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   ],
   'rejected messages not tidied, as the backup before it failed: tried again at the next start': [],
   'rejected messages not all tidied: tried again at the next start': [],
+  'classifying a waiting message failed': ['opportun.communication.id'],
   'could not read the message again; classifying on the snippet': [
     'opportun.communication.id',
     'opportun.mail.channel',

@@ -5,6 +5,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { SECRET_KINDS } from '../db/schema';
 import { enqueueClassifyBackfill } from '../jobs/classifyBackfill';
+import { resumeClassifyAfterKeyChange } from '../jobs/classifyWaiting';
 import { resumeAfterKeyChange } from '../jobs/discoveryRankWaiting';
 import { sweepTitleVariantsFor } from '../jobs/titleVariants';
 import { withTransaction } from '../db/client';
@@ -107,6 +108,9 @@ export async function secretRoutes(app: FastifyInstance): Promise<void> {
       const { id } = meta;
       // Messages synced before the user had an AI key were never classified.
       if (kind !== 'ai_api_key') return reply.code(201).send(meta);
+      // The change first: a message whose call had no key says so before it, and the backfill takes it,
+      // or after it, and is tried again (jobs/classify).
+      await resumeClassifyAfterKeyChange(db, ctx);
       await enqueueClassifyBackfill(db, ctx);
       await resumeAfterKeyChange(db, ctx);
       // Role targets whose title variants could not be made without one (#217).
@@ -168,7 +172,10 @@ export async function secretRoutes(app: FastifyInstance): Promise<void> {
       } finally {
         // An older key of that provider is now the one in use, or there is none and a drain says
         // so. The delete has committed, so this runs whatever the audit write did (sec, #819).
-        if (removed.kind === 'ai_api_key') await resumeAfterKeyChange(db, ctx);
+        if (removed.kind === 'ai_api_key') {
+          await resumeAfterKeyChange(db, ctx);
+          await resumeClassifyAfterKeyChange(db, ctx);
+        }
       }
       return reply.code(204).send(null);
     },

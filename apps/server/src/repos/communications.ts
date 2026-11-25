@@ -58,6 +58,34 @@ const MAX_SUBJECT = 998;
 const MAX_SNIPPET = 500;
 const MAX_ADDRESS = 998;
 
+/**
+ * The sender, subject and date as a row of this message has them, and whether a message read again is
+ * that row's (#1050): all three have to be there and the same. The mailbox it is read from may be
+ * another account's by then, and no row says which it came from.
+ */
+export const identityOf = (
+  msg: Pick<InboundMessage, 'from' | 'subject' | 'sentAt'>,
+): { from: string; subject: string | null; sentAt: number } => ({
+  // Cleaned and cut as they are stored.
+  from: truncateText(msg.from, MAX_ADDRESS),
+  subject: truncateText(msg.subject, MAX_SUBJECT),
+  sentAt: msg.sentAt,
+});
+export function isSameMessage(
+  row: { from: string; subject: string | null; sentAt: number },
+  read: Pick<InboundMessage, 'from' | 'subject' | 'sentAt'>,
+): boolean {
+  const it = identityOf(read);
+  return (
+    it.from !== '' &&
+    it.sentAt > 0 &&
+    it.from === row.from &&
+    // A missing one is the empty one, as it is read and as it is stored; no other equals it.
+    (it.subject ?? '') === (row.subject ?? '') &&
+    it.sentAt === row.sentAt
+  );
+}
+
 /** The references worth storing, or null when the message carries none. */
 function atsJobRefsOf(msg: InboundMessage): AtsJobRefRecord[] | null {
   const refs = extractAtsJobRefs(`${msg.subject}\n${msg.bodyText}`);
@@ -97,9 +125,9 @@ export async function upsertInbound(
   const fields = {
     // Cleaned (no NUL, no half emoji) so the row stores on Postgres as well as SQLite.
     threadKey: cleanText(msg.threadKey),
-    from: truncateText(msg.from, MAX_ADDRESS),
+    from: identityOf(msg).from,
     to: msg.to.map((t) => truncateText(t, MAX_ADDRESS)),
-    subject: filtered ? null : truncateText(msg.subject, MAX_SUBJECT),
+    subject: filtered ? null : identityOf(msg).subject,
     snippet: filtered ? null : truncateText(msg.snippet, MAX_SNIPPET),
     bodyRef: null,
     // Design D-5: the ATS job references are extracted here, where the body is in hand for the
@@ -749,6 +777,32 @@ export function needsReviewFor(
   return JOB_RELATED.has(classification) && !linked;
 }
 
+/**
+ * Rule 6: is this message's thread already linked to an opportunity, by a message not rejected.
+ *
+ * One indexed lookup per message, and unlike the rules and the toggles it cannot be cached per
+ * user, because the answer is per thread. The index it uses is `communications_user_thread_idx`.
+ */
+export async function threadLinked(db: Db, ctx: UserCtx, threadKey: string): Promise<boolean> {
+  if (threadKey.trim().length === 0) return false;
+  const row = await db
+    .select({ id: communications.id })
+    .from(communications)
+    .where(
+      and(
+        ownedBy(communications.userId, ctx),
+        eq(communications.threadKey, threadKey),
+        isNotNull(communications.opportunityId),
+        notRejected(),
+      ),
+    )
+    .get();
+  return row !== undefined;
+}
+
+/** What a classified message says of why it has no classification (#1050). */
+const NOT_WAITING = { classifyWait: null, classifyTriedAt: null } as const;
+
 export interface ClassifyResult {
   classification: CommClassification;
   outreachKind: OutreachKind | null;
@@ -770,9 +824,10 @@ export interface ApplyOutcome {
  * Stores a classifier result and derives everything else: the link (an existing link stays,
  * then thread continuity, then the company/title match), opportunity creation for unmatched
  * targeted outreach, the stored (never applied) transition proposal, and the review flag.
- * Running it twice for the same message creates nothing the second time. Null, and nothing is
- * written, for a message rejected meanwhile: the row is read under the user's lock, which the reject
- * takes too, in the one transaction that makes and writes everything.
+ * Null, and nothing is written, for a message rejected meanwhile or one that has a classification: a
+ * later try can be a month after the message came (#1050), and the user's own correction stands. Asked
+ * of the row read under the user's lock, which the reject and the correction take too, in the one
+ * transaction that makes and writes everything.
  */
 export async function applyClassification(
   db: Db,
@@ -818,6 +873,7 @@ export async function applyClassification(
     await lockScope(tx, `user:${ctx.userId}`);
     const comm = await getRowSync(tx, ctx, id);
     if (comm.rejectedAt !== null) return null;
+    if (comm.classification !== null) return null;
     await racePoint('classify.apply.locked');
 
     let opportunityId = comm.opportunityId;
@@ -871,6 +927,7 @@ export async function applyClassification(
         needsReview:
           createdOpportunityId !== null ||
           needsReviewFor(classification, outreachKind, out.confidence, opportunityId !== null),
+        ...NOT_WAITING,
         updatedAt: now,
       })
       .where(ownedComm(ctx, id))
@@ -994,6 +1051,7 @@ export async function reclassify(
               opportunityId,
               proposedTransition: linkChanged || filtered ? null : comm.proposedTransition,
               needsReview: needsReviewFor(classification, outreachKind, 1, opportunityId !== null),
+              ...NOT_WAITING,
               updatedAt: now,
             },
       )
@@ -1035,6 +1093,7 @@ export async function markAlertDigest(exec: Exec, ctx: UserCtx, id: string): Pro
       bodySource: null,
       needsReview: false,
       proposedTransition: null,
+      ...NOT_WAITING,
       updatedAt: Date.now(),
     })
     .where(and(ownedComm(ctx, id), notRejected()))

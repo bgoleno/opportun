@@ -15,11 +15,11 @@ import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { communications, jobs } from '../src/db/schema';
 import type { ClassifyOutput } from '../src/jobs/classify';
-import { runDueJobs } from '../src/jobs/runner';
 import { bindVaultKey, decryptSecret } from '../src/lib/secretBox';
 import { useApi } from './api';
 import { queryAll, testDialect } from './db';
 import type { TestClient } from './isolation';
+import { runQueuedJob } from './runQueuedJob';
 
 const boot = useApi();
 
@@ -167,7 +167,8 @@ describe('the classify job carries the body sealed (#175)', () => {
     const log = { info: record('info'), warn: record('warn'), error: record('error') };
     let now = Date.now();
     for (let i = 0; i < 5 && (await classifyJob(app))?.status !== 'dead'; i += 1) {
-      await runDueJobs(app.db, {
+      // This job alone: days go by, and the message has a later try of its own (#1050).
+      await runQueuedJob(app, (await classifyJob(app))!.id, {
         services: { ...app.jobs.services, log: log as never },
         now: () => now,
       });
@@ -208,7 +209,8 @@ describe('the classify job carries the body sealed (#175)', () => {
     const log = { info: record('info'), warn: record('warn'), error: record('error') };
     let now = Date.now();
     for (let i = 0; i < 5 && (await classifyJob(app))?.status !== 'dead'; i += 1) {
-      await runDueJobs(app.db, {
+      // This job alone: days go by, and the message has a later try of its own (#1050).
+      await runQueuedJob(app, (await classifyJob(app))!.id, {
         services: { ...app.jobs.services, log: log as never },
         now: () => now,
       });

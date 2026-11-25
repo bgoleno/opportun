@@ -8,6 +8,8 @@ import { enqueue } from './jobQueue';
 import { encryptSecret } from './secretBox';
 
 export const CLASSIFY_JOB_KIND = 'comms.classify';
+/** Classifies one user's messages that wait (jobs/classifyWaiting, #1050); no payload. */
+export const CLASSIFY_WAITING_KIND = 'comms.classify_waiting';
 
 export const classifyDedupeKey = (communicationId: string): string =>
   `comms.classify:${communicationId}`;

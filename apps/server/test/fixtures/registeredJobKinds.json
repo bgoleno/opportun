@@ -3,6 +3,8 @@
   "backup",
   "comms.classify",
   "comms.classify_backfill",
+  "comms.classify_waiting",
+  "comms.classify_waiting_sweep",
   "comms.refine_prompt",
   "comms.tidy_rejected",
   "companies.repair_match_keys",

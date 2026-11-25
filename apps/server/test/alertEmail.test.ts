@@ -9,7 +9,11 @@ import { runStructured } from '@opportun/ai';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ALERT_SENDERS_SETTING, DEFAULT_ALERT_SENDERS } from '../src/adapters/sources/alertEmail';
+import {
+  ALERT_SENDERS_SETTING,
+  DEFAULT_ALERT_SENDERS,
+  processAlertDigest,
+} from '../src/adapters/sources/alertEmail';
 import { activities, communications, jobs } from '../src/db/schema';
 import { LEAD_RESOLVE_KIND } from '../src/jobs/leadResolve';
 import { parseIndeedAlert } from '../src/lib/alertParsers/indeed';
@@ -464,15 +468,32 @@ describe('alert digests through Gmail sync', () => {
     const ctx = ctxOf(a);
     expect((await listResults(app.db, ctx, PAGE)).total).toBe(3);
 
-    // Classifying the stored digest again (e.g. a backfill) takes the dedupe-checked path too.
+    // A run of it that ended before it was marked reads it again, through the dedupe-checked path.
     const digest = await commBySubject(app, a.userId, 'Your job alert');
-    await enqueueClassify(app.db, ctx, digest.id);
-    await app.jobs.drain();
-    const job = (
-      await app.db.select().from(jobs).where(eq(jobs.kind, CLASSIFY_JOB_KIND)).all()
-    ).find((j) => (j.payload as { communicationId: string }).communicationId === digest.id)!;
-    expect(job.status).toBe('done');
-    expect(job.result).toEqual({ status: 'alert_digest', leads: 0 });
+    await app.db
+      .update(communications)
+      .set({ classification: null })
+      .where(eq(communications.id, digest.id))
+      .run();
+    const runAgain = async () => {
+      await enqueueClassify(app.db, ctx, digest.id);
+      await app.jobs.drain();
+      return (await app.db.select().from(jobs).where(eq(jobs.kind, CLASSIFY_JOB_KIND)).all())
+        .filter((j) => (j.payload as { communicationId: string }).communicationId === digest.id)
+        .map((j) => ({ status: j.status, result: j.result }));
+    };
+    expect(await runAgain()).toEqual([
+      { status: 'done', result: { status: 'alert_digest', leads: 0 } },
+    ]);
+    expect(await processAlertDigest(app.db, ctx, app.storage, digest.id, LINKEDIN)).toMatchObject({
+      status: 'processed',
+      stats: { inserted: 0 },
+    });
+    // Marked, it is not read again.
+    expect(await runAgain()).toContainEqual({
+      status: 'done',
+      result: { status: 'skipped', reason: 'classified' },
+    });
     expect((await listResults(app.db, ctx, PAGE)).total).toBe(3);
     expect(classifyCalls()).toHaveLength(0);
   });

@@ -41,6 +41,7 @@ import './adapters/sources/index';
 import './jobs/index';
 import { batchProviderFor } from '@opportun/ai';
 import type { JobServices } from './jobs/registry';
+import { CLASSIFY_WAITING_SWEEP_CRON, CLASSIFY_WAITING_SWEEP_KIND } from './jobs/classifyWaiting';
 import { RANK_WAITING_SWEEP_CRON, RANK_WAITING_SWEEP_KIND } from './jobs/discoveryRankWaiting';
 import { RANK_BATCH_SWEEP_CRON, RANK_BATCH_SWEEP_KIND } from './jobs/rankBatch';
 import { ATTACHMENT_SWEEP_CRON, ATTACHMENT_SWEEP_JOB_KIND } from './jobs/attachmentSweep';
@@ -465,6 +466,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   await seedSchedule(db, DISCOVERY_REFINE_KIND, DISCOVERY_REFINE_CRON);
   await seedSchedule(db, ATS_REVERIFY_KIND, ATS_REVERIFY_CRON);
   await seedSchedule(db, RANK_WAITING_SWEEP_KIND, RANK_WAITING_SWEEP_CRON);
+  await seedSchedule(db, CLASSIFY_WAITING_SWEEP_KIND, CLASSIFY_WAITING_SWEEP_CRON);
   // Ranking batches (#441): fails one stuck being sent, and collects the sent ones as they are due.
   await seedSchedule(db, RANK_BATCH_SWEEP_KIND, RANK_BATCH_SWEEP_CRON);
   await seedSchedule(db, COMPANY_SUGGEST_KIND, COMPANY_SUGGEST_CRON);

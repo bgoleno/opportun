@@ -10,7 +10,7 @@ import { isAlertDigest, processAlertDigest } from '../adapters/sources/alertEmai
 import { triageMessage } from '../lib/mailTriage';
 import { gateApplies, gateMessage } from '../lib/triageGate';
 import { triageContext } from '../lib/triageContext';
-import { and, eq, isNotNull, isNull } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { lockScope, withTransaction, type Db } from '../db/client';
 import { extractAtsJobRefs } from '../lib/atsJobRef';
 import {
@@ -24,7 +24,7 @@ import { communications, jobs } from '../db/schema';
 import { racePoint } from '../lib/racePoints';
 import type { Storage } from '../lib/storage';
 import type { UserCtx } from '../repos/base';
-import { upsertInbound } from '../repos/communications';
+import { threadLinked, upsertInbound } from '../repos/communications';
 import type { Exec } from '../db/client';
 import { CLASSIFY_JOB_KIND, classifyDedupeKey, enqueueClassify } from '../lib/mailClassifyQueue';
 
@@ -85,6 +85,7 @@ async function neverRouted(db: Db, ctx: UserCtx, communicationId: string): Promi
   const row = await db
     .select({
       classification: communications.classification,
+      classifyWait: communications.classifyWait,
       rejectedAt: communications.rejectedAt,
       triageDecision: communications.triageDecision,
     })
@@ -92,6 +93,8 @@ async function neverRouted(db: Db, ctx: UserCtx, communicationId: string): Promi
     .where(and(eq(communications.userId, ctx.userId), eq(communications.id, communicationId)))
     .get();
   if (row === undefined || row.classification !== null) return false;
+  // Its first job has been, and its row may be pruned: what waits is a later try's (#1050).
+  if (row.classifyWait !== null) return false;
   if (row.rejectedAt !== null || row.triageDecision === 'filtered') return false;
   const job = await db
     .select({ id: jobs.id })
@@ -101,29 +104,6 @@ async function neverRouted(db: Db, ctx: UserCtx, communicationId: string): Promi
     )
     .get();
   return job === undefined;
-}
-
-/**
- * Rule 6: is this message's thread already linked to an opportunity, by a message not rejected.
- *
- * One indexed lookup per message, and unlike the rules and the toggles it cannot be cached per
- * user, because the answer is per thread. The index it uses is `communications_user_thread_idx`.
- */
-async function threadLinked(db: Db, ctx: UserCtx, threadKey: string): Promise<boolean> {
-  if (threadKey.trim().length === 0) return false;
-  const row = await db
-    .select({ id: communications.id })
-    .from(communications)
-    .where(
-      and(
-        eq(communications.userId, ctx.userId),
-        eq(communications.threadKey, threadKey),
-        isNotNull(communications.opportunityId),
-        isNull(communications.rejectedAt),
-      ),
-    )
-    .get();
-  return row !== undefined;
 }
 
 export interface IngestOptions {
