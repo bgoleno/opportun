@@ -270,10 +270,13 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
         const source = await ensureChannelSource(db, ctx, 'manual');
         // In the user's one capture slot, with a bounded wait for their ingest lock (#309), so
         // captures queued behind a slow holder cannot take every pool connection.
-        const { stats, inserted, linked, suppressed } = await withCaptureSlot(db, ctx.userId, () =>
-          insertLeads(db, ctx, [posting], source.id, undefined, {
-            lockTimeoutMs: CAPTURE_SLOT.lockTimeoutMs,
-          }),
+        const { inserted, linked, suppressed, duplicates } = await withCaptureSlot(
+          db,
+          ctx.userId,
+          () =>
+            insertLeads(db, ctx, [posting], source.id, undefined, {
+              lockTimeoutMs: CAPTURE_SLOT.lockTimeoutMs,
+            }),
         );
         const result = inserted[0];
         if (linked[0] !== undefined) {
@@ -293,7 +296,14 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
           );
         }
         if (result === undefined) {
-          if (stats.duplicates > 0) throw new HttpError(409, 'duplicate');
+          const there = duplicates[0];
+          if (there !== undefined) {
+            // Nothing was stored: where the job is already (#1053).
+            throw new HttpError(409, 'duplicate', undefined, {
+              place: there.place,
+              ...('opportunityId' in there ? { existingId: there.opportunityId } : {}),
+            });
+          }
           throw new HttpError(
             422,
             'invalid_posting',

@@ -256,6 +256,83 @@ describe('CaptureDialog', () => {
     expect(within(alert).queryByRole('link')).toBeNull();
   });
 
+  // https://github.com/bgoleno/opportun/issues/1053.
+  describe('a job that is there already: where', () => {
+    const press = async (error: Record<string, unknown>) => {
+      const user = userEvent.setup();
+      mockApi({
+        'POST /capture': () => ({ status: 409, body: { error: { code: 'duplicate', ...error } } }),
+      });
+      const { onClose } = renderDialog();
+      await user.type(
+        await screen.findByLabelText('Posting link'),
+        'https://careers.example.com/jobs/42',
+      );
+      await user.click(screen.getByRole('button', { name: 'Capture' }));
+      const alert = await screen.findByRole('alert');
+      const dialog = screen.getByRole('dialog');
+      expect(dialog).not.toHaveTextContent(/failed|duplicate|linked to/i);
+      expect(dialog.querySelector('[class*="text-destructive"]')).toBeNull();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Capture' })).toBeEnabled();
+      return alert;
+    };
+
+    it.each([
+      [
+        'in the pipeline',
+        { place: 'pipeline', existingId: 'opp-1' },
+        'This job is already in your pipeline. Nothing was added. View opportunity',
+        ['View opportunity', '/opportunities/opp-1'],
+      ],
+      [
+        'in the queue, which is behind the dialog',
+        { place: 'queue' },
+        'This job is already in your review queue. Nothing was added.',
+        null,
+      ],
+      [
+        'dismissed',
+        { place: 'dismissed' },
+        'This job is already in Decided, as dismissed. Nothing was added. View Decided',
+        ['View Decided', '/discovery/decided'],
+      ],
+      [
+        'accepted, and its opportunity deleted',
+        { place: 'accepted' },
+        'This job is already in Decided, in the Accepted tab: its opportunity was deleted. Nothing was added. View Decided',
+        ['View Decided', '/discovery/decided'],
+      ],
+    ] as const)('%s', async (_, error, said, link) => {
+      const alert = await press(error);
+      expect(alert.textContent?.trim()).toBe(said);
+      if (link === null) expect(within(alert).queryByRole('link')).toBeNull();
+      else {
+        expect(within(alert).getByRole('link', { name: link[0] })).toHaveAttribute('href', link[1]);
+      }
+    });
+
+    it.each([
+      ['a place this page does not know', { place: 'elsewhere' }],
+      ['the pipeline, and no opportunity', { place: 'pipeline' }],
+      ['no opportunity named', { place: 'pipeline', existingId: '' }],
+    ])('%s: said as before', async (_, error) => {
+      const user = userEvent.setup();
+      mockApi({
+        'POST /capture': () => ({ status: 409, body: { error: { code: 'duplicate', ...error } } }),
+      });
+      renderDialog();
+      await user.type(
+        await screen.findByLabelText('Posting link'),
+        'https://careers.example.com/jobs/42',
+      );
+      await user.click(screen.getByRole('button', { name: 'Capture' }));
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveTextContent('That posting is already in your queue or pipeline.');
+      expect(within(alert).queryByRole('link')).toBeNull();
+    });
+  });
+
   it('URL mode posts exactly {url}, toasts and closes', async () => {
     const user = userEvent.setup();
     const { calls } = mockApi({ 'POST /capture': () => ({ status: 201, body: CAPTURED }) });

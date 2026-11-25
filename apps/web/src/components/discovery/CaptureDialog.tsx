@@ -4,10 +4,10 @@
 //
 // Server answers handled here: 422 with a hint (LinkedIn, Indeed and other unfetchable pages:
 // paste the text instead), 503 ai_unavailable (fall back to the New Opportunity dialog), 409
-// duplicate (with the opportunity it was linked to, when there is one: #971), 409 company_denied (the
-// posting was stored as dismissed: https://github.com/bgoleno/opportun/issues/1044), 429 rate_limited
-// (the user's capture budget, shared with the browser extension:
-// https://github.com/bgoleno/opportun/issues/272).
+// duplicate (with the opportunity it was linked to: #971, or the place its job is in already:
+// https://github.com/bgoleno/opportun/issues/1053), 409 company_denied (the posting was stored as
+// dismissed: https://github.com/bgoleno/opportun/issues/1044), 429 rate_limited (the user's capture
+// budget, shared with the browser extension: https://github.com/bgoleno/opportun/issues/272).
 // Server text (hints, messages) and posting fields are rendered as text only.
 import { Link } from '@tanstack/react-router';
 import { useId, useState, type FormEvent } from 'react';
@@ -37,11 +37,39 @@ type Failure =
   | { kind: 'paste_text'; hint: string }
   | { kind: 'ai_unavailable'; hint: string }
   | { kind: 'decided'; message: string }
-  /** Another location of a job in the pipeline: linked to it, and there is no card (#971). */
-  | { kind: 'linked'; opportunityId: string }
-  /** The company is on the denied list: what was sent is stored as dismissed, no failure (#1044). */
-  | { kind: 'denied'; company: string | null; sent: CaptureVars }
+  /**
+   * No failure, and no card to show: the posting was linked to an opportunity (#971) or stored as
+   * dismissed (#1044), or its job is there already (#1053). With the way to it, where there is one;
+   * `stored` is what was sent, when the same once more could only be a duplicate.
+   */
+  | { kind: 'notice'; message: string; to: NoticeLink | null; stored?: CaptureVars }
   | { kind: 'other'; message: string };
+
+type NoticeLink = { opportunityId: string } | 'decided';
+
+/** Where a job that is there already is, as the server names it (#1053), and the way to it. */
+function alreadyThere(place: unknown, existingId: string | null): Failure | null {
+  const notice = (where: string, to: NoticeLink | null): Failure => ({
+    kind: 'notice',
+    message: `This job is already in ${where}. Nothing was added.`,
+    to,
+  });
+  switch (place) {
+    case 'pipeline':
+      return existingId === null ? null : notice('your pipeline', { opportunityId: existingId });
+    case 'queue':
+      // Behind the dialog: no way to go.
+      return notice('your review queue', null);
+    case 'dismissed':
+      return notice('Decided, as dismissed', 'decided');
+    case 'accepted':
+      return notice('Decided, in the Accepted tab: its opportunity was deleted', 'decided');
+    default:
+      return null;
+  }
+}
+
+const textOf = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
 
 const TEXT_MAX = 200_000;
 
@@ -103,17 +131,29 @@ function toFailure(err: unknown, sent: CaptureVars): Failure {
     // The lead was completed or decided somewhere else (#968): no second try can succeed.
     if (err.code === 'not_capturable') return { kind: 'decided', message: errorMessage(err) };
     if (err.code === 'company_denied') {
-      const company = err.details.company;
       return {
-        kind: 'denied',
-        company: typeof company === 'string' && company !== '' ? company : null,
-        sent,
+        kind: 'notice',
+        message: `${textOf(err.details.company) ?? 'The company'} is on your denied list, so the posting was put in Decided as dismissed.`,
+        to: 'decided',
+        stored: sent,
       };
     }
     if (err.code === 'duplicate') {
-      const id = err.details.existingId;
-      if (typeof id === 'string' && id !== '') return { kind: 'linked', opportunityId: id };
-      return { kind: 'other', message: 'That posting is already in your queue or pipeline.' };
+      const id = textOf(err.details.existingId);
+      if (err.details.place === undefined && id !== null) {
+        return {
+          kind: 'notice',
+          message:
+            'This job is already in your pipeline, so the posting was linked to that opportunity.',
+          to: { opportunityId: id },
+        };
+      }
+      return (
+        alreadyThere(err.details.place, id) ?? {
+          kind: 'other',
+          message: 'That posting is already in your queue or pipeline.',
+        }
+      );
     }
   }
   return { kind: 'other', message: errorMessage(err) };
@@ -148,11 +188,12 @@ export function CaptureDialog(props: {
 
   // The same once more could only be a duplicate. Compared with what was sent: the field can be
   // edited while a capture runs.
+  const stored = failure?.kind === 'notice' ? failure.stored : undefined;
   const storedAlready =
-    failure?.kind === 'denied' &&
+    stored !== undefined &&
     (mode === 'url'
-      ? 'url' in failure.sent && failure.sent.url === url.trim()
-      : 'text' in failure.sent && failure.sent.text === text.trim());
+      ? 'url' in stored && stored.url === url.trim()
+      : 'text' in stored && stored.text === text.trim());
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -268,31 +309,25 @@ export function CaptureDialog(props: {
           {failure?.kind === 'other' || failure?.kind === 'decided' ? (
             <FormError message={failure.message} />
           ) : null}
-          {failure?.kind === 'linked' ? (
-            <div
-              role="alert"
-              className="rounded-md border border-primary/40 bg-accent px-3 py-2 text-sm text-accent-foreground"
-            >
-              This job is already in your pipeline, so the posting was linked to that opportunity.{' '}
-              <Link
-                to="/opportunities/$id"
-                params={{ id: failure.opportunityId }}
-                className="font-medium underline underline-offset-2"
-              >
-                View opportunity
-              </Link>
-            </div>
-          ) : null}
-          {failure?.kind === 'denied' ? (
+          {failure?.kind === 'notice' ? (
             <div
               role="alert"
               className="rounded-md border border-primary/40 bg-accent px-3 py-2 text-sm [overflow-wrap:anywhere] text-accent-foreground"
             >
-              {failure.company ?? 'The company'} is on your denied list, so the posting was put in
-              Decided as dismissed.{' '}
-              <Link to="/discovery/decided" className="font-medium underline underline-offset-2">
-                View Decided
-              </Link>
+              {failure.message}{' '}
+              {failure.to === null ? null : failure.to === 'decided' ? (
+                <Link to="/discovery/decided" className="font-medium underline underline-offset-2">
+                  View Decided
+                </Link>
+              ) : (
+                <Link
+                  to="/opportunities/$id"
+                  params={{ id: failure.to.opportunityId }}
+                  className="font-medium underline underline-offset-2"
+                >
+                  View opportunity
+                </Link>
+              )}
             </div>
           ) : null}
           {failure?.kind === 'paste_text' ? (
