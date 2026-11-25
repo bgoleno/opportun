@@ -593,12 +593,12 @@ async function isKnownOther(
   if (identity === null) return false;
   const contradicts = (r: DiscoveryResultView): boolean =>
     identitiesContradict(identity, identityBeside(identity, r));
-  const here = own !== null && places.includes(own);
   const behind = await leadsBehind(tx, ctx, opp.id);
   if (sameId.length > 0) {
     const origin = behind.find((r) => r.id === opp.sourceRef);
-    return !here && origin !== undefined && contradicts(origin);
+    return origin !== undefined && contradicts(origin);
   }
+  const here = own !== null && places.includes(own);
   const key = dedupeKey(posting.company, posting.title, posting.location);
   const asked = here ? behind.filter((r) => !isElsewhere(r, key)) : behind;
   return asked.length > 0 && asked.every(contradicts);
@@ -1011,7 +1011,6 @@ async function settleLead(
     if (opportunity !== null) {
       knownOther = await isKnownOther(tx, ctx, opportunity, posting, identity, []);
       anotherPosting = true;
-      keptApartFrom = null;
     }
     const lead = await createLead(tx, ctx, posting);
     resultId = lead.id;

@@ -460,9 +460,31 @@ describe.each(SITES)('a capture on %s of another place of an open role', (site) 
       const id = (await capture(app, a, [site, 1], HERE, { postingUrl: null })).opportunityId;
       await set(app, id, { postingUrl: null, postingState: 'needs_review' });
       const before = await opportunitiesOf(app, a);
-      const done = await capture(app, a, P, null, RICH);
-      expect(done).toMatchObject({ opportunityId: id, anotherPosting: true });
-      expect((await opportunitiesOf(app, a)).map(own)).toEqual(before.map(own));
+      for (const said of [true, undefined]) {
+        const done = await capture(app, a, P, null, RICH);
+        expect(done).toMatchObject({ opportunityId: id, createdOpportunity: false });
+        expect(done.anotherPosting).toBe(said);
+        expect((await opportunitiesOf(app, a)).map(own)).toEqual(before.map(own));
+      }
+    });
+
+    it('not by an id that only some of what is behind it contradicts', async () => {
+      const { app, a } = await boot();
+      const id = await byHand(app, a);
+      await capture(app, a, [site, 1], THERE);
+      await capture(app, a, [site === 'linkedin' ? 'indeed' : 'linkedin', 4], ELSEWHERE);
+      await capture(app, a, P, null, RICH);
+      expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject(RICH);
+    });
+
+    it('nor the page of its own place, when all behind it are of other places', async () => {
+      const { app, a } = await boot();
+      const id = await byHand(app, a);
+      await capture(app, a, [site, 1], THERE);
+      const done = await capture(app, a, P, HERE, RICH);
+      expect(done.opportunityId).toBe(id);
+      expect(done.anotherPosting).toBeUndefined();
+      expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject(RICH);
     });
   });
 
@@ -518,6 +540,8 @@ describe.each(SITES)('a capture on %s of another place of an open role', (site) 
     const id = await byHand(app, a);
     const first = await capture(app, a, P, HERE);
     expect([first.opportunityId, first.anotherPosting]).toEqual([id, undefined]);
+    // Nor for another posting's having joined since.
+    await capture(app, a, [site, 1], THERE);
     const again = await capture(app, a, P, 'Austin, Texas, United States', { compNote: '$5' });
     expect([again.opportunityId, again.anotherPosting]).toEqual([id, undefined]);
     expect((await getOpportunity(app.db, ctxOf(a), id)).compNote).toBe('$5');
@@ -659,7 +683,12 @@ describe.each(SITES)('a capture on %s of another id at the place of an open role
     it('each again finds it by its id, with one result each', async () => {
       const { app, a } = await boot();
       const id = await FROM[from](app, a, at);
+      await set(app, id, { postingUrl: null });
+      const facts = (await opportunitiesOf(app, a)).map(own);
       const p = await capture(app, a, P, at);
+      // It stays another posting's the second time.
+      await capture(app, a, P, at, { remote: true, compNote: '$1' });
+      expect((await opportunitiesOf(app, a)).map(own)).toEqual(facts);
       const results = (await resultsOf(app, a)).length;
       for (const [site_, n] of [P, [site, 1], P] as const) {
         const again = await capture(app, a, [site_, n], at);
@@ -689,6 +718,17 @@ describe.each(SITES)('a capture on %s of another id at the place of an open role
         (await entriesOf(app, id, 'link')).filter((e) => e.externalUrl === urlOf(P)),
       ).toHaveLength(1);
     });
+  });
+
+  it('its card names the place and the page none: goes to the role, and gives it nothing', async () => {
+    const { app, a } = await boot();
+    const id = await FROM.captured(app, a, HERE);
+    await set(app, id, { postingUrl: null });
+    const before = await opportunitiesOf(app, a);
+    const cardId = await card(app, a, P, HERE);
+    const done = await capture(app, a, P, null, { compNote: '$1' });
+    expect(done).toMatchObject({ opportunityId: id, resultId: cardId, anotherPosting: true });
+    expect((await opportunitiesOf(app, a)).map(own)).toEqual(before.map(own));
   });
 
   it('one at another level there is kept apart, its own title open elsewhere or not', async () => {
