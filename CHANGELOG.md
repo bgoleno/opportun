@@ -29,12 +29,11 @@ merged after it.
   unchanged
   ([#960](https://github.com/bgoleno/opportun/issues/960); PR
   [#965](https://github.com/bgoleno/opportun/pull/965)).
-- **Pipeline board: with both end columns expanded on a narrow screen, the board keeps a whole
-  column for the stages between them, and on a phone the page never scrolls sideways.** The columns
-  between the end columns keep one whole column (288 px), or on a phone what two rails would leave
-  of it. The end columns scroll sideways in an area of their own beside them, each at least 160 px
+- **Pipeline board: with both end columns expanded on a narrow screen, the other columns keep a
+  whole column, and on a phone the page never scrolls sideways.** The other columns keep one whole
+  column (288 px), or on a phone what two rails would leave of it. The end columns scroll sideways in an area of their own beside them, each at least 160 px
   wide, and an expanded end column comes into view. At 1280 px and wider nothing changes. On a
-  phone with exactly one end column expanded, the columns between keep up to 112 px, the expanded
+  phone with exactly one end column expanded, the other columns keep up to 112 px, the expanded
   one gives way from 288 px down to 160 px and the other one's rail stays whole, where the page
   scrolled sideways by up to 64 px. A card's company and title now break anywhere, so a long
   unbroken word no longer makes the page scroll sideways
@@ -146,7 +145,7 @@ merged after it.
   ([#1010](https://github.com/bgoleno/opportun/issues/1010); PR [#1018](https://github.com/bgoleno/opportun/pull/1018)).
 - **Resumes: a tailored copy that was made is never refused after the copy.** When the opportunity
   or base resume is deleted while the copy is made, the copy is kept as a resume that is not
-  attached to it, and, for a deleted opportunity, the page says "The opportunity was deleted while the copy was made, so the resume is not attached to one." If the database then fails, the answer is "The resume may not have been saved. Look in Resumes: if it is not there, the copy named X was left in Google Docs" (or Reactive Resume)
+  attached to it, and, for a deleted opportunity, the page says "The opportunity was deleted while the copy was made, so the resume is not attached to one." If the database fails instead, the answer is "The resume may not have been saved. Look in Resumes: if it is not there, the copy named X was left in Google Docs" (or Reactive Resume)
   ([#962](https://github.com/bgoleno/opportun/issues/962); PR [#1005](https://github.com/bgoleno/opportun/pull/1005)).
 - **Import: a row whose opportunity was deleted meanwhile says so, and the rest is imported.** The
   report says "the opportunity was deleted while the import ran" at its line. Before, a stage move of such a row failed the whole import, and the job was tried again, up to three times
@@ -200,7 +199,7 @@ merged after it.
   ([#1021](https://github.com/bgoleno/opportun/issues/1021); PR [#1025](https://github.com/bgoleno/opportun/pull/1025)).
 - **Errors: more refusals say what happened and what to do, instead of a code.** Unsuppress on a
   result that is back in the review queue, finishing a tailoring session twice, setting a password
-  with a provider that is no longer linked and setting one when the account has one each have a sentence, and what they were about is read again. The Posting attached notice now ends with a full stop
+  with a provider that is not linked and setting one when the account has one each have a sentence, and what they were about is read again. The Posting attached notice has one full stop between its sentences, where it had two
   ([#927](https://github.com/bgoleno/opportun/issues/927), [#1016](https://github.com/bgoleno/opportun/issues/1016); PR [#1013](https://github.com/bgoleno/opportun/pull/1013)).
 
 ### Inbox
@@ -286,7 +285,7 @@ merged after it.
   opportunity lets no key go by itself: its repost is skipped as a duplicate until you unsuppress
   its result. An opportunity that is still there, closed included, still refuses it
   ([#1008](https://github.com/bgoleno/opportun/issues/1008); PR [#1023](https://github.com/bgoleno/opportun/pull/1023)).
-- **Discovery: Undo after Unsuppress takes the key back, or says the job is there already.** A dismissed result is restored with its key, so a repost makes no second card. Where the job is in your pipeline or in the review queue by then, the result stays dismissed and the page
+- **Discovery: Undo after Unsuppress takes the key back, or says the job is there already.** One that was unsuppressed takes its key back, so a repost makes no second card. Where the job is in your pipeline or in the review queue by then, the result stays dismissed and the page
   says "1 not restored: this job is already in your pipeline" (or "in the review queue"), with
   **View opportunity** or **Review queue**
   ([#1020](https://github.com/bgoleno/opportun/issues/1020); PR [#1030](https://github.com/bgoleno/opportun/pull/1030)).
