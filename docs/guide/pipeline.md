@@ -462,6 +462,10 @@ you save while Opportun is looking the posting up, attaching it, or re-deriving 
 page is kept, and you are told. So is one you saved in another tab, when the page that asks to replace
 your description does not show it yet.
 
+For a job a recruiter wrote to you about, Opportun reads the company's careers page to fill in what the
+opportunity lacks. What you save meanwhile is kept there too (the description, link, location, remote and
+pay), and the note on the timeline names what was filled.
+
 An opportunity captured with the [browser extension](browser-extension.md) runs this search on
 its own, in the background. When it cannot settle the result it changes nothing and says so:
 a note on the Details tab, and a **Posting unconfirmed** mark on the opportunity's card on the
