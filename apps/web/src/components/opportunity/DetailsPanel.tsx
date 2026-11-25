@@ -44,6 +44,7 @@ import {
   PostingStateBanner,
   RederiveFromCaptureAction,
 } from './PostingStateBanner';
+import { descriptionAtStake, ReplaceDescriptionDialog } from './ReplaceDescription';
 
 /** Mirrors the server's upload cap (apps/server/src/routes/attachments.ts). */
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
@@ -301,7 +302,10 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   const confirmPosting = useConfirmPosting(opp.id);
   const unconfirmPosting = useUnconfirmPosting(opp.id);
   const rederive = useRederivePosting(opp.id);
-  const [found, setFound] = useState<FindPostingResult | null>(null);
+  /** `replaces`: the description the user agreed to lose to what this search finds. */
+  const [found, setFound] = useState<{ result: FindPostingResult; replaces?: string } | null>(null);
+  /** Asking before a search that would replace the user's description (#858): the one it asks about. */
+  const [asking, setAsking] = useState<string | null>(null);
   const checksEnded = useChecksEnded(opp.postingState);
   const checkOver = useCheckOver(opp.id);
   /** `untilCheck`: the refusal for a running check, true only until that check ends (#870). */
@@ -319,11 +323,21 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
   const described = opp.descriptionMd != null && opp.descriptionMd.trim() !== '';
 
   // The posting is looked up only when asked for: nothing searches a board on its own.
-  async function runFind() {
+  // Where it would replace what the user wrote, they are asked first.
+  function startFind() {
+    const atStake = descriptionAtStake(opp);
+    if (atStake === null) void runFind();
+    else setAsking(atStake);
+  }
+
+  async function runFind(replaces?: string) {
     setFindError(null);
     setUnreachableAt(null);
     try {
-      const result = await find.mutateAsync(opp.postingState ?? 'none');
+      const result = await find.mutateAsync({
+        seen: opp.postingState ?? 'none',
+        ...(replaces === undefined ? {} : { replaceDescription: replaces }),
+      });
       if (result.outcome === 'already_confirmed') {
         // A background check finished while the page was open (#852): nothing searched again.
         toast({
@@ -363,23 +377,28 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
       }
       if (result.outcome === 'attached') {
         const title = result.candidate?.posting.title ?? opp.title;
+        const rest = [...kept, ...note].join(' ');
         // #114: a single confident match from a board read only in part (result.note) is
         // attached with no dialog in between, so the toast is the only place the person sees
         // this in the moment. It is also recorded on the timeline (attachPosting, server side)
         // since the toast itself is gone in a few seconds and the truncation stays true after.
         toast({
           title: 'Posting attached',
-          description: result.note === undefined ? title : `${title}. ${result.note}`,
+          description: rest === '' ? title : `${title}. ${rest}`,
           variant: 'success',
         });
         return;
       }
       if (result.outcome === 'identified') {
         // #398: the posting link's own Greenhouse job was recognised; nothing was attached.
-        toast({ title: 'Recognised on Greenhouse', variant: 'success' });
+        toast({
+          title: 'Recognised on Greenhouse',
+          ...(kept.length === 0 ? {} : { description: kept.join(' ') }),
+          variant: 'success',
+        });
         return;
       }
-      setFound(result);
+      setFound({ result, ...(replaces === undefined ? {} : { replaces }) });
     } catch (err) {
       if (isPostingSearching(err) && checkOver()) {
         toast(CHECK_ENDED);
@@ -409,9 +428,9 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
     }
   }
 
-  async function runRederive() {
+  async function runRederive(asked: string) {
     try {
-      const result = await rederive.mutateAsync(true);
+      const result = await rederive.mutateAsync({ force: true, replaceDescription: asked });
       const title =
         result.outcome === 'no_description_found'
           ? 'Nothing to re-derive'
@@ -456,7 +475,7 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
                   type="button"
                   size="sm"
                   variant="outline"
-                  onClick={() => void runFind()}
+                  onClick={startFind}
                   disabled={find.isPending}
                 >
                   {find.isPending ? 'Searching...' : 'Find posting'}
@@ -483,9 +502,9 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
             // A confirmed posting is there already: nothing to add.
             {...(opp.postingState === 'confirmed'
               ? {}
-              : { onAddByHand: () => setFound({ outcome: 'unreachable' }) })}
+              : { onAddByHand: () => setFound({ result: { outcome: 'unreachable' } }) })}
             busy={find.isPending}
-            onAction={() => void runFind()}
+            onAction={startFind}
             confirmBusy={confirmPosting.isPending}
             onConfirm={() => void runConfirm()}
           />
@@ -499,7 +518,7 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
           <RederiveFromCaptureAction
             opp={opp}
             busy={rederive.isPending}
-            onRederive={() => void runRederive()}
+            onRederive={(asked) => void runRederive(asked)}
           />
           {editing === 'description' ? (
             <DescriptionEditor opp={opp} onDone={() => setEditing(null)} />
@@ -548,8 +567,18 @@ export function DetailsPanel({ opp }: { opp: OpportunityView }) {
         <Attachments opportunityId={opp.id} />
       </div>
       {found === null ? null : (
-        <FindPostingDialog opp={opp} result={found} onClose={() => setFound(null)} />
+        <FindPostingDialog opp={opp} {...found} onClose={() => setFound(null)} />
       )}
+      <ReplaceDescriptionDialog
+        open={asking !== null}
+        from="board"
+        onOpenChange={(open) => {
+          if (!open) setAsking(null);
+        }}
+        onConfirm={() => {
+          if (asking !== null) void runFind(asking);
+        }}
+      />
     </MainWithRail>
   );
 }

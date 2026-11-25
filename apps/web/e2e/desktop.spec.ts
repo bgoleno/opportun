@@ -24,6 +24,7 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
+import { frames } from './boardDrag';
 import { adminStorageState, PASSWORD } from './helpers';
 import { ADMIN_ROUTES, USER_ROUTES } from './routes';
 import { KNOWN } from './widthKnown';
@@ -152,19 +153,54 @@ async function findings(page: Page): Promise<Finding[]> {
 async function expectStandard(page: Page, title: string, width: number): Promise<void> {
   const entry = KNOWN.get(title);
   const { unexcused, stale } = judge(entry?.excuses ?? [], width, await findings(page));
-  expect(unexcused, `${title} at ${width}px:\n  ${unexcused.join('\n  ')}`).toEqual([]);
-  expect(
-    stale,
-    `${title} at ${width}px no longer has these findings; if ${entry?.issue ?? 'its issue'} fixed them, remove their excuses from KNOWN`,
-  ).toEqual([]);
+  expect.soft(unexcused, `${title} at ${width}px:\n  ${unexcused.join('\n  ')}`).toEqual([]);
+  expect
+    .soft(
+      stale,
+      `${title} at ${width}px no longer has these findings; if ${entry?.issue ?? 'its issue'} fixed them, remove their excuses from KNOWN`,
+    )
+    .toEqual([]);
 }
 
-/** Opens `path` at this test's width and expects it to meet the standard. */
-async function expectRoute(page: Page, path: string, width: number): Promise<void> {
-  await page.goto(path);
-  await page.waitForLoadState('networkidle');
-  await expect(page.locator('#main [data-layout]')).toBeVisible();
-  await expectStandard(page, path, width);
+/**
+ * A view is opened at each end of WIDTHS, and resized to the width beside it (#1031): opened at every
+ * width, the walk took twice as long. A width a script reads once, as the view opens, is met fresh at
+ * both ends, so a threshold anywhere between them shows, whichever way it goes: `>= w` at 2560, `< w` at
+ * 1280. What this cannot see is a layout broken only when opened in a band between the two.
+ */
+const OPENINGS = [
+  [1280, 1536],
+  [2560, 1920],
+] as const satisfies readonly (readonly [(typeof WIDTHS)[number], (typeof WIDTHS)[number]])[];
+
+/** Expects the view `open` opens to meet the standard at every width. Soft: one run names each that fails. */
+async function expectAtEveryWidth(
+  page: Page,
+  title: string,
+  open: () => Promise<void>,
+): Promise<void> {
+  expect(OPENINGS.flat().sort((a, b) => a - b)).toEqual([...WIDTHS]);
+  for (const widths of OPENINGS) {
+    await page.setViewportSize({ width: widths[0], height: HEIGHT });
+    await open();
+    for (const width of widths) {
+      await test.step(`${width}px wide, opened at ${widths[0]}px`, async () => {
+        await page.setViewportSize({ width, height: HEIGHT });
+        await page.waitForFunction((w) => window.innerWidth === w, width, { polling: 'raf' });
+        await frames(page);
+        await expectStandard(page, title, width);
+      });
+    }
+  }
+}
+
+/** Opens `path` and expects it to meet the standard at every width. */
+async function expectRoute(page: Page, path: string): Promise<void> {
+  await expectAtEveryWidth(page, path, async () => {
+    await page.goto(path);
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('#main [data-layout]')).toBeVisible();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -381,62 +417,64 @@ async function seededWorkspace(page: Page, tag: string): Promise<string> {
 
 // ---------------------------------------------------------------------------
 
-for (const width of WIDTHS) {
-  test.describe(`${width}px wide`, () => {
-    for (const path of USER_ROUTES) {
-      test(path, async ({ browser }) => {
-        const { page, close } = await pageAt(browser, width, accounts.user);
-        try {
-          await expectRoute(page, path, width);
-        } finally {
-          await close();
-        }
-      });
-    }
-
-    for (const path of ADMIN_ROUTES) {
-      test(path, async ({ browser }) => {
-        const { page, close } = await pageAt(browser, width, accounts.admin);
-        try {
-          await expectRoute(page, path, width);
-        } finally {
-          await close();
-        }
-      });
-    }
-
-    test('/opportunities/:id timeline with a long note', async ({ browser }) => {
-      const title = '/opportunities/:id timeline with a long note';
-      const { page, close } = await pageAt(browser, width, accounts.seed);
+test.describe('at every desktop width', () => {
+  for (const path of USER_ROUTES) {
+    test(path, async ({ browser }) => {
+      const { page, close } = await pageAt(browser, WIDTHS[0], accounts.user);
       try {
-        const id = await seededOpportunity(page, `timeline ${width}`);
-        await page.goto(`/opportunities/${id}`);
-        await expect(page.getByText('Call with the hiring manager.').first()).toBeVisible();
-        await expectStandard(page, title, width);
+        await expectRoute(page, path);
       } finally {
         await close();
       }
     });
+  }
 
-    test('/opportunities/:id details with a long job description', async ({ browser }) => {
-      const title = '/opportunities/:id details with a long job description';
-      const { page, close } = await pageAt(browser, width, accounts.seed);
+  for (const path of ADMIN_ROUTES) {
+    test(path, async ({ browser }) => {
+      const { page, close } = await pageAt(browser, WIDTHS[0], accounts.admin);
       try {
-        const id = await seededOpportunity(page, `details ${width}`);
+        await expectRoute(page, path);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  test('/opportunities/:id timeline with a long note', async ({ browser }) => {
+    const title = '/opportunities/:id timeline with a long note';
+    const { page, close } = await pageAt(browser, WIDTHS[0], accounts.seed);
+    try {
+      const id = await seededOpportunity(page, 'timeline');
+      await expectAtEveryWidth(page, title, async () => {
+        await page.goto(`/opportunities/${id}`);
+        await expect(page.getByText('Call with the hiring manager.').first()).toBeVisible();
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  test('/opportunities/:id details with a long job description', async ({ browser }) => {
+    const title = '/opportunities/:id details with a long job description';
+    const { page, close } = await pageAt(browser, WIDTHS[0], accounts.seed);
+    try {
+      const id = await seededOpportunity(page, 'details');
+      await expectAtEveryWidth(page, title, async () => {
         await page.goto(`/opportunities/${id}`);
         await page.getByRole('tab', { name: 'Details' }).click();
         await expect(page.getByText('What we are looking for')).toBeVisible();
-        await expectStandard(page, title, width);
-      } finally {
-        await close();
-      }
-    });
+      });
+    } finally {
+      await close();
+    }
+  });
 
-    test('/resumes/:id with text, a conversation and a match report', async ({ browser }) => {
-      const title = '/resumes/:id with text, a conversation and a match report';
-      const { page, close } = await pageAt(browser, width, accounts.seed);
-      try {
-        const id = await seededWorkspace(page, `workspace ${width}`);
+  test('/resumes/:id with text, a conversation and a match report', async ({ browser }) => {
+    const title = '/resumes/:id with text, a conversation and a match report';
+    const { page, close } = await pageAt(browser, WIDTHS[0], accounts.seed);
+    try {
+      const id = await seededWorkspace(page, 'workspace');
+      await expectAtEveryWidth(page, title, async () => {
         await page.goto(`/resumes/${id}`);
         await expect(page.getByRole('list', { name: 'Conversation' })).toContainText(
           'Your platform work maps well to this role.',
@@ -446,13 +484,12 @@ for (const width of WIDTHS) {
         await expect(page.getByRole('button', { name: 'Hide details' })).toBeVisible();
         await expect(page.getByText('Infrastructure as code')).toBeVisible();
         await expect(page.getByText(/Summary: You will own/)).toBeVisible();
-        await expectStandard(page, title, width);
-      } finally {
-        await close();
-      }
-    });
+      });
+    } finally {
+      await close();
+    }
   });
-}
+});
 
 // ---------------------------------------------------------------------------
 // The resume workspace's tailoring chat (issue https://github.com/bgoleno/opportun/issues/35):
@@ -549,21 +586,24 @@ async function openWorkspace(
   look: Look = {},
 ) {
   const opened = await pageAt(browser, width, accounts.seed, look);
-  const id = await seededWorkspace(opened.page, tag);
-  await opened.page.goto(`/resumes/${id}`);
-  await expect(opened.page.getByRole('list', { name: 'Conversation' })).toContainText(
+  await loadWorkspace(opened.page, await seededWorkspace(opened.page, tag));
+  return opened;
+}
+
+async function loadWorkspace(page: Page, id: string) {
+  await page.goto(`/resumes/${id}`);
+  await expect(page.getByRole('list', { name: 'Conversation' })).toContainText(
     'Your platform work maps well to this role.',
   );
-  await expect(opened.page.getByText(/Summary: You will own/)).toBeVisible();
+  await expect(page.getByText(/Summary: You will own/)).toBeVisible();
   // The flow strip above the document grows by its steps once the resume's flow has loaded (the
   // resume list, its sends and the opportunity's submissions answer after the two lines above):
   // measured before that, the document moves down by the strip's growth after the page has been
   // scrolled, and a scroll check compares against a layout that is gone (#724). Its next-step
   // heading is that last change, so the geometry is read once it shows.
   await expect(
-    opened.page.getByRole('region', { name: 'Next step for this resume' }).getByRole('heading'),
+    page.getByRole('region', { name: 'Next step for this resume' }).getByRole('heading'),
   ).toBeVisible();
-  return opened;
 }
 
 test.describe('resume workspace chat column', () => {
@@ -891,68 +931,116 @@ const FOCUS_LOOKS: [string, Look][] = [
   ['forced colors', { forcedColors: 'active' }],
 ];
 
+/**
+ * `view` in each look, in one page: opened anew in each, so the focus starts where a view just opened
+ * has it, in the look it is opened in (#1031).
+ */
+async function inEachLook(
+  page: Page,
+  view: string,
+  open: () => Promise<unknown>,
+  check: (where: string) => Promise<void>,
+) {
+  for (const [lookName, look] of FOCUS_LOOKS) {
+    await test.step(`${view}, ${lookName}`, async () => {
+      await page.emulateMedia({
+        colorScheme: look.colorScheme ?? 'light',
+        forcedColors: look.forcedColors ?? 'none',
+      });
+      await open();
+      expect(
+        await page.evaluate(() => matchMedia('(forced-colors: active)').matches),
+        lookName,
+      ).toBe(look.forcedColors === 'active');
+      expect(await page.evaluate(() => document.documentElement.dataset.theme), lookName).toBe(
+        look.colorScheme ?? 'light',
+      );
+      await check(lookName);
+    });
+  }
+}
+
 test.describe('focus indicators are not cut off by scroll containers', () => {
   for (const width of [375, 1280, 1920]) {
-    for (const [lookName, look] of FOCUS_LOOKS) {
-      test(`${width}px, ${lookName}: pipeline row, Settings navigation, suggestion Apply`, async ({
-        browser,
-      }) => {
-        const tag = `focus clip ${lookName} ${width}`;
-        const { page, close } = await pageAt(browser, width, accounts.seed, look);
-        try {
-          const id = await seededOpportunity(page, tag);
-          await page.goto('/pipeline?view=table');
-          const row = page.locator(`tr[data-opportunity-id="${id}"]`);
-          await expect(row).toBeVisible();
-          await expectIndicatorWhole(page, 'the pipeline table row', row);
-        } finally {
-          await close();
-        }
+    test(`${width}px, light, dark and forced colors: pipeline row, Settings navigation, suggestion Apply`, async ({
+      browser,
+    }) => {
+      const tag = `focus clip ${width}`;
+      const { page, close } = await pageAt(browser, width, accounts.seed);
+      try {
+        const id = await seededOpportunity(page, tag);
+        const row = page.locator(`tr[data-opportunity-id="${id}"]`);
+        await inEachLook(
+          page,
+          'pipeline row',
+          async () => {
+            await page.goto('/pipeline?view=table');
+            await expect(row).toBeVisible();
+          },
+          (look) => expectIndicatorWhole(page, `${look}: the pipeline table row`, row),
+        );
+      } finally {
+        await close();
+      }
 
-        // The Settings navigation, as the admin, whose list is longest (Users and Jobs are
-        // admin-only), so it scrolls furthest on a phone. And its layout guard: padding the nav
-        // list's scroller (#70) must not move a link or add page scroll. So the first link still
-        // starts exactly where the navigation does, as it does without that padding, and the page
-        // is no wider than the window.
-        const admin = await pageAt(browser, width, accounts.admin, look);
-        try {
-          const page = admin.page;
-          await page.goto('/settings/account');
-          const nav = page.getByRole('navigation', { name: 'Settings sections' });
-          const links = nav.getByRole('link');
-          await expect(links.first()).toBeVisible();
-          const navBox = await nav.boundingBox();
-          const firstBox = await links.first().boundingBox();
-          const where = 'the first Settings link starts where the navigation does';
-          expect(firstBox?.x, where).toBeCloseTo(navBox?.x ?? Number.NaN, 1);
-          expect(firstBox?.y, where).toBeCloseTo(navBox?.y ?? Number.NaN, 1);
-          expect(
-            await page.evaluate(() => document.documentElement.scrollWidth),
-            'the page does not scroll sideways',
-          ).toBeLessThanOrEqual(width);
-          await expectIndicatorWhole(page, 'the first Settings link', links.first());
-          await expectIndicatorWhole(page, 'the last Settings link', links.last());
-          // Back again: on a phone the list is scrolled to its end by now.
-          await expectIndicatorWhole(
-            page,
-            'the first Settings link, reached with Shift+Tab',
-            links.first(),
-            true,
-          );
-        } finally {
-          await admin.close();
-        }
+      // The Settings navigation, as the admin, whose list is longest (Users and Jobs are
+      // admin-only), so it scrolls furthest on a phone. And its layout guard: padding the nav
+      // list's scroller (#70) must not move a link or add page scroll. So the first link still
+      // starts exactly where the navigation does, as it does without that padding, and the page
+      // is no wider than the window.
+      const admin = await pageAt(browser, width, accounts.admin);
+      try {
+        const page = admin.page;
+        const nav = page.getByRole('navigation', { name: 'Settings sections' });
+        const links = nav.getByRole('link');
+        await inEachLook(
+          page,
+          'Settings navigation',
+          async () => {
+            await page.goto('/settings/account');
+            await expect(links.first()).toBeVisible();
+          },
+          async (look) => {
+            const navBox = await nav.boundingBox();
+            const firstBox = await links.first().boundingBox();
+            const where = `${look}: the first Settings link starts where the navigation does`;
+            expect(firstBox?.x, where).toBeCloseTo(navBox?.x ?? Number.NaN, 1);
+            expect(firstBox?.y, where).toBeCloseTo(navBox?.y ?? Number.NaN, 1);
+            expect(
+              await page.evaluate(() => document.documentElement.scrollWidth),
+              `${look}: the page does not scroll sideways`,
+            ).toBeLessThanOrEqual(width);
+            await expectIndicatorWhole(page, `${look}: the first Settings link`, links.first());
+            await expectIndicatorWhole(page, `${look}: the last Settings link`, links.last());
+            // Back again: on a phone the list is scrolled to its end by now.
+            await expectIndicatorWhole(
+              page,
+              `${look}: the first Settings link, reached with Shift+Tab`,
+              links.first(),
+              true,
+            );
+          },
+        );
+      } finally {
+        await admin.close();
+      }
 
-        // A button inside the conversation's own scroll container (overflow-y: auto). Its own tag:
-        // the server refuses a second opportunity with the same company and title.
-        const workspace = await openWorkspace(browser, width, `${tag} workspace`, look);
-        try {
-          const apply = workspace.page.getByRole('button', { name: 'Apply' }).first();
-          await expectIndicatorWhole(workspace.page, 'the suggestion Apply button', apply);
-        } finally {
-          await workspace.close();
-        }
-      });
-    }
+      // A button inside the conversation's own scroll container (overflow-y: auto). Its own tag:
+      // the server refuses a second opportunity with the same company and title.
+      const workspace = await pageAt(browser, width, accounts.seed);
+      try {
+        const page = workspace.page;
+        const id = await seededWorkspace(page, `${tag} workspace`);
+        const apply = page.getByRole('button', { name: 'Apply' }).first();
+        await inEachLook(
+          page,
+          'suggestion Apply',
+          () => loadWorkspace(page, id),
+          (look) => expectIndicatorWhole(page, `${look}: the suggestion Apply button`, apply),
+        );
+      } finally {
+        await workspace.close();
+      }
+    });
   }
 });

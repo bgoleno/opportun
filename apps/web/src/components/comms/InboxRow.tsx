@@ -170,7 +170,7 @@ export function InboxRow({
             <Link
               to="/opportunities/$id"
               params={{ id: comm.opportunityId }}
-              className="font-medium text-foreground underline underline-offset-2"
+              className="font-medium text-foreground underline underline-offset-2 [overflow-wrap:anywhere]"
             >
               {comm.opportunityTitle}
               {comm.companyName ? ` at ${comm.companyName}` : ''}

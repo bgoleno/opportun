@@ -2,14 +2,14 @@
 // copies linked to an opportunity and to the base they were copied from.
 import { newId } from '@opportun/core';
 import { and, desc, eq, isNull, notExists, sql, type SQL } from 'drizzle-orm';
-import { attachments, resumes, settings } from '../db/schema';
+import { attachments, resumes, SCHEMA_DIALECT, settings } from '../db/schema';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
 import type { Db, Exec, UserCtx } from './base';
-import { ownedBy } from './base';
+import { ownedBy, ownedSql } from './base';
 import { holdOpportunity } from './activities';
 import { countWhere, type ListOpts, type Page } from './list';
-import { lockScope, withTransaction } from '../db/client';
+import { lockScope, rawGet, withTransaction } from '../db/client';
 import { hasSend, resumeScope } from './resumeSends';
 
 export type ResumeRow = typeof resumes.$inferSelect;
@@ -216,23 +216,72 @@ export type ResumeInsert = Pick<
   'kind' | 'title' | 'store' | 'docRef' | 'opportunityId' | 'parentResumeId'
 >;
 
-export async function insertResume(db: Db, ctx: UserCtx, input: ResumeInsert): Promise<ResumeRow> {
+async function insertIn(tx: Exec, ctx: UserCtx, input: ResumeInsert): Promise<ResumeRow> {
   const now = Date.now();
+  return await tx
+    .insert(resumes)
+    .values({
+      ...input,
+      id: newId(),
+      userId: ctx.userId,
+      status: 'draft',
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning()
+    .get();
+}
+
+export async function insertResume(db: Db, ctx: UserCtx, input: ResumeInsert): Promise<ResumeRow> {
   return await withTransaction(db, async (tx) => {
     // Gone since the caller read it is not found (#944), as for anything added to one (#925).
     if (input.opportunityId != null) await holdOpportunity(tx, ctx, input.opportunityId);
-    return await tx
-      .insert(resumes)
-      .values({
-        ...input,
-        id: newId(),
-        userId: ctx.userId,
-        status: 'draft',
-        createdAt: now,
-        updatedAt: now,
-      })
-      .returning()
-      .get();
+    return await insertIn(tx, ctx, input);
+  });
+}
+
+/** holdOpportunity for a base resume: there until the write commits, by its foreign key's lock. */
+async function holdResume(tx: Exec, ctx: UserCtx, id: string): Promise<void> {
+  const lock = SCHEMA_DIALECT === 'postgres' ? sql` FOR KEY SHARE` : sql``;
+  const row = await rawGet(
+    tx,
+    sql`SELECT id FROM resumes WHERE ${ownedSql('user_id', ctx)} AND id = ${id}${lock}`,
+  );
+  if (row === undefined) throw notFound();
+}
+
+/** Whether `hold` found what it is to keep there. */
+async function held(hold: Promise<void>): Promise<boolean> {
+  try {
+    await hold;
+    return true;
+  } catch (err) {
+    if (err instanceof HttpError && err.statusCode === 404) return false;
+    throw err;
+  }
+}
+
+/**
+ * The row of a copy that has been made in a resume store. Nothing refuses it any more
+ * (https://github.com/bgoleno/opportun/issues/962): the copy would be left behind, and the app removes
+ * nothing from a user's store. The opportunity and the base were the caller's own when the copy was
+ * asked for; one that went meanwhile is left out, as it would be had it gone a moment after this (both
+ * columns are ON DELETE SET NULL). An opportunity merged into another has gone.
+ */
+export async function insertCopiedResume(
+  db: Db,
+  ctx: UserCtx,
+  input: ResumeInsert & { opportunityId: string; parentResumeId: string },
+): Promise<ResumeRow> {
+  return await withTransaction(db, async (tx) => {
+    const opportunity = await held(holdOpportunity(tx, ctx, input.opportunityId));
+    const base = await held(holdResume(tx, ctx, input.parentResumeId));
+    await racePoint('resumes.copied.held');
+    return await insertIn(tx, ctx, {
+      ...input,
+      opportunityId: opportunity ? input.opportunityId : null,
+      parentResumeId: base ? input.parentResumeId : null,
+    });
   });
 }
 

@@ -23,6 +23,7 @@ import { indexActivity, indexOpportunity } from '../src/repos/search';
 import { useApi } from './api';
 import { queryAll, queryOne, sqliteOnly } from './db';
 import type { TestClient } from './isolation';
+import { PATIENCE_MS } from './patience';
 import { pauseAt } from './race';
 
 const boot = useApi();
@@ -57,7 +58,7 @@ const remove = (c: TestClient, id: string) =>
  * the parked one is let go and asserted after, so a failure leaves nothing parked.
  */
 async function someoneBlocked(app: FastifyInstance): Promise<boolean> {
-  const deadline = performance.now() + 5_000;
+  const deadline = performance.now() + PATIENCE_MS;
   for (;;) {
     const gate = writeGateOf(app.db);
     const n =

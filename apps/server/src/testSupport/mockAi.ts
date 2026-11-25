@@ -229,7 +229,20 @@ function structured(task: string, promptText: string): Record<string, unknown> {
         descriptionMd: null,
         postingUrl: null,
       };
-    case 'capture.linkedin':
+    case 'capture.linkedin': {
+      const stated = MOCK_CAPTURE_LOCATION.exec(promptText)?.[1];
+      if (stated !== undefined) {
+        return {
+          kind: 'job',
+          name: null,
+          headline: null,
+          company: null,
+          title: null,
+          location: stated,
+          compNote: null,
+          descriptionMd: null,
+        };
+      }
       // 'other' keeps the server's deterministic reading of the page.
       return {
         kind: 'other',
@@ -241,9 +254,10 @@ function structured(task: string, promptText: string): Record<string, unknown> {
         compNote: null,
         descriptionMd: null,
       };
+    }
     case 'capture.job':
       // Nothing stated: the recognizer's reading stands, as without AI.
-      return { location: null, compNote: null };
+      return { location: MOCK_CAPTURE_LOCATION.exec(promptText)?.[1] ?? null, compNote: null };
     case 'company.suggest':
       return { suggestions: [SUGGESTED_COMPANY] };
     case 'integration.diagnose':
@@ -301,6 +315,18 @@ const USAGE = { prompt_tokens: 120, completion_tokens: 40, total_tokens: 160 };
  * issue #692) without a way to change the budget itself.
  */
 export const MOCK_HEAVY_USAGE_MARKER = 'qa-mock: heavy usage';
+/**
+ * A captured page whose text has `qa-mock: location is <place>.` is read as a job there, so an e2e can
+ * give a capture a location: the real model reads it from the page, and the mock otherwise states
+ * none (apps/web/e2e/discoveryCapture.spec.ts, issue #970).
+ */
+const MOCK_CAPTURE_LOCATION = /qa-mock: location is ([^.\n]{1,80})\./;
+/**
+ * A captured page whose text has this is answered only after MOCK_CAPTURE_DELAY_MS: a capture still
+ * running when the user is back in Discovery (#970).
+ */
+export const MOCK_SLOW_CAPTURE_MARKER = 'qa-mock: slow capture';
+const MOCK_CAPTURE_DELAY_MS = 4_000;
 const HEAVY_USAGE = { prompt_tokens: 1_000_000, completion_tokens: 0, total_tokens: 1_000_000 };
 
 /** Registers the mock endpoint on the app (no session, outside /api, loopback callers only). */
@@ -314,6 +340,12 @@ export async function mockAiRoutes(app: FastifyInstance): Promise<void> {
       ? body.model.slice(MODEL_PREFIX.length)
       : body.model;
     const promptText = body.messages.map((m) => messageText(m.content)).join('\n');
+    if (
+      (task === 'capture.linkedin' || task === 'capture.job') &&
+      promptText.includes(MOCK_SLOW_CAPTURE_MARKER)
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, MOCK_CAPTURE_DELAY_MS));
+    }
     const id = `chatcmpl-mock-${Date.now()}`;
     const created = Math.floor(Date.now() / 1000);
 

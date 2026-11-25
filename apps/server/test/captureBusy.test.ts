@@ -6,9 +6,10 @@
 // lock itself for a bounded time. Either wait running out is 503 capture_busy with retry-after.
 // The provider is mocked and every posting is made up.
 import { AiUnavailableError, runStructured } from '@opportun/ai';
+import { AsyncResource } from 'node:async_hooks';
 import { newId } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
-import { and, eq, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import pg from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PostgresConfig } from '../src/config';
@@ -21,6 +22,7 @@ import {
   discoveryRuns,
   jobs,
   opportunities,
+  resumes,
 } from '../src/db/schema';
 import { POSTING_RECONCILE_KIND } from '../src/lib/jobKinds';
 import { CAPTURE_SLOT, withCaptureSlot } from '../src/lib/captureLimit';
@@ -35,6 +37,8 @@ import {
   transitionOpportunity,
   updateOpportunity,
 } from '../src/repos/opportunities';
+import { insertResume } from '../src/repos/resumes';
+import { createSubmissionDraft } from '../src/repos/submissions';
 import { useApi } from './api';
 import { queryOne, testDialect } from './db';
 import { JOB } from './fixtures/capture/pages';
@@ -725,6 +729,71 @@ describe('#914: a saved capture whose step gave up a wait', () => {
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toMatchObject({ opportunityId: id, stage: 'interested', filled: false });
     expect((await getOpportunity(app.db, ctxOf(a), id)).postingUrl).toBeNull();
+  });
+
+  // An application was started on it at each try of the fill's save (#913).
+  it('a save that gave up starting over: saved, and not filled', async () => {
+    const { app, a, bearer, id } = await capture();
+    failAt('opportunities.update.locked', () => new HttpError(409, 'conflict', 'Try again.'));
+    const res = await push(app, bearer);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ opportunityId: id, stage: 'interested', filled: false });
+    expect((await getOpportunity(app.db, ctxOf(a), id)).postingUrl).toBeNull();
+  });
+
+  // The same by three starts, each made once the fill has taken the lock of the one before (#913).
+  it.runIf(testDialect === 'postgres')(
+    'an application started at each try of the fill: saved, and not filled',
+    async () => {
+      const { app, a, bearer, id } = await capture();
+      const url = 'https://boards.greenhouse.io/initech/jobs/1000001';
+      await app.db
+        .update(opportunities)
+        .set({
+          stage: 'interested',
+          postingState: 'confirmed',
+          atsJobRef: { kind: 'ats_greenhouse', org: 'initech', externalId: '1000001', url },
+        })
+        .where(eq(opportunities.id, id))
+        .run();
+      const resume = await insertResume(app.db, ctxOf(a), {
+        kind: 'base',
+        title: 'Example Resume',
+        store: 'local_file',
+        docRef: `resumes/${newId()}.txt`,
+        opportunityId: null,
+        parentResumeId: null,
+      });
+      await app.db.update(resumes).set({ status: 'final' }).where(eq(resumes.id, resume.id)).run();
+      const made: string[] = [];
+      const start = AsyncResource.bind(async () => {
+        await app.db
+          .update(applicationSubmissions)
+          .set({ status: 'abandoned' })
+          .where(inArray(applicationSubmissions.id, made))
+          .run();
+        const { submission } = await createSubmissionDraft(app.db, ctxOf(a), id, {
+          idempotencyKey: newId(),
+          resumeId: resume.id,
+        });
+        made.push(submission.id);
+      });
+      onSlowTransaction(() => undefined);
+      setRaceHook(async (reached) => {
+        if (reached === 'opportunities.update.attemptLocked') await start();
+      });
+      const res = await push(app, bearer);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ opportunityId: id, filled: false });
+      expect(made).toHaveLength(3);
+      expect((await getOpportunity(app.db, ctxOf(a), id)).postingUrl).toBeNull();
+    },
+  );
+
+  it('control: another refusal in the fill fails the capture', async () => {
+    const { app, bearer } = await capture();
+    failAt('opportunities.update.locked', () => new HttpError(409, 'other', 'No.'));
+    expect((await push(app, bearer)).statusCode).toBe(409);
   });
 
   it('the step is logged by name, with nothing of the capture', async () => {

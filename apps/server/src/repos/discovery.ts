@@ -5,8 +5,10 @@ import { removeSchedule, setSchedule, userCronProblem } from '../lib/jobQueue';
 import {
   cardKey,
   dedupeGroupKey,
+  dedupeKey,
   newId,
   OPPORTUNITY_STAGES,
+  sameTitle,
   type Disposition,
   type NormalizedPosting,
   type RankSkipReason,
@@ -46,12 +48,13 @@ import { HttpError, notFound } from '../lib/errors';
 import { isBoardSource, prefilter, prefilterHolds, type PrefilterVerdict } from '../lib/prefilter';
 import { PREFILTER_ON_POSITIVES, PREFILTER_ON_RECALL_PERCENT } from '../lib/prefilter';
 import { DISCOVERY_RUN_KIND } from '../lib/jobKinds';
+import { racePoint } from '../lib/racePoints';
 import type { Db, Exec, UserCtx } from './base';
 import { ownedBy } from './base';
 import { getOpportunity } from './opportunities';
 import { countWhere, orderBy, sortColumns, type ListOpts, type Page } from './list';
 import { startOfUtcDay } from './taskRuns';
-import { runCount, withTransaction } from '../db/client';
+import { lockScope, runCount, withTransaction } from '../db/client';
 
 export type DiscoverySourceRow = typeof discoverySources.$inferSelect;
 export type DiscoveryRunRow = typeof discoveryRuns.$inferSelect;
@@ -728,47 +731,183 @@ export async function findChainTarget(
  * action here rather than implicit in another create, since discovery ingestion runs on its
  * own schedule with no "the user is creating something new" moment to hang it on.
  *
- * Only ever happens on this call: passive discovery polling never releases a key by itself, so
- * every already-decided result keeps suppressing exactly as before until a user acts on it.
- * Accepted results stay blocked unless their opportunity has itself been dismissed from the
- * pipeline (mirroring `hasLiveDuplicate`'s "dismissed means not live" rule) — while that
- * opportunity is still active, the key SHOULD keep blocking reposts of a job already tracked.
+ * Only ever happens on this call: passive discovery polling never releases a key by itself, and
+ * neither does deleting an opportunity (which says it is not wanted here, not that its job is wanted
+ * again: tl on https://github.com/bgoleno/opportun/issues/1008), so every already-decided result keeps
+ * suppressing exactly as before until a user acts on it. Accepted results stay blocked unless their
+ * opportunity has itself been dismissed from the pipeline, or deleted (mirroring `hasLiveDuplicate`'s
+ * "dismissed means not live" rule): while that opportunity is still there, the key SHOULD keep
+ * blocking reposts of a job already tracked.
+ *
+ * Decided and written under the user's lock, as accept, dismiss and undo are (routes/discovery.ts
+ * decidePending), and only where the row still is the one decided from: a writer without that lock
+ * (the dedupe-key repair, the purge) may have been at it.
  */
 export async function unsuppressResult(
   db: Db,
   ctx: UserCtx,
   id: string,
 ): Promise<DiscoveryResultView> {
-  const result = await getResult(db, ctx, id);
-  if (result.disposition === 'pending') throw new HttpError(409, 'already_pending');
-  if (result.disposition === 'accepted') {
-    if (result.opportunityId === null) throw new HttpError(409, 'no_linked_opportunity');
-    const opp = await getOpportunity(db, ctx, result.opportunityId);
-    if (opp.stage !== 'dismissed') {
+  return await withTransaction(db, async (tx) => {
+    await lockScope(tx, `user:${ctx.userId}`);
+    const result = await getResult(tx, ctx, id);
+    await racePoint('discovery.unsuppress.locked');
+    if (result.disposition === 'pending') {
+      // Its dismissal was undone (#927).
       throw new HttpError(
         409,
-        'opportunity_still_active',
-        "This job's opportunity is still in your pipeline. Dismiss the opportunity first, then unsuppress this result.",
+        'already_pending',
+        'This result is back in the review queue, so there is nothing to unsuppress. Decide on it there.',
         undefined,
         { userFacing: true },
       );
     }
+    // An accepted one with no opportunity had it deleted.
+    if (result.disposition === 'accepted' && result.opportunityId !== null) {
+      const opp = await getOpportunity(tx, ctx, result.opportunityId);
+      if (opp.stage !== 'dismissed') {
+        throw new HttpError(
+          409,
+          'opportunity_still_active',
+          "This job's opportunity is still in your pipeline. Dismiss the opportunity first, then unsuppress this result.",
+          undefined,
+          { userFacing: true },
+        );
+      }
+    }
+    if (result.dedupeKey === null) {
+      throw new HttpError(
+        409,
+        'not_suppressing',
+        'This result is already unsuppressed. There is nothing more to do.',
+        undefined,
+        { userFacing: true },
+      );
+    }
+    const written = await tx
+      .update(discoveryResults)
+      .set({ dedupeKey: null, updatedAt: Date.now() })
+      .where(
+        and(
+          ownedResult(ctx, id),
+          eq(discoveryResults.disposition, result.disposition),
+          eq(discoveryResults.dedupeKey, result.dedupeKey),
+          result.opportunityId === null
+            ? isNull(discoveryResults.opportunityId)
+            : eq(discoveryResults.opportunityId, result.opportunityId),
+        ),
+      )
+      .returning({ id: discoveryResults.id });
+    // Read again for the answer, and first for a row that is gone: not found.
+    const now = await getResult(tx, ctx, id);
+    if (written.length === 0) {
+      throw new HttpError(
+        409,
+        'result_changed',
+        'This result changed while it was being unsuppressed, so nothing was changed. Try again.',
+        undefined,
+        { userFacing: true },
+      );
+    }
+    return now;
+  });
+}
+
+/**
+ * Who holds a key, as Undo asks (the owner's job is "there already"): an opportunity with it that is
+ * not dismissed, or one a result with it was accepted into, or another pending result. The same whole
+ * title too (sameTitle), as at ingest: the key strips a level, and another level is another job
+ * (https://github.com/bgoleno/opportun/issues/967). Not another dismissed result, nor one whose
+ * opportunity is gone or dismissed: they hold the key, but the job is not there. Nor one ingest linked
+ * to a role since closed, which holds it only while its role is open
+ * (https://github.com/bgoleno/opportun/issues/990). `together`: results the same request has
+ * put back already, which do not count against the next.
+ */
+async function keyHolder(
+  tx: Exec,
+  ctx: UserCtx,
+  key: string,
+  title: string,
+  together: readonly string[],
+): Promise<{ opportunityId: string | null } | null> {
+  const own = await tx
+    .select({ id: opportunities.id, title: opportunities.title })
+    .from(opportunities)
+    .where(
+      and(
+        ownedBy(opportunities.userId, ctx),
+        eq(opportunities.dedupeKey, key),
+        ne(opportunities.stage, 'dismissed'),
+      ),
+    )
+    .get();
+  if (own !== undefined && sameTitle(own.title, title)) return { opportunityId: own.id };
+  const rows = (
+    await tx
+      .select({
+        id: discoveryResults.id,
+        disposition: discoveryResults.disposition,
+        rankSkipReason: discoveryResults.rankSkipReason,
+        title: jsonText(discoveryResults.posting, 'title'),
+        opportunityId: opportunities.id,
+        stage: opportunities.stage,
+      })
+      .from(discoveryResults)
+      .leftJoin(opportunities, eq(opportunities.id, discoveryResults.opportunityId))
+      .where(and(ownedBy(discoveryResults.userId, ctx), eq(discoveryResults.dedupeKey, key)))
+      .orderBy(asc(discoveryResults.createdAt), asc(discoveryResults.id))
+      .all()
+  ).filter((r) => r.title === null || sameTitle(r.title, title));
+  const accepted = rows.find(
+    (r) =>
+      r.disposition === 'accepted' &&
+      r.stage !== null &&
+      r.stage !== 'dismissed' &&
+      !(r.rankSkipReason === 'linked' && r.stage === 'closed'),
+  );
+  if (accepted !== undefined) return { opportunityId: accepted.opportunityId };
+  const pending = rows.some((r) => r.disposition === 'pending' && !together.includes(r.id));
+  return pending ? { opportunityId: null } : null;
+}
+
+/**
+ * Puts a dismissed result back in the queue, in the caller's transaction, which holds the user's lock
+ * and has read it since. One that was unsuppressed takes its key back, from its posting as ingest
+ * made it, so a repost's card groups with it; where the job is there by then (keyHolder) it stays
+ * dismissed, with its feedback. Never a pending result with no key
+ * (https://github.com/bgoleno/opportun/issues/1020). The ingest lock stays out of it (a run holds it,
+ * routes/discovery.ts decidePending): a run that has just found the key free may add a second row,
+ * which is the same card. After a purge of discovery content (jobs/purge.ts) the posting has no
+ * location left, so the key has none: a repost with one is a second row too, of the same card.
+ */
+export async function undoDismissal(
+  tx: Exec,
+  ctx: UserCtx,
+  result: DiscoveryResultView,
+  together: readonly string[],
+): Promise<{ restored: true } | { restored: false; opportunityId: string | null }> {
+  const { company, title, location } = result.posting;
+  // Written only where there was none: one that kept its key keeps what a writer without the user's
+  // lock (the dedupe-key repair) makes of it.
+  const key = result.dedupeKey === null ? dedupeKey(company, title, location) : undefined;
+  if (key !== undefined) {
+    const holder = await keyHolder(tx, ctx, key, title, together);
+    if (holder !== null) return { restored: false, ...holder };
   }
-  if (result.dedupeKey === null) {
-    throw new HttpError(
-      409,
-      'not_suppressing',
-      'This result is already unsuppressed. There is nothing more to do.',
-      undefined,
-      { userFacing: true },
-    );
-  }
-  await db
-    .update(discoveryResults)
-    .set({ dedupeKey: null, updatedAt: Date.now() })
-    .where(ownedResult(ctx, id))
+  await tx
+    .delete(dismissalFeedback)
+    .where(and(ownedBy(dismissalFeedback.userId, ctx), eq(dismissalFeedback.resultId, result.id)))
     .run();
-  return await getResult(db, ctx, id);
+  await tx
+    .update(discoveryResults)
+    .set({
+      disposition: 'pending',
+      ...(key === undefined ? {} : { dedupeKey: key }),
+      updatedAt: Date.now(),
+    })
+    .where(ownedResult(ctx, result.id))
+    .run();
+  return { restored: true };
 }
 
 /** The column as it is stored, on either engine: JSON text on SQLite, jsonb on Postgres. */

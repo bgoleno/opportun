@@ -12,6 +12,7 @@ import { submissionsEnabled, type Config } from './config';
 import { closeDatabase, connectDatabase, pingDatabase, type Db } from './db/client';
 import { configureGateWatchdog, gateHeldError } from './db/gate';
 import { SCHEMA_DIALECT } from './db/schema';
+import { httpStopPlugin } from './plugins/httpStop';
 import { obsHttpPlugin } from './plugins/obsHttp';
 import { securityPlugin } from './plugins/security';
 import { AI_CALL_LIMIT_MS, demoResetHoldPlugin } from './plugins/demoResetHold';
@@ -72,6 +73,7 @@ import { GMAIL_SYNC_ALL_CRON, GMAIL_SYNC_ALL_KIND } from './jobs/gmailSync';
 import { REFINE_CRON, REFINE_JOB_KIND } from './jobs/refineClassifyPrompt';
 import { DISCOVERY_REFINE_CRON, DISCOVERY_REFINE_KIND } from './jobs/refineDiscoveryPrompt';
 import { enqueueRepairAlertLeadsOnce } from './jobs/repairAlertLeads';
+import { enqueueTidyRejectedOnce } from './jobs/tidyRejected';
 import { enqueueRepairDedupeKeysOnce } from './jobs/repairDedupeKeys';
 import { enqueueBackfillAtsJobRefsOnce } from './jobs/atsJobRefBackfill';
 import { enqueueRepairCompanyMatchKeysOnce } from './jobs/companyMatchKeyRepair';
@@ -206,6 +208,8 @@ export interface BuildOptions {
     /** How long before a hold's bound its stop signal fires (#684). */
     stopMarginMs?: number;
   };
+  /** Instead of HTTP_STOP_MS (plugins/httpStop.ts): tests set a short one. */
+  httpStopMs?: number;
   /** Replaces the googleapis-backed client (tests inject a fake: no network). */
   google?: GoogleApi;
   /** Replaces the Google Docs document store. */
@@ -338,6 +342,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   app.setSerializerCompiler(serializerCompiler);
   // First, so its onRequest runs before every other hook and times the whole request (#343).
   await app.register(obsHttpPlugin);
+  await app.register(httpStopPlugin, { boundMs: opts.httpStopMs });
   await app.register(cookie);
   await app.register(securityPlugin, { hsts: cfg.baseUrl.startsWith('https:') });
 
@@ -495,6 +500,9 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // stage before this shipped (issue #239), so an opportunity reported before now does not
   // need to be moved again to pick one up. Guarded by its own marker, same reasoning as above.
   await enqueueCompanyDomainBackfillOnce(db);
+  // One-shot: what a message rejected before this release still holds. Queued at every start until
+  // a run has reached its end, which writes its own marker.
+  await enqueueTidyRejectedOnce(db);
   // Every posting check nothing is left to finish ends here (#869): before the runner's recovery,
   // and before any capture can arrive.
   await settleAbandonedChecks(db, app.log);

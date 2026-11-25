@@ -187,7 +187,9 @@ jobs:
     # main, so a broken main is still visible.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The whole suite on one server with one worker: 14 to 17 minutes before the capture workflow's
+    # spec, which adds about 3 (#970).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

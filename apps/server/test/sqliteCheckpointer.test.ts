@@ -36,9 +36,10 @@ import {
 import { readOperatorBytesAt } from '../src/lib/storage';
 import { sqliteOnly } from './db';
 import { openTestDb } from './helpers';
+import { PATIENCE_MS } from './patience';
 
-const until = async (check: () => boolean, ms = 10_000): Promise<void> => {
-  const end = Date.now() + ms;
+const until = async (check: () => boolean): Promise<void> => {
+  const end = Date.now() + PATIENCE_MS;
   while (!check()) {
     if (Date.now() > end) throw new Error('timed out');
     await new Promise((r) => setTimeout(r, 10));
@@ -54,6 +55,78 @@ async function write(h: SqliteHandle, rows: number): Promise<void> {
   for (let i = 0; i < rows; i++) {
     await rawRun(h.db, sql`INSERT INTO bench_383 (v) VALUES (${'x'.repeat(3_500)})`);
   }
+}
+
+/**
+ * Another connection, on a thread of its own, that holds the checkpoint lock as SQLite holds it for any
+ * checkpoint: wal_checkpoint(RESTART) keeps it while it waits for a reader with an older snapshot (until
+ * that reader ends, or its busy timeout). FULL is the same for a reader whose snapshot is not the last.
+ * One that finds the lock taken, by the worker's own checkpoint say, is refused at once, whatever its
+ * busy timeout (busy 1, log -1), so it is tried until it is not
+ * (https://github.com/bgoleno/opportun/issues/1033).
+ */
+function holdCheckpointLock(file: string, mode: 'RESTART' | 'FULL' = 'RESTART') {
+  const worker = new Worker(
+    `const { workerData, parentPort } = require('node:worker_threads');
+     const Database = require(workerData.driver);
+     const db = new Database(workerData.file);
+     db.pragma('busy_timeout = ' + workerData.busyMs);
+     const pause = new Int32Array(new SharedArrayBuffer(4));
+     for (;;) {
+       const [r] = db.pragma('wal_checkpoint(' + workerData.mode + ')');
+       if (r.busy === 0 || r.log !== -1) break;
+       parentPort.postMessage('refused');
+       Atomics.wait(pause, 0, 0, 5);
+     }
+     db.close();`,
+    {
+      eval: true,
+      workerData: {
+        driver: createRequire(import.meta.url).resolve('better-sqlite3'),
+        file,
+        mode,
+        busyMs: PATIENCE_MS,
+      },
+    },
+  );
+  let failed: unknown;
+  worker.on('error', (err) => (failed = err));
+  let refusals = 0;
+  worker.on('message', () => (refusals += 1));
+  const ended = new Promise<void>((r) => worker.once('exit', () => r()));
+  /** Until it has the lock; the lock is asked without a checkpoint, which could take it (#1033). */
+  const held = async (): Promise<void> => {
+    const probe = new Database(file, { timeout: 0 });
+    try {
+      await until(() => {
+        if (failed !== undefined) throw failed;
+        return writersKeptOut(probe);
+      });
+    } finally {
+      probe.close();
+    }
+  };
+  return {
+    held,
+    ended,
+    refusals: () => refusals,
+    stop: async () => void (await worker.terminate()),
+  };
+}
+
+/**
+ * Whether somebody keeps writers out now. A RESTART or a FULL does from before it copies anything, once it has the
+ * checkpoint lock, until it is done. Where nothing else writes, that is what tells it is there.
+ */
+function writersKeptOut(probe: Database.Database): boolean {
+  try {
+    probe.exec('BEGIN IMMEDIATE');
+  } catch (err) {
+    if ((err as { code?: string }).code === 'SQLITE_BUSY') return true;
+    throw err;
+  }
+  probe.exec('ROLLBACK');
+  return false;
 }
 
 const shmOf = (dataDir: string) => join(dataDir, 'opportun.db-shm');
@@ -351,7 +424,7 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       for (let burst = 0; burst < 6; burst++) {
         const before = h.checkpointer!.checkpoints;
         await write(h, 60);
-        await until(() => h.checkpointer!.checkpoints > before, 15_000);
+        await until(() => h.checkpointer!.checkpoints > before);
       }
       expect(h.checkpointer!.checkpoints).toBeGreaterThanOrEqual(6);
     } finally {
@@ -367,13 +440,10 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       checkpointerTuning: { maxPages: 50, maxWaitMs: 500, pollMs: 20 },
     });
     const file = join(opened.dataDir, 'opportun.db');
-    // The lock is held as SQLite holds it for any checkpoint: a second connection, on a thread of
-    // its own, runs wal_checkpoint(RESTART), which keeps the checkpoint lock while it waits for a
-    // reader with an older snapshot (here until that reader ends, or its busy timeout). While it
-    // does, the worker's own PASSIVE checkpoint gets busy with log -1, which the worker counts as
-    // held back.
+    // The lock is held by a RESTART that waits for a reader (holdCheckpointLock). While it does, the
+    // worker's own PASSIVE checkpoint gets busy with log -1, which the worker counts as held back.
     const reader = new Database(file, { readonly: true });
-    let holder: Worker | undefined;
+    let holder: ReturnType<typeof holdCheckpointLock> | undefined;
     try {
       const h = opened.handle as SqliteHandle;
       await h.checkpointer!.ready;
@@ -383,39 +453,72 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       // Frames after the reader's snapshot, below the size threshold: only the age bound calls
       // for their checkpoint, half a second on, while the lock is held.
       await write(h, 10);
-      const holding = new Promise<void>((resolve, reject) => {
-        holder = new Worker(
-          `const { workerData, parentPort } = require('node:worker_threads');
-           const Database = require(workerData.driver);
-           const db = new Database(workerData.file);
-           db.pragma('busy_timeout = 20000');
-           parentPort.postMessage('holding');
-           db.pragma('wal_checkpoint(RESTART)');
-           db.close();`,
-          {
-            eval: true,
-            workerData: { driver: createRequire(import.meta.url).resolve('better-sqlite3'), file },
-          },
-        );
-        holder.once('message', () => resolve());
-        holder.once('error', reject);
-      });
-      await holding;
+      holder = holdCheckpointLock(file);
+      await holder.held();
       const during = h.checkpointer!.checkpoints;
       // Past the age bound with the lock held: the worker's attempt did nothing, so none is counted.
       await new Promise((r) => setTimeout(r, 1_500));
       expect(h.checkpointer!.checkpoints).toBe(during);
       // Release: the reader ends, and the holder's RESTART copies what is left and finishes.
       reader.exec('COMMIT');
-      await new Promise<void>((resolve) => holder!.once('exit', () => resolve()));
+      await holder.ended;
       // A burst after the release: the worker checkpoints it once its retry delay has passed.
       const after = h.checkpointer!.checkpoints;
       await write(h, 60);
-      await until(() => h.checkpointer!.checkpoints > after, 15_000);
+      await until(() => h.checkpointer!.checkpoints > after);
     } finally {
       if (reader.inTransaction) reader.exec('COMMIT');
       reader.close();
-      await holder?.terminate();
+      await holder?.stop();
+      await opened.close();
+    }
+  });
+
+  // What the test above stands on (https://github.com/bgoleno/opportun/issues/1033): its holder met the
+  // lock taken, by the worker's checkpoint or by the test's own look at it, and ended without holding.
+  it('a holder whose first RESTART is refused at once still comes to hold the checkpoint lock', async () => {
+    const opened = await openTestDb();
+    const file = join(opened.dataDir, 'opportun.db');
+    const older = new Database(file, { readonly: true });
+    const latest = new Database(file, { readonly: true });
+    const read = (db: Database.Database) => {
+      db.exec('BEGIN');
+      db.prepare('SELECT count(*) FROM bench_383').get();
+    };
+    const holders: ReturnType<typeof holdCheckpointLock>[] = [];
+    const hold = (mode?: 'FULL') => {
+      const h = holdCheckpointLock(file, mode);
+      holders.push(h);
+      return h;
+    };
+    const probe = new Database(file, { timeout: 0 });
+    try {
+      const h = opened.handle as SqliteHandle;
+      await write(h, 1);
+      read(older);
+      await write(h, 10);
+      // Waits for the older snapshot only, so it lets go when the test says, and not by a clock.
+      const first = hold('FULL');
+      await first.held();
+      read(latest);
+      const second = hold();
+      await until(() => second.refusals() > 0);
+      older.exec('COMMIT');
+      await first.ended;
+      await second.held();
+      // And keeps it, as long as the reader it waits for is there.
+      await new Promise((r) => setTimeout(r, 300));
+      expect(writersKeptOut(probe)).toBe(true);
+      latest.exec('COMMIT');
+      await second.ended;
+      expect(writersKeptOut(probe)).toBe(false);
+    } finally {
+      for (const db of [older, latest]) {
+        if (db.inTransaction) db.exec('COMMIT');
+        db.close();
+      }
+      probe.close();
+      for (const held of holders) await held.stop();
       await opened.close();
     }
   });
@@ -453,7 +556,7 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       const started = Date.now();
       // Small writes back to back, one per turn of the loop: a frame is waiting at every look the
       // worker takes, the one straight after a checkpoint included. They go on until 3 s have
-      // passed and 3 checkpoints have come, whichever is later (at most 15 s): a busy machine
+      // passed and 3 checkpoints have come, whichever is later (at most PATIENCE_MS): a busy machine
       // can delay a checkpoint by more than its age bound, so a fixed window can miss one
       // (tl on #393), and the bound below is measured against the time the writes took.
       let writing = true;
@@ -464,10 +567,7 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
         }
       })();
       try {
-        await until(
-          () => Date.now() - started >= 3_000 && h.checkpointer!.checkpoints >= 3,
-          15_000,
-        );
+        await until(() => Date.now() - started >= 3_000 && h.checkpointer!.checkpoints >= 3);
       } finally {
         writing = false;
         await writer;
@@ -499,11 +599,14 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       // The first attempt, however long the worker takes to make it (#716: a fixed 800 ms wait
       // here failed on a loaded runner, where the worker had not tried yet).
       await until(() => h.checkpointer!.checkpoints - before >= 1);
+      const from = Date.now();
       const first = h.checkpointer!.checkpoints;
-      // Once held back, the next attempt waits a second (RETRY_MS): over the 800 ms from the
-      // first, at most one more, not one per poll (about 40 at this 20 ms poll).
+      // Once held back, the next attempt waits a second (RETRY_MS): at most one more per second the
+      // wait took, the part seconds at its ends included, and not one per poll (about 40 at this
+      // 20 ms poll). A busy host makes the wait longer than was asked (#948).
       await new Promise((r) => setTimeout(r, 800));
-      expect(h.checkpointer!.checkpoints - first).toBeLessThanOrEqual(1);
+      const most = Math.floor((Date.now() - from) / 1_000) + 2;
+      expect(h.checkpointer!.checkpoints - first).toBeLessThanOrEqual(most);
     } finally {
       if (reader.inTransaction) reader.exec('COMMIT');
       reader.close();
@@ -672,20 +775,32 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
       backgroundCheckpoint: true,
       checkpointerTuning: { pageSize: 512, pollMs: 20 },
     });
+    // Beside it, one that waits 8 s: the first to stop is the server's own. Measured against it and
+    // not the wall clock, which a busy host moves for both (#948).
+    const longer = startBackgroundCheckpointer(join(opened.dataDir, 'opportun.db'), {
+      pragmas: [],
+      pageSize: 512,
+      pollMs: 20,
+      unreadableMs: 8_000,
+      onStopped: () => undefined,
+    });
     try {
       const h = opened.handle as SqliteHandle;
-      const stop = await h.checkpointer!.stopped;
+      const stop = await Promise.race([
+        h.checkpointer!.stopped,
+        longer.stopped.then(() => 'the longer one first'),
+      ]);
+      if (typeof stop === 'string') throw new Error(stop);
       const elapsed = Date.now() - startedAt;
       expect(stop).toMatchObject({ unexpected: true });
       expect(elapsed).toBeGreaterThanOrEqual(5_000);
-      // About one poll after the limit; the margin is for a loaded machine.
-      expect(elapsed).toBeLessThan(8_000);
       const ms = /has not been readable for (\d+) ms$/.exec((stop.err as Error).message);
       expect(Number(ms?.[1])).toBeGreaterThan(5_000);
     } finally {
+      await longer.stop();
       await opened.close();
     }
-  }, 20_000);
+  });
 
   it('a header unreadable for a while and then readable again: the worker goes on, and checkpoints', async () => {
     const checkpoints: CheckpointRecord[] = [];
@@ -702,26 +817,28 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
         pageSize,
         maxPages: 50,
         pollMs: 20,
-        unreadableMs: 1_000,
+        unreadableMs: 5_000,
         onStopped: () => (stopped = true),
         onCheckpoint: (c) => checkpoints.push(c),
       });
       try {
         await cp.ready;
-        // Twice, each time for about 30 looks at a header it cannot read, with a few readable
-        // looks between: together longer than the limit, so a readable look must start it again.
+        // Twice, each time for many looks at a header it cannot read: together longer than the limit,
+        // so a readable look must start it again. Each is seconds short of the limit, and the
+        // checkpoint between them shows that the look was made: a busy host can neither stretch one
+        // past the limit nor miss the look (#948).
         for (let i = 0; i < 2; i++) {
           const restore = tearHeader(shm);
           expect(readWalIndex(shm, pageSize)).toBeUndefined();
-          await new Promise((r) => setTimeout(r, 600));
+          await new Promise((r) => setTimeout(r, 2_600));
           restore();
-          await new Promise((r) => setTimeout(r, 200));
+          expect(stopped).toBe(false);
+          const before = checkpoints.length;
+          await write(h, 100);
+          await until(() => checkpoints.length > before || stopped);
+          expect(stopped).toBe(false);
+          expect(checkpoints[before]).toMatchObject({ reason: 'size' });
         }
-        expect(stopped).toBe(false);
-        await write(h, 100);
-        await until(() => checkpoints.length > 0 || stopped);
-        expect(stopped).toBe(false);
-        expect(checkpoints[0]).toMatchObject({ reason: 'size' });
       } finally {
         await cp.stop();
       }
@@ -745,8 +862,9 @@ describe.runIf(sqliteOnly)('the background checkpointer (#383)', () => {
         pragmas: [],
         pageSize,
         maxPages: 50,
-        // The first look comes a poll after ready, so the tear below lands before it.
-        pollMs: 200,
+        // The first look comes a poll after ready, so the tear below lands before it: a second, for a
+        // busy host (#948).
+        pollMs: 1_000,
         unreadableMs: 300,
         onStopped: () => undefined,
         onCheckpoint: (c) => checkpoints.push(c),

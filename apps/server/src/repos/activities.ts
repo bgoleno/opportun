@@ -70,7 +70,8 @@ export async function assertOpportunityOwned(
  * keeps the opportunity there until the write commits. On Postgres a delete that has the row is
  * waited for, and the row then read is gone (404), where the insert would have failed on its foreign
  * key (#925). The lock is the one that foreign key takes, so adds don't wait for each other, nor for
- * a save of the opportunity. SQLite's write gate runs the two one after the other.
+ * a save of the opportunity, except one that changes its link, which holds the row as a delete does
+ * (#913). SQLite's write gate runs the two one after the other.
  */
 export async function holdOpportunity(
   tx: Exec,
@@ -520,7 +521,8 @@ const stageSource: TimelineSource = (scope) => sql`
   ${scope.opportunityId === undefined ? sql`` : sql`AND h.opportunity_id = ${scope.opportunityId}`}`;
 
 /** Which linked mail (alias `c`) the timeline shows; lastActivityAt uses the same test. */
-const MAIL_ON_TIMELINE = sql`(c.outreach_kind IS NULL OR c.outreach_kind NOT IN ('broadcast_spam', 'irrelevant'))`;
+const MAIL_ON_TIMELINE = sql`(c.rejected_at IS NULL
+  AND (c.outreach_kind IS NULL OR c.outreach_kind NOT IN ('broadcast_spam', 'irrelevant')))`;
 
 const communicationSource: TimelineSource = (scope) => sql`
   SELECT 'communication' AS kind, c.id AS id, c.opportunity_id AS opportunity_id,
@@ -752,13 +754,14 @@ export async function dashboard(db: Db, ctx: UserCtx, now = Date.now()): Promise
     { limit: RECENT_ACTIVITY, offset: 0 },
   );
 
-  // The Inbox "Needs review" view: flagged messages that are not spam or irrelevant outreach.
+  // The Inbox "Needs review" view: flagged messages that are not spam, irrelevant or rejected.
   const triage = await countWhere(
     db,
     communications,
     and(
       ownedBy(communications.userId, ctx),
       eq(communications.needsReview, true),
+      isNull(communications.rejectedAt),
       or(
         isNull(communications.outreachKind),
         notInArray(communications.outreachKind, ['broadcast_spam', 'irrelevant']),

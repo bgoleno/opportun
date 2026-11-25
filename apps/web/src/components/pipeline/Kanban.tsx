@@ -32,6 +32,7 @@ import {
   BOARD_GAP_CLASS,
   BOARD_SCROLLER_ATTR,
   boardKeyboardCoordinates,
+  bringIntoView,
   keyboardFirst,
   type KeyboardStep,
 } from './boardKeyboard';
@@ -56,6 +57,8 @@ export interface BoardColumn {
 function Column(props: {
   column: BoardColumn;
   onToggle: (stage: OpportunityStage) => void;
+  /** Expanded, it may be narrower than its width, down to 10rem (#997). */
+  shrinks: boolean;
   /** The column whose Expand or Collapse was last pressed, until its new control has focus. */
   toggled: MutableRefObject<OpportunityStage | null>;
   children: ReactNode;
@@ -70,6 +73,12 @@ function Column(props: {
   useLayoutEffect(() => {
     if (props.toggled.current !== stage) return;
     props.toggled.current = null;
+    // The end columns' own area may have to scroll to show the column, and on a phone, where the
+    // column is wider than the area, to show its control and the ring around it (#902).
+    if (isTerminal(stage)) {
+      bringIntoView(toggleRef.current?.closest('section'));
+      toggleRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    }
     toggleRef.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collapsed]);
@@ -82,8 +91,9 @@ function Column(props: {
       ref={setNodeRef}
       aria-label={`${name} column`}
       className={cn(
-        'flex shrink-0 flex-col gap-2 rounded-xl border bg-muted/60 p-2 transition-colors',
-        collapsed ? 'w-14 items-center' : 'w-72',
+        'flex flex-col gap-2 rounded-xl border bg-muted/60 p-2 transition-colors',
+        collapsed ? 'w-14 shrink-0 items-center' : 'w-72',
+        !collapsed && (props.shrinks ? 'min-w-40' : 'shrink-0'),
         isOver && 'border-primary bg-accent',
       )}
     >
@@ -117,7 +127,7 @@ function Column(props: {
                   aria-label={`Collapse ${name}`}
                   aria-expanded="true"
                   onClick={toggle}
-                  className="cursor-pointer rounded-sm p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                  className="scroll-mx-2 cursor-pointer rounded-sm p-1 text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   <ChevronsLeftRight className="size-4" aria-hidden="true" />
                 </button>
@@ -285,8 +295,25 @@ export function Kanban(props: {
     if (changes.length > 0) props.onReorder(changes);
   }
 
+  // Closed and dismissed sit outside the chain's scrolling area, so one of them is always on screen
+  // as a drop target. Both expanded can be wider than a narrow board (#902): the chain then keeps a
+  // whole column (or, on a phone, what two rails would leave it), and they scroll in an area of their
+  // own beside it. One expanded is wider than a phone's board (#997): the chain then keeps 7rem (or
+  // what is left), and the expanded one gives way down to 10rem beside the other's rail. With room
+  // for all, nothing gives way.
+  const chain = props.columns.filter((c) => !isTerminal(c.stage));
+  const terminal = props.columns.filter((c) => isTerminal(c.stage));
+  const bothExpanded = terminal.length > 1 && terminal.every((c) => !c.collapsed);
+  const oneExpanded = !bothExpanded && terminal.some((c) => !c.collapsed);
+
   const renderColumn = (column: BoardColumn) => (
-    <Column key={column.stage} column={column} onToggle={props.onToggleColumn} toggled={toggled}>
+    <Column
+      key={column.stage}
+      column={column}
+      onToggle={props.onToggleColumn}
+      shrinks={oneExpanded && isTerminal(column.stage)}
+      toggled={toggled}
+    >
       <SortableContext items={column.items.map((o) => o.id)} strategy={verticalListSortingStrategy}>
         {column.items.map((opp) => (
           <KanbanCard
@@ -305,9 +332,6 @@ export function Kanban(props: {
     </Column>
   );
 
-  // Closed and dismissed sit outside the scrolling area so they are always drop targets.
-  const chain = props.columns.filter((c) => !isTerminal(c.stage));
-  const terminal = props.columns.filter((c) => isTerminal(c.stage));
   order.current = [...chain, ...terminal].map((c) => c.stage);
   columnOfId.current = (id) => {
     const stage = OPPORTUNITY_STAGES.find((s) => s === id);
@@ -347,14 +371,35 @@ export function Kanban(props: {
       <div className={cn('flex items-start', BOARD_GAP_CLASS)}>
         {chain.length > 0 ? (
           <div
-            className={cn('flex min-w-0 flex-1 items-start overflow-x-auto pb-4', BOARD_GAP_CLASS)}
+            className={cn(
+              'flex min-w-0 flex-1 items-start overflow-x-auto pb-4',
+              BOARD_GAP_CLASS,
+              // eslint-disable-next-line opportun/no-arbitrary-width -- a column's width (w-72), or what two rails and their gaps (8.5rem) leave of a phone's: no token says either
+              bothExpanded && 'min-w-[min(18rem,calc(100%-8.5rem))]',
+              // eslint-disable-next-line opportun/no-arbitrary-width -- 7rem, or what a 10rem column, a rail and their gaps (15rem) leave of a phone's: no token says either
+              oneExpanded && 'min-w-[min(7rem,calc(100%-15rem))]',
+            )}
             {...{ [BOARD_SCROLLER_ATTR]: '' }}
           >
             {chain.map(renderColumn)}
           </div>
         ) : null}
         {terminal.length > 0 ? (
-          <div className={cn('flex shrink-0 items-start pb-4', BOARD_GAP_CLASS)}>
+          <div
+            className={cn(
+              'flex items-start pb-4',
+              BOARD_GAP_CLASS,
+              // Each fits the area, less the gap and a sliver of the other one (the sign that there
+              // is one, where scrollbars do not show), down to 10rem.
+              bothExpanded
+                ? // eslint-disable-next-line opportun/no-arbitrary-width -- the area's width less the gap and the sliver (1.25rem): no token says it
+                  'min-w-0 overflow-x-auto *:max-w-[calc(100%-1.25rem)] *:min-w-40'
+                : oneExpanded
+                  ? 'min-w-0'
+                  : 'shrink-0',
+            )}
+            {...{ [BOARD_SCROLLER_ATTR]: '' }}
+          >
             {terminal.map(renderColumn)}
           </div>
         ) : null}

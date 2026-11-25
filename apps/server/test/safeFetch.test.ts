@@ -19,6 +19,7 @@ import {
   type RawResponse,
   type SafeFetchDeps,
 } from '../src/lib/safeFetch';
+import { cpuMs } from './scaling';
 
 const PUBLIC_IP = '93.184.216.34';
 
@@ -233,11 +234,12 @@ describe('safeFetch', () => {
   });
 
   it('trailing dots are stripped from a long hostname', () => {
-    const started = performance.now();
+    // CPU time, which a busy host does not add to (#948).
+    const started = cpuMs();
     expect(isProhibitedHost(`a${'.'.repeat(100_000)}x`)).toBe(false);
     expect(isProhibitedHost(`linkedin.com${'.'.repeat(100_000)}`)).toBe(true);
     expect(isPageFetchProhibited(`www.indeed.com${'.'.repeat(100_000)}`)).toBe(true);
-    expect(performance.now() - started).toBeLessThan(500);
+    expect(cpuMs() - started).toBeLessThan(500);
   });
 
   it('follows up to 3 redirects (relative ones included) and blocks the 4th', async () => {

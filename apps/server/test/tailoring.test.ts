@@ -10,6 +10,7 @@ import { connectGoogle, fakeGoogle, type FakeGoogle } from './fakeGoogle';
 import { assertIsolated, type TestClient } from './isolation';
 import { BASE_DOC_ID, BASE_TEXT, createOpportunity, registerBase } from './resumeFixtures';
 import { exec, queryOne } from './db';
+import { PATIENCE_MS } from './patience';
 
 // The provider is always mocked: no network calls and no real keys in tests.
 vi.mock('../../../packages/ai/src/providers', async (importOriginal) => {
@@ -174,6 +175,31 @@ describe('tailoring sessions', () => {
     const next = await a.request({ method: 'POST', url: `/api/v1/resumes/${resume.id}/tailoring` });
     expect(next.json().id).not.toBe(sessionId);
     expect(next.json().messages).toEqual([]);
+  });
+
+  it('finishing a session finished already is refused in plain words, and changes nothing (#927)', async () => {
+    const { a } = await boot();
+    const { resume, sessionId } = await setup(a);
+    const finish = () =>
+      a.request({ method: 'POST', url: `/api/v1/tailoring/${sessionId}/complete` });
+    expect((await finish()).statusCode).toBe(200);
+    // Moved on since: a second finish must not put it back in review.
+    const moved = await a.request({
+      method: 'PATCH',
+      url: `/api/v1/resumes/${resume.id}`,
+      payload: { status: 'final' },
+    });
+    expect(moved.statusCode, moved.body).toBe(200);
+
+    const again = await finish();
+
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error).toEqual({
+      code: 'session_closed',
+      message: 'This tailoring session was already finished. There is nothing more to do.',
+    });
+    const now = await a.request({ method: 'GET', url: `/api/v1/resumes/${resume.id}` });
+    expect(now.json().status).toBe('final');
   });
 
   it('puts every active resume rule, fetched live, into the system prompt', async () => {
@@ -987,7 +1013,7 @@ describe('the demo reset gate and the streamed reply (#618)', () => {
     expect(gate.held).toBe(1);
     finish();
     // The handler saves what it has, then gives the hold back.
-    await expect.poll(() => gate.held, { timeout: 5000 }).toBe(0);
+    await expect.poll(() => gate.held, { timeout: PATIENCE_MS }).toBe(0);
     // The aborted client's socket can stay open on the server, and app.close() would wait for
     // it (CI's Node did, for the hook's whole 30 s): close it here.
     app.server.closeAllConnections();

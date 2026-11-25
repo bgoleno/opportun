@@ -328,12 +328,12 @@ one queue, and this page shows it so you can tell whether something is stuck wit
 server's logs. Other users who open the page are told that only an administrator can see the
 queue.
 
-- **The list** shows the 200 most recently changed jobs, newest first, and refreshes itself every
-  five seconds. Each row has the job's kind (and the user it runs for, when it runs for one), its
-  status, its last error if there is one, its attempts out of the most it may make, when it is
-  due and when it last changed.
-- **The status counts** above the list are for those 200 jobs. Press one to show only that
-  status, and press it again to show all.
+- **The list** shows the 200 most recently changed jobs, newest first, says how many more there
+  are, and refreshes itself every five seconds. Each row has the job's kind (and the user it runs
+  for, when it runs for one), its status, its last error if there is one, its attempts out of the
+  most it may make, when it is due and when it last changed.
+- **The status counts** above the list are for every job, listed or not. Press one to list the 200
+  most recently changed jobs of that status, and press it again to list every status.
   - **Queued**: waiting for its time, not yet tried.
   - **Running**: a worker has it.
   - **Retrying**: it has been tried at least once and is waiting to try again.
@@ -618,6 +618,11 @@ event and error records as logs, so in practice they stay in the instance.
 | `opportun.count.read`                   | whole number             | yes      |
 | `opportun.count.returned`               | whole number             | yes      |
 | `opportun.count.unmatched`              | whole number             | yes      |
+| `opportun.count.messages`               | whole number             | yes      |
+| `opportun.count.entries_blanked`        | whole number             | yes      |
+| `opportun.count.entries_left`           | whole number             | yes      |
+| `opportun.count.notes_cleared`          | whole number             | yes      |
+| `opportun.count.stage_notes_left`       | whole number             | yes      |
 | `opportun.count.set`                    | whole number             | yes      |
 | `opportun.count.changed`                | whole number             | yes      |
 | `opportun.count.cleared`                | whole number             | yes      |

@@ -490,7 +490,7 @@ describe('accept-transition', () => {
       .get();
     expect(last).toMatchObject({
       fromStage: 'in_process',
-      note: 'Proposed by message: Offer letter',
+      note: 'Proposed by a message',
     });
     expect((await comm(app, id)).proposedTransition).toBeNull();
     const again = await a.request({

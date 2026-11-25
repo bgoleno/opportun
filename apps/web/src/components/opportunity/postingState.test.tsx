@@ -2,11 +2,13 @@
 // search changes nothing when it cannot settle the posting, so the user has to be told, and
 // told somewhere they will act on: a banner on the opportunity, and a mark on the pipeline
 // card so it is visible without opening anything.
-import { screen, within } from '@testing-library/react';
+import { sha256Hex } from '@opportun/core';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { mockApi, renderWithProviders } from '@/test/render';
-import type { OpportunityView } from '@/lib/opportunities';
+import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
+import { qk, type OpportunityView } from '@/lib/opportunities';
+import { useOpportunity } from './api';
 import {
   PostingConfirmedStatus,
   PostingStateBanner,
@@ -450,6 +452,92 @@ describe('the Description card keeps a way to look the posting up', () => {
       calls.some((c) => c.method === 'POST' && c.path === '/opportunities/opp-1/posting/rederive'),
     ).toBe(true);
     expect(await screen.findByText(/re-derived from the capture/i)).toBeInTheDocument();
+  });
+
+  // #1010: the answer is about the description this page showed when it asked.
+  describe('Re-derive names the description it asked about', () => {
+    const SHOWN = 'What We Do: cybercrime is growing: café, 東京 🚀';
+    const SAVED = 'What I wrote in the other tab.';
+    const SENTENCE =
+      "This opportunity's description changed since this page showed it, so nothing was changed. Check the description, then try again.";
+    function Live() {
+      const { data } = useOpportunity('opp-1');
+      return data === undefined ? null : <DetailsPanel opp={data} />;
+    }
+    const rederives = (calls: ApiCall[]) =>
+      calls.filter((c) => c.path === '/opportunities/opp-1/posting/rederive');
+    const ask = async () => {
+      await userEvent.click(await screen.findByRole('button', { name: /re-derive from capture/i }));
+      return await screen.findByRole('dialog', { name: /re-derive this description/i });
+    };
+    const yes = async (dialog: HTMLElement) =>
+      await userEvent.click(within(dialog).getByRole('button', { name: /^re-derive$/i }));
+
+    it.each([
+      ['the description', SHOWN],
+      ['no description', null],
+    ])('%s: its fingerprint goes with the yes', async (_what, descriptionMd) => {
+      const { calls } = mockApi({
+        'GET /opportunities/opp-1/attachments': { items: [], total: 0 },
+        'POST /opportunities/opp-1/posting/rederive': { outcome: 'no_description_found' },
+      });
+      renderWithProviders(<DetailsPanel opp={opp({ descriptionMd, hasCapturedPage: true })} />);
+      await yes(await ask());
+      await waitFor(() => expect(rederives(calls)).toHaveLength(1));
+      expect(rederives(calls)[0]?.body).toEqual({
+        force: true,
+        replaceDescription: sha256Hex(descriptionMd ?? ''),
+      });
+    });
+
+    it('saved in another tab since: refused, said, and the current text shown', async () => {
+      const before = opp({ descriptionMd: SHOWN, hasCapturedPage: true });
+      let now = before;
+      const { calls } = mockApi({
+        'GET /opportunities/opp-1': () => now,
+        'GET /opportunities/opp-1/attachments': { items: [], total: 0 },
+        'POST /opportunities/opp-1/posting/rederive': {
+          status: 409,
+          body: { error: { code: 'description_changed', message: SENTENCE } },
+        },
+      });
+      renderWithProviders(<Live />);
+      const dialog = await ask();
+      now = { ...before, descriptionMd: SAVED, descriptionIsUserWritten: true };
+      await yes(dialog);
+      expect(await toastRegion().findByText(SENTENCE)).toBeInTheDocument();
+      expect(await screen.findByText(SAVED)).toBeInTheDocument();
+      expect(rederives(calls)[0]?.body).toMatchObject({ replaceDescription: sha256Hex(SHOWN) });
+      // Asked again, it names the edit, and what it would replace.
+      const again = await ask();
+      expect(again).toHaveTextContent(/edited this description by hand/i);
+      await yes(again);
+      await waitFor(() => expect(rederives(calls)).toHaveLength(2));
+      expect(rederives(calls)[1]?.body).toMatchObject({ replaceDescription: sha256Hex(SAVED) });
+    });
+
+    it('read again while it asks: the answer is still about what it showed', async () => {
+      const before = opp({ descriptionMd: SHOWN, hasCapturedPage: true });
+      let now = before;
+      const { calls } = mockApi({
+        'GET /opportunities/opp-1': () => now,
+        'GET /opportunities/opp-1/attachments': { items: [], total: 0 },
+        'POST /opportunities/opp-1/posting/rederive': {
+          status: 409,
+          body: { error: { code: 'description_changed', message: SENTENCE } },
+        },
+      });
+      const { queryClient } = renderWithProviders(<Live />);
+      const dialog = await ask();
+      now = { ...before, descriptionMd: SAVED, descriptionIsUserWritten: true };
+      await act(() => queryClient.invalidateQueries({ queryKey: qk.opportunity('opp-1') }));
+      expect(await screen.findByText(SAVED)).toBeInTheDocument();
+      // Its words too: it does not start to speak of an edit it did not ask about.
+      expect(dialog).not.toHaveTextContent(/edited this description by hand/i);
+      await yes(dialog);
+      await waitFor(() => expect(rederives(calls)).toHaveLength(1));
+      expect(rederives(calls)[0]?.body).toMatchObject({ replaceDescription: sha256Hex(SHOWN) });
+    });
   });
 
   it('says so, and changes nothing, when the capture carries no description', async () => {

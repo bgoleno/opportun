@@ -27,15 +27,15 @@ const CENTRE_DROP = 40;
 export const BOARD_GAP_CLASS = 'gap-3';
 const BOARD_GAP_PX = 12;
 
-/** Marks the board's scrolling area: the chain's columns, beside the pinned terminal ones. */
+/** Marks the board's scrolling areas: the chain's columns, and beside it the terminal ones. */
 export const BOARD_SCROLLER_ATTR = 'data-board-scroller';
 
 /**
- * The part of a droppable's rectangle that is on screen (#833, qa): a chain column scrolled
- * partly out of the board's scrolling area keeps its whole rectangle, which then overlaps the
- * terminal columns pinned beside that area (an expanded Dismissed column covers the end of
- * Offer). Clipped to the area, a hidden part is never "under" the card. Null when none of it is
- * on screen; the rectangle itself for a droppable outside the area (or with no node, in tests).
+ * The part of a droppable's rectangle that is on screen (#833, qa): a column scrolled partly out of
+ * its scrolling area keeps its whole rectangle, which then overlaps what is beside that area (an
+ * expanded Dismissed column covers the end of Offer). Clipped to the area, a hidden part is never
+ * "under" the card. Null when none of it is on screen; the rectangle itself for a droppable outside
+ * both areas (or with no node, in tests).
  */
 export function visibleRect(
   rect: ClientRect,
@@ -64,10 +64,11 @@ export interface KeyboardStep {
 }
 
 /**
- * Scrolls the board's area, at once, so that a chain column is in view, centred when it is wider
- * than the area. A pinned terminal column is always in view.
+ * Scrolls the area a column is in, at once and sideways only, so that the column is in view, centred
+ * when it is wider than the area. The terminal columns' area has something to scroll only when both
+ * are expanded on a narrow board (#902).
  */
-function bringIntoView(target: HTMLElement | null | undefined) {
+export function bringIntoView(target: HTMLElement | null | undefined) {
   const area = target?.closest(`[${BOARD_SCROLLER_ATTR}]`);
   if (target == null || area == null) return;
   const a = area.getBoundingClientRect();

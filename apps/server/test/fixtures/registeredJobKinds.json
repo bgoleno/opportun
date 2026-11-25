@@ -4,6 +4,7 @@
   "comms.classify",
   "comms.classify_backfill",
   "comms.refine_prompt",
+  "comms.tidy_rejected",
   "companies.repair_match_keys",
   "company.ats_detect",
   "company.ats_reverify",

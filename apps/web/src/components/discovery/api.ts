@@ -571,12 +571,9 @@ export function useUnsuppressResult() {
         );
       }
     },
-    // A refusal means the row on screen may be out of date: unsuppressed elsewhere, say (#896).
-    onError: async () => {
-      await Promise.all(
-        DECIDED_TABS.map((tab) => qc.invalidateQueries({ queryKey: discoveryKeys.decided(tab) })),
-      );
-    },
+    // A refusal means the row on screen may be out of date: unsuppressed elsewhere, say (#896), or
+    // back in the queue (#927).
+    onError: () => qc.invalidateQueries({ queryKey: discoveryKeys.results }),
   });
 }
 
