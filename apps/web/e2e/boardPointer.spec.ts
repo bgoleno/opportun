@@ -3,6 +3,7 @@
 // chain column scrolled behind a pinned end column was under the pointer too, and could win.
 // The oracle is the page's own: what is drawn under the pointer as it is released.
 import { expect, test, type Page } from '@playwright/test';
+import { announced, dialogIs, frames } from './boardDrag';
 import { card, createOpportunity, registerUser } from './helpers';
 
 const TITLE = 'Engineer';
@@ -104,6 +105,7 @@ async function pickUp(page: Page, company: string) {
   await page.mouse.move(x, box.y + 14);
   await page.mouse.down();
   await page.mouse.move(x + 10, box.y + 22, { steps: 4 });
+  await announced(page, `${name(company)} is over the New column.`);
   await expect(liveRegion(page), 'picked up').toContainText(`${name(company)} is over the New`);
   return { x: x + 10, y: box.y + 22 };
 }
@@ -140,16 +142,20 @@ async function rest(page: Page) {
   await page.evaluate(() => {
     for (const a of document.querySelectorAll('[data-board-scroller]')) a.scrollLeft = 0;
   });
-  await page.waitForTimeout(150);
+  await frames(page);
 }
 
-// At 768 px with both expanded no chain column is on screen to drag from (#902).
+// At 768 px with both expanded the end columns scroll in an area of their own: boardNarrow.spec.ts. The
+// collapsed layout was right before #960 as well: two widths hold it (#966).
 const LAYOUTS: { expanded: string[]; widths: number[] }[] = [
-  { expanded: [], widths: [768, 900, 1024, 1280, 1920] },
+  { expanded: [], widths: [768, 1280] },
   { expanded: ['Dismissed'], widths: [768, 900, 1024, 1280, 1920] },
   { expanded: ['Closed'], widths: [768, 1280] },
   { expanded: ['Dismissed', 'Closed'], widths: [1024, 1280, 1920] },
 ];
+
+/** The one width of each layout at which a drop is made after the board has come to rest too (#966). */
+const REST_AT = 1280;
 
 /** At once across the column, as a hand moves it and faster; and after the board has come to rest. */
 const DROPS: { how: How; wait: number; at: number }[] = [
@@ -172,6 +178,7 @@ for (const { expanded, widths } of LAYOUTS) {
       await board(page, expanded, width, 1);
       for (const end of ['Dismissed', 'Closed']) {
         for (const { how, wait, at } of DROPS) {
+          if (wait > 0 && width !== REST_AT) continue;
           const where = `${end}, ${how}, after ${wait} ms, at ${at}`;
           await rest(page);
           const v = await visible(page, end);
@@ -182,11 +189,13 @@ for (const { expanded, widths } of LAYOUTS) {
           const r = await lastRelease(page);
           expect(r.drawn, where).toBe(end);
           expect.soft(r.shown, where).toBe(end);
-          await expect(liveRegion(page), where).toHaveText(
-            `${name('Contoso 0')} is waiting for a reason to move to the ${end} column. Choose one in the dialog, or cancel to leave it where it is.`,
-          );
+          const waiting = `${name('Contoso 0')} is waiting for a reason to move to the ${end} column. Choose one in the dialog, or cancel to leave it where it is.`;
+          await announced(page, waiting);
+          await expect(liveRegion(page), where).toHaveText(waiting);
+          await dialogIs(page, true);
           await expect(page.getByRole('dialog'), where).toBeVisible();
           await page.keyboard.press('Escape');
+          await dialogIs(page, false);
           await expect(page.getByRole('dialog')).toBeHidden();
           expect((await stored(page)).get('Contoso 0'), where).toBe('discovered');
           expect(await onScreen(page), where).toEqual([['Contoso 0', 'New']]);
