@@ -13,6 +13,7 @@
 // tables either way (dialect erasure, db/schema.ts); the Postgres database is shimmed to the
 // same surface (builder .get()/.all()/.run(), raw helpers, runCount, unwrapped errors).
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { Socket } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
@@ -207,7 +208,7 @@ export async function migrateLockedPg(
   const client = await pool.connect();
   let broken: unknown;
   try {
-    await client.query(`SET statement_timeout = ${MIGRATION_LOCK_TIMEOUT_MS}`);
+    await setStatementTimeout(client, MIGRATION_LOCK_TIMEOUT_MS);
     await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
     try {
       await client.query('BEGIN');
@@ -241,7 +242,7 @@ export async function migrateLockedPg(
     } finally {
       await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]);
     }
-    await client.query('RESET statement_timeout');
+    await resetStatementTimeout(client);
   } catch (err) {
     broken = err;
     throw scrubPgError(err);
@@ -756,6 +757,18 @@ const pgTransactionContext = new AsyncLocalStorage<PgConn>();
 /** Per-statement ceiling on Postgres (a runaway query, a lock wait). */
 const STATEMENT_TIMEOUT_MS = 30_000;
 
+/**
+ * How much longer than its statement_timeout a Postgres connection may say nothing with a statement in
+ * flight (https://github.com/bgoleno/opportun/issues/981): a host that vanished without closing its
+ * connections was waited for until TCP gave up, some 15 minutes, by the statement and by the server's
+ * stop. A live server has answered or cancelled a statement by its own limit, so one that is only long
+ * is never cut. The end of a transaction is not under that limit: Postgres switches it off before it
+ * commits, and a COMMIT (and the commit of a statement of its own) can wait longer, for a slow flush, a
+ * synchronous standby or a deferred constraint. That is what most of this is for. One silent for longer
+ * is cut with its outcome unknown, and nothing tries it again.
+ */
+const SILENCE_GRACE_MS = 30_000;
+
 /** int8 as a JS number; refuses, rather than rounds, a value beyond 2^53. */
 function parseInt8(text: string): number {
   const n = Number(text);
@@ -846,6 +859,84 @@ export function pgPoolConfig(cfg: PostgresConfig): PoolConfig {
 }
 
 /**
+ * What is read of a connection that is not in pg's types: its own fields (pg 8.23). Its stream is taken
+ * at the pool's `connect`, as TLS puts another in its place while it starts.
+ */
+interface ClientInternals {
+  connection?: { stream?: unknown };
+  /** False from a statement's sending until Postgres is ready for the next one. */
+  readyForQuery?: boolean;
+  /** Being ended. */
+  _ending?: boolean;
+  /** What the connection asked for: the URL's value where it has one, as pg lets it win. */
+  connectionParameters?: { statement_timeout?: unknown };
+}
+
+/** A connection whose statement had no answer in the time there is for one (boundSilence). */
+class ConnectionSilent extends Error {
+  constructor(ms: number) {
+    super(
+      `Postgres said nothing for ${ms} ms with a statement in flight: the connection is closed`,
+    );
+    this.name = 'ConnectionSilent';
+  }
+}
+
+function streamOf(client: unknown): Socket | undefined {
+  const stream = (client as ClientInternals).connection?.stream;
+  return stream instanceof Socket ? stream : undefined;
+}
+
+/**
+ * How long the connection may be silent, for a statement_timeout; 0, for as long as it likes, where
+ * Postgres has no limit either. Read as pg sends it: the number the value begins with, in milliseconds,
+ * so `120000ms` is that and `2min` is 2 ms, on the server too. `options=-c statement_timeout=...` in
+ * the URL is not read, as the parameter beside it wins; nor is the limit of a server behind a pooler
+ * that drops the parameter.
+ */
+function silenceMs(statementTimeout: unknown): number {
+  const ms = Number.parseInt(String(statementTimeout), 10);
+  return ms > 0 ? ms + SILENCE_GRACE_MS : 0;
+}
+
+/**
+ * Closes the connection when it has been silent for too long (SILENCE_GRACE_MS) with a statement in
+ * flight, or while it is being ended. A bound on the silence and not pg's `query_timeout`, which counts
+ * a statement's wait for those before it on its connection, and leaves the connection open with the
+ * statement on it. Nothing in flight, a transaction's connection between two statements included, is
+ * left alone: node's timer fires once and begins again with the next byte either way. From the error
+ * on, all is as for a connection that Postgres cut (watchConnections).
+ */
+function boundSilence(client: unknown): void {
+  const stream = streamOf(client);
+  if (stream === undefined) return;
+  const own = client as ClientInternals;
+  stream.setTimeout(silenceMs(own.connectionParameters?.statement_timeout));
+  stream.on('timeout', () => {
+    const heard = stream.bytesRead;
+    // A turn later: a process that stood still reads first what has come meanwhile.
+    setImmediate(() => {
+      if (stream.bytesRead !== heard) return;
+      if (own.readyForQuery === true && own._ending !== true) return;
+      stream.destroy(new ConnectionSilent(stream.timeout ?? 0));
+    });
+  });
+}
+
+/** Raises the connection's statement_timeout, and how long it may be silent with it. */
+async function setStatementTimeout(client: pg.PoolClient, ms: number): Promise<void> {
+  streamOf(client)?.setTimeout(silenceMs(ms));
+  await client.query(`SET statement_timeout = ${ms}`);
+}
+
+/** Puts both back. Where it is not reached the connection goes (migrateLockedPg's release). */
+async function resetStatementTimeout(client: pg.PoolClient): Promise<void> {
+  await client.query('RESET statement_timeout');
+  const { connectionParameters } = client as unknown as ClientInternals;
+  streamOf(client)?.setTimeout(silenceMs(connectionParameters?.statement_timeout));
+}
+
+/**
  * Listens for the errors of every connection `pool` makes, from before it is first used, and logs
  * the end of each once (https://github.com/bgoleno/opportun/issues/963). An 'error' event nobody
  * listens for is an uncaught exception, which ends the process. pg-pool listens to a connection only
@@ -868,6 +959,7 @@ export function watchConnections(
   };
   pool.on('connect', (client) => {
     client.on('error', (err: Error) => once(client, err));
+    boundSilence(client);
   });
   pool.on('error', (err, client) => once(client, err));
   return pool;
