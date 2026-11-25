@@ -2,7 +2,7 @@
 // public, unauthenticated board API through sctx.fetch (safeFetch) with exactly its own API host
 // allowed. Values are passed on raw: the engine sanitizes every posting before storing it, so the
 // helpers here only pick fields out of untyped JSON without trusting their types.
-import type { HostRule } from '@opportun/core';
+import type { ExactHost } from '@opportun/core';
 import { AtsConfig, SourceConfigError, type SourceContext } from '../discoverySource';
 
 /** Board responses can be large (Greenhouse with content=true); still bounded. */
@@ -23,8 +23,8 @@ export function atsOrg(config: unknown): string {
 export async function fetchBoardJson(
   sctx: SourceContext,
   url: string,
-  /** The host the URL is on: a plain host (and its subdomains), or a site's exact HostRule. */
-  host: string | HostRule,
+  /** The host the URL is on: a plain host (and its subdomains), or a site's exact one. */
+  host: string | ExactHost,
   label: string,
   org: string,
 ): Promise<unknown> {

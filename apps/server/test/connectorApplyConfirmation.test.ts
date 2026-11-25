@@ -279,16 +279,19 @@ describe('POST /connector/apply/:id/confirmation (#121)', () => {
       'https://globex.wd1.myworkdayjobs.com/en-US/External/job/X/Engineer_JR-000001',
       'https://acme.wd1.myworkdayjobs.com/en-US/Internal/job/X/Engineer_JR-000001',
       'https://wd1.myworkdaysite.com/recruiting/globex/External/job/X',
+      // Workday's domain, but no tenant's host: read as a link, never as the application's site.
+      'https://acme.myworkdayjobs.com/',
+      'https://wd1.myworkdayjobs.com/',
     ];
     for (const [i, url] of refused.entries()) {
       const s = await submittedAttempt(app, a, { ats: workday(i + 1), title: `Role ${i}` });
       const res = await record(app, t, s.id, page(url));
       expect(res.statusCode, `${url}: ${res.body}`).toBe(422);
     }
-    const s1 = await submittedAttempt(app, a, { ats: workday(7), title: 'Platform Engineer' });
-    const thanks = `${workday(7).url}/apply/applyManually/thanks`;
+    const s1 = await submittedAttempt(app, a, { ats: workday(8), title: 'Platform Engineer' });
+    const thanks = `${workday(8).url}/apply/applyManually/thanks`;
     expect((await record(app, t, s1.id, page(thanks))).statusCode).toBe(200);
-    const s2 = await submittedAttempt(app, a, { ats: workday(8), title: 'Data Engineer' });
+    const s2 = await submittedAttempt(app, a, { ats: workday(9), title: 'Data Engineer' });
     const root = 'https://acme.wd1.myworkdayjobs.com/';
     expect((await record(app, t, s2.id, page(root))).statusCode).toBe(200);
   });

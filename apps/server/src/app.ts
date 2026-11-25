@@ -73,10 +73,8 @@ import { connectorMailRoutes } from './routes/connectorMail';
 import { GMAIL_SYNC_ALL_CRON, GMAIL_SYNC_ALL_KIND } from './jobs/gmailSync';
 import { REFINE_CRON, REFINE_JOB_KIND } from './jobs/refineClassifyPrompt';
 import { DISCOVERY_REFINE_CRON, DISCOVERY_REFINE_KIND } from './jobs/refineDiscoveryPrompt';
-import { enqueueRepairAlertLeadsOnce } from './jobs/repairAlertLeads';
 import { enqueueTidyRejectedOnce } from './jobs/tidyRejected';
 import { enqueueBackfillAtsJobRefsOnce } from './jobs/atsJobRefBackfill';
-import { enqueueRepairCompanyMatchKeysOnce } from './jobs/companyMatchKeyRepair';
 import { enqueueCompanyDomainBackfillOnce } from './jobs/companyDomainResolve';
 import { OPPORTUNITY_DEDUPE_AI_CRON, OPPORTUNITY_DEDUPE_AI_KIND } from './jobs/opportunityDedupeAi';
 import { RETRY_WORKDAY_CAPTURE_CRON, RETRY_WORKDAY_CAPTURE_KIND } from './jobs/retryWorkdayCapture';
@@ -485,14 +483,8 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   await seedSchedule(db, RETRY_WORKDAY_CAPTURE_KIND, RETRY_WORKDAY_CAPTURE_CRON);
   // Daily: resolve a near-miss duplicate pair the heuristic left pending (issue #94).
   await seedSchedule(db, OPPORTUNITY_DEDUPE_AI_KIND, OPPORTUNITY_DEDUPE_AI_CRON);
-  // One-shot: repair alert leads the pre-fix LinkedIn parser shifted. Guarded by its own
-  // marker, so this is a no-op on every boot after the first.
-  await enqueueRepairAlertLeadsOnce(db);
-  // One-shot: backfill company_match_key for companies written before that column existed
-  // (issue #193). Guarded by its own marker, same reasoning as the one above.
-  await enqueueRepairCompanyMatchKeysOnce(db);
   // One-shot: give every confirmed posting on a recognised board the ATS identity an attach did
-  // not record before issue #137. Guarded by its own marker, same reasoning as above.
+  // not record before issue #137. Guarded by its own marker, so this is a no-op at every later boot.
   await enqueueBackfillAtsJobRefsOnce(db);
   // One-shot: resolve a homepage for every company already sitting in an active pipeline
   // stage before this shipped (issue #239), so an opportunity reported before now does not

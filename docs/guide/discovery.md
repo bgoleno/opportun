@@ -284,8 +284,9 @@ On any result:
   [Pipeline](pipeline.md#possible-duplicates)). If it is another location of a role in your
   pipeline, it is linked to that opportunity (see
   [A job already in your pipeline](#a-job-already-in-your-pipeline)).
-- **Dismiss** asks for a reason (Seniority, Compensation, Location, Industry, Company,
-  Stale, Other) and an optional note.
+- **Dismiss** asks for a reason (Seniority, Compensation, Location, Industry, Role fit, Company,
+  Stale, Not interested, Duplicate, Other) and an optional note. The same reasons are offered for
+  several results at once.
 - A role posted in several locations is one card, with **Accept all** and **Dismiss all**: accepting
   it makes one opportunity, with the other postings on its timeline. The same title at another level
   ("Senior" and "Principal") is another card.
@@ -434,6 +435,8 @@ one limit with the browser extension, 60 captures per 15 minutes for your accoun
 reached, the dialog says when you can capture again.
 If the job is already in your pipeline at another location, the dialog says the posting was linked
 to that opportunity, with **View opportunity**.
+If the company is on your denied list, the dialog says so: the posting is not added to the queue but
+put in **Decided** as dismissed, with **View Decided**.
 If another capture of yours is still being saved, the dialog says so and to wait a few
 seconds and press **Capture** again; that is not a limit.
 

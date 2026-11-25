@@ -361,11 +361,10 @@ export const companies = sqliteTable(
     atsRef: text('ats_ref'),
     atsVerifiedAt: integer('ats_verified_at'),
     notes: text('notes'),
-    /** companyMatchKey(name) from @opportun/core, kept in step with name (issue #193). Null
-     *  for a row written before this column existed, until the one-shot repair backfills it
-     *  (companyMatchKeyRepair.ts); the near-miss dedupe scan simply finds no match for such a
-     *  row's opportunities until then, the same way it would for a brand-new company whose
-     *  heuristic has not run yet. */
+    /** companyMatchKey(name) from @opportun/core, kept in step with name (issue #193). Null only for
+     *  a row stored before this column existed, which no public version did; nothing fills it in (#1034).
+     *  The near-miss dedupe scan finds such a row's opportunities all the same, by its name
+     *  (repos/opportunityDedupe.ts findMatches). */
     companyMatchKey: text('company_match_key'),
     /**
      * A NAICS 2022 industry group, from the discovery.company_tags task or the user's correction

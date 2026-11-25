@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   CLOSED_REASONS,
-  DISMISS_REASONS,
+  MANUAL_DISMISS_REASONS,
   type ClosedReason,
   type DismissReason,
 } from '@opportun/core';
@@ -65,13 +65,7 @@ export function StageReasonDialog(props: {
   const reasons =
     kind === 'closed'
       ? CLOSED_REASONS.map((r) => [r, closedReasonLabel(r)] as const)
-      : // denied_company (#199) is assigned only by the system, when discovery auto-suppresses
-        // a posting at ingest time -- an opportunity reaching this dialog was never such a
-        // suppression (it exists at all, so it was created, imported or accepted), so offering
-        // it here would be a choice with no situation it could ever correctly describe.
-        DISMISS_REASONS.filter((r) => r !== 'denied_company').map(
-          (r) => [r, dismissReasonLabel(r)] as const,
-        );
+      : MANUAL_DISMISS_REASONS.map((r) => [r, dismissReasonLabel(r)] as const);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(FormSchema),

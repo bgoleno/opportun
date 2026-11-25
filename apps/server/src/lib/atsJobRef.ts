@@ -14,7 +14,13 @@
 // Requisition ids are not all digits (`1000001`, `1000002-1`, `JR-000001`): the id is whatever
 // follows the last underscore. Reading one needs no network at all.
 import { boardFromUrl, type AtsBoard, type AtsKind } from './atsBoard';
-import { ATS_SITES, greenhouse, greenhouseBoardJobUrl, greenhouseJidOf } from '@opportun/core';
+import {
+  ATS_SITES,
+  greenhouse,
+  greenhouseBoardJobUrl,
+  greenhouseJidOf,
+  type JobRef,
+} from '@opportun/core';
 
 export interface AtsJobRef {
   kind: AtsKind;
@@ -42,42 +48,11 @@ export interface AtsJobRef {
 
 /** Default number of references read from one text. */
 const DEFAULT_MAX = 20;
-/** Provider job ids are opaque; this is the shape a link may carry. */
-const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const URLISH = /https?:\/\/[^\s"'<>)\]}]+/g;
 
-function segmentsOf(url: URL): string[] {
-  return url.pathname.split('/').filter((s) => s.length > 0);
-}
-
-/**
- * The posting part of a Workday link: the segments after `/job/` or `/details/` up to and
- * including the `<title>_<reqId>` one (a location segment may precede it; `/apply` and the like
- * may follow). Workday's public career site uses either marker depending on tenant/version
- * (issue #20); the CXS detail endpoint's own path is `/job/...` regardless, which is why the
- * returned `externalPath` below always starts with `/job/` even when the link read `/details/`.
- */
-export function workdayPosting(url: URL): { externalPath: string; reqId: string } | null {
-  const seg = segmentsOf(url);
-  const marker = seg.includes('job') ? 'job' : 'details';
-  const at = seg.indexOf(marker);
-  if (at < 1) return null;
-  const after = seg.slice(at + 1);
-  // `<location>/<title>_<reqId>` when the second segment carries a requisition, else `<title>_<reqId>`.
-  const take = after[1]?.includes('_') === true ? 2 : after[0]?.includes('_') === true ? 1 : 0;
-  if (take === 0) return null;
-  const slug = after[take - 1] as string;
-  const reqId = slug.slice(slug.lastIndexOf('_') + 1);
-  if (!ID.test(reqId)) return null;
-  return { externalPath: `/job/${after.slice(0, take).join('/')}`, reqId };
-}
-
-/** The job id a board link carries, by provider shape; null when the link names no single job. */
-function idFromPath(kind: AtsJobRef['kind'], url: URL): string | null {
-  if (kind === 'ats_workday') return workdayPosting(url)?.reqId ?? null;
-  // A site reads its own job links (#769).
-  return ATS_SITES.find((s) => s.sourceKind === kind)?.jobFromUrl(url)?.id ?? null;
-}
+/** The job a board link names, as its site reads it (#769); null when the link names no single job. */
+const jobOn = (kind: AtsJobRef['kind'], url: URL): JobRef | null =>
+  ATS_SITES.find((s) => s.sourceKind === kind)?.jobFromUrl(url) ?? null;
 
 /**
  * A `gh_jid` link: a Greenhouse job embedded in a page on any host, so boardFromUrl misses it.
@@ -90,14 +65,14 @@ function fromGreenhouseJid(url: URL): Omit<AtsJobRef, 'url'> | null {
 
 /** The job a board URL's own path names (board host and path, never a query parameter). */
 function fromBoardPath(board: AtsBoard, url: URL): Omit<AtsJobRef, 'url'> | null {
-  const externalId = idFromPath(board.kind, url);
-  if (externalId === null) return null;
+  const job = jobOn(board.kind, url);
+  if (job === null) return null;
   return {
     kind: board.kind,
     org: board.slug,
     ...(board.host === undefined ? {} : { host: board.host }),
-    ...(board.kind === 'ats_workday' ? { externalPath: workdayPosting(url)?.externalPath } : {}),
-    externalId,
+    ...(job.path === undefined ? {} : { externalPath: job.path }),
+    externalId: job.id,
   };
 }
 

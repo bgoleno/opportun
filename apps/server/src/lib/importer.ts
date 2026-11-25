@@ -380,6 +380,7 @@ function parseOpportunityRow(
     }
   }
   const reason = get('dismissed_reason');
+  // All of them, the system's own too: a pack that has it would lose its row (#1048).
   if (reason !== '' && !(DISMISS_REASONS as readonly string[]).includes(reason)) {
     throw new RowError(`dismissed_reason must be one of: ${DISMISS_REASONS.join(', ')}`);
   }

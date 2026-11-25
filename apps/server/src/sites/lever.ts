@@ -3,7 +3,13 @@
 // one comes back short. Each posting's description is its intro plus its titled lists plus the
 // closing section, as Lever renders them on the hosted page. Its identity is
 // packages/core/src/sites/lever.ts.
-import { lever, LEVER_API_HOST, type BoardRef, type NormalizedPosting } from '@opportun/core';
+import {
+  exactHosts,
+  lever,
+  LEVER_API_HOST,
+  type BoardRef,
+  type NormalizedPosting,
+} from '@opportun/core';
 import { arr, atsOrg, fetchBoardJson, obj, str, timeMs } from '../adapters/sources/atsCommon';
 import { askBoard, linksOf, slugOf } from './boardApi';
 import type { SiteModule } from './types';
@@ -85,7 +91,9 @@ export const leverModule: SiteModule = {
       const board = { site: lever.id, slug: org };
       for (let page = 0; page < MAX_PAGES; page++) {
         const url = urls.page(board, page);
-        const items = arr(await fetchBoardJson(sctx, url, lever.fetchHosts[0]!, 'Lever', org));
+        const items = arr(
+          await fetchBoardJson(sctx, url, exactHosts(lever.fetchHosts)[0]!, 'Lever', org),
+        );
         for (const item of items) yield { posting: mapLeverPosting(item, org), nextCursor: null };
         if (items.length < LEVER_PAGE_SIZE) return;
       }

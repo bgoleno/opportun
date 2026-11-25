@@ -2,7 +2,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { mockApi, renderWithProviders } from '@/test/render';
-import type { DiscoveryResult } from './api';
+import { discoveryKeys, type DiscoveryResult } from './api';
 import { CaptureDialog } from './CaptureDialog';
 import { ReviewQueue } from './ReviewQueue';
 
@@ -81,6 +81,163 @@ describe('CaptureDialog', () => {
       '/opportunities/opp-1',
     );
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // https://github.com/bgoleno/opportun/issues/1044.
+  describe('a posting of a denied company', () => {
+    const DENIED = {
+      status: 409,
+      body: {
+        error: {
+          code: 'company_denied',
+          message:
+            'The company is on your denied list, so the posting was put in Decided as dismissed.',
+          company: 'Initech <b>Inc.</b>',
+        },
+      },
+    };
+    const SAID =
+      'Initech <b>Inc.</b> is on your denied list, so the posting was put in Decided as dismissed.';
+
+    it.each([
+      ['a link', 'Posting link', 'https://careers.example.com/jobs/42'],
+      ['pasted text', 'Posting description', 'Staff Platform Engineer at Initech'],
+    ])(
+      '%s: says what happened, with the way there, and not that it failed',
+      async (_, label, value) => {
+        const user = userEvent.setup();
+        const { calls } = mockApi({ 'POST /capture': () => DENIED });
+        const { onClose } = renderDialog();
+        if (label === 'Posting description') {
+          await user.click(await screen.findByRole('radio', { name: 'Pasted text' }));
+        }
+        await user.type(await screen.findByLabelText(label), value);
+        await user.click(screen.getByRole('button', { name: 'Capture' }));
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent(SAID);
+        expect(within(alert).getByRole('link', { name: 'View Decided' })).toHaveAttribute(
+          'href',
+          '/discovery/decided',
+        );
+        const dialog = screen.getByRole('dialog');
+        expect(dialog).not.toHaveTextContent(/failed|company_denied|invalid_posting/i);
+        expect(dialog.querySelector('[class*="text-destructive"]')).toBeNull();
+        expect(onClose).not.toHaveBeenCalled();
+        // It is stored: the same once more could only be a duplicate. Another posting can be.
+        expect(screen.getByRole('button', { name: 'Capture' })).toBeDisabled();
+        await user.type(screen.getByLabelText(label), 'x');
+        expect(screen.getByRole('button', { name: 'Capture' })).toBeEnabled();
+        await user.type(screen.getByLabelText(label), '{Backspace} ');
+        expect(screen.getByRole('button', { name: 'Capture' })).toBeDisabled();
+        expect(screen.getByRole('alert')).toHaveTextContent(SAID);
+        expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
+      },
+    );
+
+    it('pasting the text instead is another capture: Capture is not held back', async () => {
+      const user = userEvent.setup();
+      mockApi({ 'POST /capture': () => DENIED });
+      renderDialog();
+      await user.type(
+        await screen.findByLabelText('Posting link'),
+        'https://careers.example.com/jobs/42',
+      );
+      await user.click(screen.getByRole('button', { name: 'Capture' }));
+      await screen.findByRole('alert');
+      await user.click(screen.getByRole('radio', { name: 'Pasted text' }));
+      expect(screen.getByRole('button', { name: 'Capture' })).toBeEnabled();
+      await user.click(screen.getByRole('radio', { name: 'Link' }));
+      expect(screen.getByRole('button', { name: 'Capture' })).toBeDisabled();
+    });
+
+    it('a link replaced while the first is captured is not held back by it', async () => {
+      const user = userEvent.setup();
+      let answer: () => void = () => undefined;
+      const answered = new Promise<void>((resolve) => {
+        answer = resolve;
+      });
+      const { calls } = mockApi({
+        'POST /capture': async () => {
+          await answered;
+          return DENIED;
+        },
+      });
+      renderDialog();
+      const link = await screen.findByLabelText('Posting link');
+      await user.type(link, 'https://careers.example.com/jobs/42');
+      await user.click(screen.getByRole('button', { name: 'Capture' }));
+      await screen.findByRole('button', { name: 'Capturing...' });
+      await user.clear(link);
+      await user.type(link, 'https://careers.example.com/jobs/43');
+      answer();
+      expect(await screen.findByRole('alert')).toHaveTextContent(SAID);
+      await user.click(screen.getByRole('button', { name: 'Capture' }));
+      await waitFor(() =>
+        expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([
+          { url: 'https://careers.example.com/jobs/42' },
+          { url: 'https://careers.example.com/jobs/43' },
+        ]),
+      );
+    });
+
+    it('a server that does not name the company says so all the same', async () => {
+      const user = userEvent.setup();
+      mockApi({
+        'POST /capture': () => ({ status: 409, body: { error: { code: 'company_denied' } } }),
+      });
+      renderDialog();
+      await user.type(
+        await screen.findByLabelText('Posting link'),
+        'https://careers.example.com/jobs/42',
+      );
+      await user.click(screen.getByRole('button', { name: 'Capture' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'The company is on your denied list, so the posting was put in Decided as dismissed.',
+      );
+    });
+
+    it('the Decided lists are read again, the queue is not', async () => {
+      const user = userEvent.setup();
+      mockApi({ 'POST /capture': () => DENIED });
+      const { queryClient } = renderWithProviders(
+        <CaptureDialog onClose={() => undefined} onManualEntry={() => undefined} />,
+      );
+      queryClient.setQueryData(discoveryKeys.decided('dismissed'), { pages: [], pageParams: [] });
+      queryClient.setQueryData(discoveryKeys.queue, { items: [], total: 0 });
+      await user.type(
+        await screen.findByLabelText('Posting link'),
+        'https://careers.example.com/jobs/42',
+      );
+      await user.click(screen.getByRole('button', { name: 'Capture' }));
+      await screen.findByRole('alert');
+      expect(queryClient.getQueryState(discoveryKeys.decided('dismissed'))?.isInvalidated).toBe(
+        true,
+      );
+      expect(queryClient.getQueryState(discoveryKeys.queue)?.isInvalidated).toBe(false);
+    });
+  });
+
+  it('another cause of invalid_posting is said in the server’s words (#1044)', async () => {
+    const user = userEvent.setup();
+    const message =
+      'That posting has no company or title that can be saved. Add it with New opportunity instead.';
+    mockApi({
+      'POST /capture': () => ({
+        status: 422,
+        body: { error: { code: 'invalid_posting', message } },
+      }),
+    });
+    renderDialog();
+    await user.type(
+      await screen.findByLabelText('Posting link'),
+      'https://careers.example.com/jobs/42',
+    );
+    await user.click(screen.getByRole('button', { name: 'Capture' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    // As before: it stays while the link is corrected, until the next try.
+    await user.type(screen.getByLabelText('Posting link'), '3');
+    expect(screen.getByRole('alert')).toHaveTextContent(message);
+    expect(screen.getByRole('button', { name: 'Capture' })).toBeEnabled();
   });
 
   it('a duplicate without an opportunity reads as before (#971)', async () => {

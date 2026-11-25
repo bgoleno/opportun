@@ -7,7 +7,13 @@
 // registerBuiltinSource) and overrides (registerSource: tests and the end-to-end source mock
 // replace a kind). getSource prefers an override; resetSources drops every override so the
 // built-ins come back.
-import { AtsOrgConfig, type DiscoverySourceKind, type NormalizedPosting } from '@opportun/core';
+import {
+  ATS_SITES,
+  AtsOrgConfig,
+  WorkdayConfig,
+  type DiscoverySourceKind,
+  type NormalizedPosting,
+} from '@opportun/core';
 import type { FastifyBaseLogger } from 'fastify';
 import { z } from 'zod';
 import type { safeFetch } from '../lib/safeFetch';
@@ -90,28 +96,6 @@ export function getSource(kind: SourceKind): DiscoverySource {
 /** An ATS board slug, as the board's public API names it: the ATS sites' shared config (#769). */
 export const AtsConfig = AtsOrgConfig;
 
-/**
- * A Workday career site's host: `<tenant>.<datacenter>.myworkdayjobs.com`. The datacenter label
- * (`wd1`, `wd5`, `wd12`) is part of the host and cannot be derived from the tenant, so a board
- * is only ever learned from a URL that carries it (FR-D10).
- */
-export const WORKDAY_HOST = /^([a-z0-9][a-z0-9-]{0,62})\.wd[0-9]{1,3}\.myworkdayjobs\.com$/;
-/** A Workday site id as it appears in the path (`Initech_Careers`, `globexexternalcareers`). */
-export const WORKDAY_SITE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/;
-
-/** A Workday board: the tenant's host (with its datacenter), the tenant and the site. */
-export const WorkdayConfig = z
-  .object({
-    host: z.string().regex(WORKDAY_HOST),
-    tenant: z.string(),
-    site: z.string().regex(WORKDAY_SITE),
-  })
-  .strict()
-  .refine((c) => WORKDAY_HOST.exec(c.host)?.[1] === c.tenant, {
-    message: 'tenant must be the first label of the host',
-  });
-export type WorkdayConfig = z.infer<typeof WorkdayConfig>;
-
 export const SOURCE_CONFIG_SCHEMAS: Record<SourceKind, z.ZodType<Record<string, unknown>>> = {
   ats_greenhouse: AtsConfig,
   ats_lever: AtsConfig,
@@ -124,9 +108,6 @@ export const SOURCE_CONFIG_SCHEMAS: Record<SourceKind, z.ZodType<Record<string, 
 };
 
 /** Kinds whose sources poll a company's applicant-tracking board. */
-export const ATS_SOURCE_KINDS: readonly SourceKind[] = [
-  'ats_greenhouse',
-  'ats_lever',
-  'ats_ashby',
-  'ats_workday',
-];
+export const ATS_SOURCE_KINDS: readonly SourceKind[] = ATS_SITES.map(
+  (s) => s.sourceKind as SourceKind,
+);

@@ -7,11 +7,13 @@ import { indeedModule } from './indeed';
 import { leverModule } from './lever';
 import { linkedinModule } from './linkedin';
 import type { SiteModule } from './types';
+import { workdayModule } from './workday';
 
 export const SITE_MODULES: readonly SiteModule[] = [
   greenhouseModule,
   leverModule,
   ashbyModule,
+  workdayModule,
   linkedinModule,
   indeedModule,
 ];
@@ -21,7 +23,7 @@ export const SLUG_SITES: readonly SiteModule[] = SITE_MODULES.filter(
   (m) => m.api?.slugAddressed === true,
 );
 
-/** The site a board source kind names, or undefined (a kind whose site has not moved, or none). */
+/** The site a board source kind names, or undefined (a kind that is no site's). */
 export function siteOfKind(kind: string): SiteModule | undefined {
   return SITE_MODULES.find((m) => m.identity.sourceKind === kind);
 }

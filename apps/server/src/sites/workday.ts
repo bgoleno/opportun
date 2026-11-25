@@ -1,9 +1,12 @@
-// Workday board adapter (FR-D10). A Workday career site is addressed by tenant plus site on the
-// tenant's own host, `<tenant>.<dc>.myworkdayjobs.com`, whose datacenter label (`wd1`, `wd5`,
-// `wd12`) is learned from a URL and never derived. The candidate-experience (CXS) endpoints
-// behind each company's careers site are public and unauthenticated, the same class as the
-// other ATS adapters (C-2). Only the board's own host is ever allowed; values are passed on raw
-// and the engine sanitizes every posting (the description HTML included) like any source's.
+// Workday's network half (https://github.com/bgoleno/opportun/issues/769), moved from
+// adapters/sources/workday.ts (FR-D10). Its identity is packages/core/src/sites/workday.ts. A Workday
+// career site is addressed by tenant plus site on the tenant's own host,
+// `<tenant>.<dc>.myworkdayjobs.com`, whose datacenter label (`wd1`, `wd5`, `wd12`) is learned from a
+// URL and never derived. The candidate-experience (CXS) endpoints behind each company's careers site
+// are public and unauthenticated, the same class as the other ATS sites (C-2). Only the board's own
+// exact host is ever allowed, from a config parsed at that call, never the site's pattern: one
+// tenant's source must not reach another's. Values are passed on raw and the engine sanitizes every
+// posting (the description HTML included) like any source's.
 //
 // The CXS contract, probed live on 2026-10-17 against tenant globexnetworks, site
 // globexexternalcareers (after the weekly service window ended):
@@ -31,15 +34,13 @@
 // ordinary retryable failure, never a SourceConfigError, or a weekend run would mark a real
 // board as misconfigured. A request carrying a body or headers never follows a redirect
 // (safeFetch), so a redirect surfaces here as FetchBlockedError('redirect_blocked').
-import type { NormalizedPosting } from '@opportun/core';
-import { FetchBlockedError, type SafeFetchResponse } from '../../lib/safeFetch';
 import {
-  registerBuiltinSource,
-  SourceConfigError,
+  workday,
   WorkdayConfig,
-  type DiscoverySource,
-  type SourceContext,
-} from '../discoverySource';
+  workdayPathSegments,
+  type BoardRef,
+  type NormalizedPosting,
+} from '@opportun/core';
 import {
   arr,
   ATS_MAX_BYTES,
@@ -48,7 +49,10 @@ import {
   remoteFromLocation,
   str,
   timeMs,
-} from './atsCommon';
+} from '../adapters/sources/atsCommon';
+import { SourceConfigError, type SourceContext } from '../adapters/discoverySource';
+import { FetchBlockedError, type SafeFetchResponse } from '../lib/safeFetch';
+import type { SiteApi, SiteModule } from './types';
 
 export type WorkdayBoard = WorkdayConfig;
 
@@ -57,11 +61,6 @@ export const WORKDAY_PAGE_SIZE = 20;
 const MAX_PAGES = 100;
 const DETAIL_MAX_BYTES = 2 * 1024 * 1024;
 const JSON_HEADERS = { accept: 'application/json' };
-/**
- * One externalPath segment as Workday writes them (`Santa-Clara-CA`, `Title_JR-000001`). No `%`:
- * a URL parser reads `%2e%2e` as `..`, which would re-aim the detail GET elsewhere on the host.
- */
-const PATH_SEGMENT = /^[A-Za-z0-9_.~-]{1,300}$/;
 
 /**
  * The tenant's site is in its maintenance window (or otherwise briefly unavailable). Retryable:
@@ -104,13 +103,8 @@ export const workdayJobsUrl = (b: WorkdayBoard): string => `${cxsBase(b)}/jobs`;
 
 /** The detail URL for a listing's externalPath (`/job/<location>/<title>_<reqId>`), if usable. */
 export function workdayDetailUrl(b: WorkdayBoard, externalPath: string): string | null {
-  const segments = externalPath.split('/');
-  if (segments[0] !== '' || segments[1] !== 'job') return null;
-  const rest = segments.slice(2);
-  if (rest.length === 0 || rest.some((s) => !PATH_SEGMENT.test(s) || s === '.' || s === '..')) {
-    return null;
-  }
-  return `${cxsBase(b)}/job/${rest.join('/')}`;
+  const segments = workdayPathSegments(externalPath);
+  return segments === null ? null : `${cxsBase(b)}/job/${segments.join('/')}`;
 }
 
 /** The public posting page for an externalPath (`https://<host>/<site>/job/...`). */
@@ -127,16 +121,20 @@ const label = (b: WorkdayBoard): string => `Workday board ${b.tenant}/${b.site}`
 const unreachable = (b: WorkdayBoard, what: string): string =>
   `${label(b)} unreachable (service window or unknown tenant/site); check the careers URL if this persists (${what})`;
 
-/** One CXS request; maintenance signals become WorkdayUnavailableError. */
+/**
+ * One CXS request; maintenance signals become WorkdayUnavailableError. The host allowed is the parsed
+ * config's, parsed here whatever the caller did: a board a link or a stored row made up asks nothing.
+ */
 async function cxs(
   sctx: Pick<SourceContext, 'fetch'>,
   b: WorkdayBoard,
   url: string,
   post: unknown,
 ): Promise<SafeFetchResponse> {
+  const { host } = workdayBoard(b);
   try {
     return await sctx.fetch(url, {
-      allowHosts: [b.host],
+      allowHosts: [{ exact: host }],
       maxBytes: post === undefined ? DETAIL_MAX_BYTES : ATS_MAX_BYTES,
       timeoutMs: ATS_TIMEOUT_MS,
       headers: JSON_HEADERS,
@@ -316,61 +314,88 @@ async function* workdayListingPages(
   state.truncated = true;
 }
 
-export const workdaySource: DiscoverySource = {
-  kind: 'ats_workday',
-  async *fetchPostings(sctx, config) {
-    const b = workdayBoard(config);
-    let failuresInARow = 0;
-    let details = 0;
-    let deferred = 0;
-    for await (const rows of workdayListingPages(sctx, b)) {
-      const ids = rows.map(workdayReqId).filter((id): id is string => id !== null);
-      const known = (await sctx.knownExternalIds?.(ids)) ?? new Set<string>();
-      for (const row of rows) {
-        const path = str(row.externalPath);
-        const id = workdayReqId(row);
-        let detail: unknown = null;
-        if (id !== null && known.has(id)) {
-          // Stored by an earlier run: yielded bare so the engine counts it a duplicate, and no
-          // detail is fetched for it.
-          yield { posting: mapWorkdayPosting(b, row, null), nextCursor: null };
-          continue;
-        }
-        if (path !== null && details >= WORKDAY_MAX_DETAILS_PER_RUN) {
-          // Over the cap: left out entirely (not stored bare), so a later run still describes it.
-          deferred += 1;
-          continue;
-        }
-        if (path !== null) {
-          details += 1;
-          try {
-            detail = await fetchWorkdayDetail(sctx, b, path);
-            failuresInARow = 0;
-          } catch (err) {
-            // A proven outage ends the run (it retries). Any other failure costs this posting its
-            // description only: it is yielded bare (a needs_capture lead) and the run goes on,
-            // unless details keep failing, which is the board being unreachable after all.
-            if (err instanceof WorkdayOutageError) throw err;
-            failuresInARow += 1;
-            // The board names its company and the path its posting: neither is logged (14.8).
-            sctx.log.warn({ err }, 'workday detail failed');
-            if (failuresInARow >= WORKDAY_DETAIL_FAILURES_IN_A_ROW) {
-              throw new WorkdayUnavailableError(
-                unreachable(b, `${failuresInARow} posting details failed in a row`),
-              );
-            }
-          }
-        }
-        yield { posting: mapWorkdayPosting(b, row, detail), nextCursor: null };
-      }
-    }
-    if (deferred > 0) {
-      sctx.log.info(
-        { 'opportun.count.described': details, 'opportun.count.deferred': deferred },
-        'workday detail cap reached; the rest are described on later runs',
-      );
-    }
-  },
+/** The board a ref names, through its config parsed here; a throw when it names none. */
+const boardOf = (board: BoardRef): WorkdayBoard => workdayBoard(workday.board!.configOf(board));
+
+/**
+ * A board is verified by its CXS listing serving at least one posting. Only an unknown site (404), an
+ * empty one or a ref that is no board is a miss: the service window's redirects, 406, 422 and 5xx,
+ * and anything else unexpected, are errors, so detection retries instead of concluding 'none'.
+ */
+const probe: SiteApi['probe'] = async (sctx, ref) => {
+  let board: WorkdayBoard;
+  try {
+    board = boardOf(ref);
+  } catch {
+    return 'no';
+  }
+  try {
+    const page = await fetchWorkdayPage(sctx, board, 0, 1);
+    return page.jobPostings.length > 0 ? 'yes' : 'no';
+  } catch (err) {
+    if (err instanceof SourceConfigError) return 'no';
+    sctx.log.warn({ 'opportun.ats.kind': workday.sourceKind, err }, 'ats probe failed');
+    return 'unknown';
+  }
 };
 
-registerBuiltinSource(workdaySource);
+export const workdayModule: SiteModule = {
+  identity: workday,
+  api: {
+    urls: { board: (ref) => workdayJobsUrl(boardOf(ref)) },
+    probe,
+    async *listBoard(sctx, config) {
+      const b = workdayBoard(config);
+      let failuresInARow = 0;
+      let details = 0;
+      let deferred = 0;
+      for await (const rows of workdayListingPages(sctx, b)) {
+        const ids = rows.map(workdayReqId).filter((id): id is string => id !== null);
+        const known = (await sctx.knownExternalIds?.(ids)) ?? new Set<string>();
+        for (const row of rows) {
+          const path = str(row.externalPath);
+          const id = workdayReqId(row);
+          let detail: unknown = null;
+          if (id !== null && known.has(id)) {
+            // Stored by an earlier run: yielded bare so the engine counts it a duplicate, and no
+            // detail is fetched for it.
+            yield { posting: mapWorkdayPosting(b, row, null), nextCursor: null };
+            continue;
+          }
+          if (path !== null && details >= WORKDAY_MAX_DETAILS_PER_RUN) {
+            // Over the cap: left out entirely (not stored bare), so a later run still describes it.
+            deferred += 1;
+            continue;
+          }
+          if (path !== null) {
+            details += 1;
+            try {
+              detail = await fetchWorkdayDetail(sctx, b, path);
+              failuresInARow = 0;
+            } catch (err) {
+              // A proven outage ends the run (it retries). Any other failure costs this posting its
+              // description only: it is yielded bare (a needs_capture lead) and the run goes on,
+              // unless details keep failing, which is the board being unreachable after all.
+              if (err instanceof WorkdayOutageError) throw err;
+              failuresInARow += 1;
+              // The board names its company and the path its posting: neither is logged (14.8).
+              sctx.log.warn({ err }, 'workday detail failed');
+              if (failuresInARow >= WORKDAY_DETAIL_FAILURES_IN_A_ROW) {
+                throw new WorkdayUnavailableError(
+                  unreachable(b, `${failuresInARow} posting details failed in a row`),
+                );
+              }
+            }
+          }
+          yield { posting: mapWorkdayPosting(b, row, detail), nextCursor: null };
+        }
+      }
+      if (deferred > 0) {
+        sctx.log.info(
+          { 'opportun.count.described': details, 'opportun.count.deferred': deferred },
+          'workday detail cap reached; the rest are described on later runs',
+        );
+      }
+    },
+  },
+};

@@ -108,9 +108,36 @@ describe('safeFetch', () => {
     expect((await fetch('https://careers.example.org/', ALLOW)).status).toBe(200);
   });
 
-  // A site's HostRule (#769) matches exactly what it says, on every hop; a string entry keeps its
-  // subdomains until the sites still written out move to the registry (step 6).
-  it("matches a site's exact rule on that host only, and a pattern on the whole host", async () => {
+  // tl and sec on #769: a pattern among the allowed hosts would let one tenant's source reach every
+  // tenant. It does not compile, and is refused before anything is looked up if it is cast past that.
+  it('refuses a host pattern as an allowed host, before any lookup', async () => {
+    const h = harness({ 'a.wd1.myworkdayjobs.com': [PUBLIC_IP] }, [ok()]);
+    const resolved: string[] = [];
+    const fetch = createSafeFetch({
+      ...h,
+      resolve: async (host) => {
+        resolved.push(host);
+        return await h.resolve(host);
+      },
+    });
+    const pattern = {
+      pattern: /^[a-z]+\.wd[0-9]\.myworkdayjobs\.com$/,
+      example: 'a.wd1.myworkdayjobs.com',
+    };
+    for (const allowHosts of [[pattern], [{ exact: 'a.wd1.myworkdayjobs.com' }, pattern]]) {
+      await expect(
+        fetch('https://a.wd1.myworkdayjobs.com/', {
+          // @ts-expect-error a pattern is not an allowHosts entry
+          allowHosts,
+        }),
+      ).rejects.toThrow('a host pattern is not an allowHosts entry');
+    }
+    expect(resolved).toEqual([]);
+    expect(h.requests).toEqual([]);
+  });
+
+  // A site's exact host (#769) is that host only, on every hop; a string entry keeps its subdomains.
+  it("matches a site's exact rule on that host only", async () => {
     const exact = { allowHosts: [{ exact: 'boards-api.greenhouse.io' }] };
     const h = harness(
       { 'boards-api.greenhouse.io': [PUBLIC_IP], 'x.boards-api.greenhouse.io': [PUBLIC_IP] },
@@ -125,20 +152,6 @@ describe('safeFetch', () => {
     );
     expect((await fetch('https://BOARDS-API.greenhouse.io./v1/boards/a/jobs', exact)).status).toBe(
       200,
-    );
-    const pattern = {
-      allowHosts: [
-        {
-          pattern: /^[a-z0-9]+\.wd[0-9]{1,3}\.myworkdayjobs\.com$/,
-          example: 'a.wd1.myworkdayjobs.com',
-        },
-      ],
-    };
-    expect(await reason(fetch('https://a.wd1.myworkdayjobs.com.evil.example/', pattern))).toBe(
-      'host_not_allowed',
-    );
-    expect(await reason(fetch('https://evil-myworkdayjobs.com/', pattern))).toBe(
-      'host_not_allowed',
     );
     const hop = harness({ 'boards-api.greenhouse.io': [PUBLIC_IP] }, [
       { status: 307, headers: { location: 'https://x.boards-api.greenhouse.io/' }, body: body() },

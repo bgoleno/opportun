@@ -1,7 +1,7 @@
 // What the sites with a public, slug-addressed board API share
 // (https://github.com/bgoleno/opportun/issues/769): building a URL from a slug, asking whether a
 // board is live, and reading a listing's links.
-import { ATS_SLUG, type BoardRef, type SiteIdentity } from '@opportun/core';
+import { ATS_SLUG, exactHosts, type BoardRef, type SiteIdentity } from '@opportun/core';
 import { arr, ATS_MAX_BYTES, obj } from '../adapters/sources/atsCommon';
 import type { SourceContext } from '../adapters/discoverySource';
 
@@ -31,7 +31,10 @@ export async function askBoard(
   if (!ATS_SLUG.test(board.slug)) return 'no';
   let res;
   try {
-    res = await sctx.fetch(url(board), { allowHosts: site.fetchHosts, maxBytes: ATS_MAX_BYTES });
+    res = await sctx.fetch(url(board), {
+      allowHosts: exactHosts(site.fetchHosts),
+      maxBytes: ATS_MAX_BYTES,
+    });
   } catch (err) {
     // The slug names the company's board: only the ATS kind is logged (14.8).
     sctx.log.warn({ 'opportun.ats.kind': site.sourceKind, err }, 'ats probe failed');

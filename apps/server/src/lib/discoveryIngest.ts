@@ -474,6 +474,8 @@ export async function insertLeads(
   inserted: DiscoveryResultView[];
   /** Those linked to an opportunity already there (#971). */
   linked: DiscoveryResultView[];
+  /** Those stored as dismissed, as their company is on the user's denied list (#199, #1044). */
+  suppressed: DiscoveryResultView[];
 }> {
   const run = await createRun(db, ctx, { sourceId });
   const source = await getSourceRow(db, ctx, sourceId);
@@ -488,6 +490,7 @@ export async function insertLeads(
   };
   const inserted: DiscoveryResultView[] = [];
   const linked: DiscoveryResultView[] = [];
+  const suppressed: DiscoveryResultView[] = [];
   try {
     for (const posting of postings) {
       stats.fetched += 1;
@@ -509,6 +512,7 @@ export async function insertLeads(
         opts.lockTimeoutMs,
       );
       if (stored?.rankSkipReason === 'linked') linked.push(stored);
+      else if (stored?.disposition === 'dismissed') suppressed.push(stored);
     }
   } catch (err) {
     // The run ends with why, or the source's history would show it running for good: a capture
@@ -525,7 +529,7 @@ export async function insertLeads(
     await finishRun(tx, ctx, run.id, { stats: { ...stats } });
     await setSourceStatus(tx, ctx, sourceId, 'ok', null);
   });
-  return { runId: run.id, stats, inserted, linked };
+  return { runId: run.id, stats, inserted, linked, suppressed };
 }
 
 export function errorText(err: unknown): string {
