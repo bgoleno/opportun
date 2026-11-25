@@ -163,26 +163,44 @@ async function expectStandard(page: Page, title: string, width: number): Promise
 }
 
 /**
- * Expects the view on screen to meet the standard at every width, opened once and resized: what it is
- * laid out by is the window's width, read by CSS. Soft, so one run names every width that fails (#1031).
+ * A view is opened at each end of WIDTHS, and resized to the width beside it (#1031): opened at every
+ * width, the walk took twice as long. A width a script reads once, as the view opens, is met fresh at
+ * both ends, so a threshold anywhere between them shows, whichever way it goes: `>= w` at 2560, `< w` at
+ * 1280. What this cannot see is a layout broken only when opened in a band between the two.
  */
-async function expectAtEveryWidth(page: Page, title: string): Promise<void> {
-  for (const width of WIDTHS) {
-    await test.step(`${width}px wide`, async () => {
-      await page.setViewportSize({ width, height: HEIGHT });
-      await page.waitForFunction((w) => window.innerWidth === w, width, { polling: 'raf' });
-      await frames(page);
-      await expectStandard(page, title, width);
-    });
+const OPENINGS = [
+  [1280, 1536],
+  [2560, 1920],
+] as const satisfies readonly (readonly [(typeof WIDTHS)[number], (typeof WIDTHS)[number]])[];
+
+/** Expects the view `open` opens to meet the standard at every width. Soft: one run names each that fails. */
+async function expectAtEveryWidth(
+  page: Page,
+  title: string,
+  open: () => Promise<void>,
+): Promise<void> {
+  expect(OPENINGS.flat().sort((a, b) => a - b)).toEqual([...WIDTHS]);
+  for (const widths of OPENINGS) {
+    await page.setViewportSize({ width: widths[0], height: HEIGHT });
+    await open();
+    for (const width of widths) {
+      await test.step(`${width}px wide, opened at ${widths[0]}px`, async () => {
+        await page.setViewportSize({ width, height: HEIGHT });
+        await page.waitForFunction((w) => window.innerWidth === w, width, { polling: 'raf' });
+        await frames(page);
+        await expectStandard(page, title, width);
+      });
+    }
   }
 }
 
 /** Opens `path` and expects it to meet the standard at every width. */
 async function expectRoute(page: Page, path: string): Promise<void> {
-  await page.goto(path);
-  await page.waitForLoadState('networkidle');
-  await expect(page.locator('#main [data-layout]')).toBeVisible();
-  await expectAtEveryWidth(page, path);
+  await expectAtEveryWidth(page, path, async () => {
+    await page.goto(path);
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('#main [data-layout]')).toBeVisible();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -427,9 +445,10 @@ test.describe('at every desktop width', () => {
     const { page, close } = await pageAt(browser, WIDTHS[0], accounts.seed);
     try {
       const id = await seededOpportunity(page, 'timeline');
-      await page.goto(`/opportunities/${id}`);
-      await expect(page.getByText('Call with the hiring manager.').first()).toBeVisible();
-      await expectAtEveryWidth(page, title);
+      await expectAtEveryWidth(page, title, async () => {
+        await page.goto(`/opportunities/${id}`);
+        await expect(page.getByText('Call with the hiring manager.').first()).toBeVisible();
+      });
     } finally {
       await close();
     }
@@ -440,10 +459,11 @@ test.describe('at every desktop width', () => {
     const { page, close } = await pageAt(browser, WIDTHS[0], accounts.seed);
     try {
       const id = await seededOpportunity(page, 'details');
-      await page.goto(`/opportunities/${id}`);
-      await page.getByRole('tab', { name: 'Details' }).click();
-      await expect(page.getByText('What we are looking for')).toBeVisible();
-      await expectAtEveryWidth(page, title);
+      await expectAtEveryWidth(page, title, async () => {
+        await page.goto(`/opportunities/${id}`);
+        await page.getByRole('tab', { name: 'Details' }).click();
+        await expect(page.getByText('What we are looking for')).toBeVisible();
+      });
     } finally {
       await close();
     }
@@ -454,16 +474,17 @@ test.describe('at every desktop width', () => {
     const { page, close } = await pageAt(browser, WIDTHS[0], accounts.seed);
     try {
       const id = await seededWorkspace(page, 'workspace');
-      await page.goto(`/resumes/${id}`);
-      await expect(page.getByRole('list', { name: 'Conversation' })).toContainText(
-        'Your platform work maps well to this role.',
-      );
-      // Both panels open expanded; the text being measured is inside them.
-      await expect(page.getByRole('button', { name: 'Hide document' })).toBeVisible();
-      await expect(page.getByRole('button', { name: 'Hide details' })).toBeVisible();
-      await expect(page.getByText('Infrastructure as code')).toBeVisible();
-      await expect(page.getByText(/Summary: You will own/)).toBeVisible();
-      await expectAtEveryWidth(page, title);
+      await expectAtEveryWidth(page, title, async () => {
+        await page.goto(`/resumes/${id}`);
+        await expect(page.getByRole('list', { name: 'Conversation' })).toContainText(
+          'Your platform work maps well to this role.',
+        );
+        // Both panels open expanded; the text being measured is inside them.
+        await expect(page.getByRole('button', { name: 'Hide document' })).toBeVisible();
+        await expect(page.getByRole('button', { name: 'Hide details' })).toBeVisible();
+        await expect(page.getByText('Infrastructure as code')).toBeVisible();
+        await expect(page.getByText(/Summary: You will own/)).toBeVisible();
+      });
     } finally {
       await close();
     }
