@@ -19,7 +19,7 @@ import { runDueJobs, startRunner, type Runner } from '../src/jobs/runner';
 import { useApi } from './api';
 import { testDialect } from './db';
 import { captureLogs } from './helpers';
-import { pauseAt } from './race';
+import { pauseAt, whileParked } from './race';
 
 const KIND = 'test.sweep';
 const SWEEP_MS = 60;
@@ -378,7 +378,16 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
   it('the first write made, its answer lost: its schedule goes on, on an idle server', async () => {
     const t = await setUp();
     let writes = 0;
+    const due: { id?: string } = {};
+    let sweep: ReturnType<typeof pauseAt> | undefined;
     t.on.statement = async (text, run) => {
+      if (isClaim(text)) {
+        const result = (await run()) as { rows: { id?: unknown }[] };
+        // Parked from inside the claim gate, where no sweep is: the next one would queue the schedule.
+        if (result.rows.length > 0 && result.rows[0]!.id === due.id)
+          sweep ??= pauseAt('jobs.sweep.reading');
+        return result;
+      }
       if (!endsJob(text)) return run();
       writes += 1;
       if (writes === 1) await run();
@@ -394,11 +403,13 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
         )
       ).rows.map((r) => r.id);
     await until(async () => (await pending()).length === 1);
-    const [first] = await pending();
-    await t.by.query('UPDATE jobs SET run_at = 0 WHERE id = $1', [first]);
+    [due.id] = await pending();
+    await t.by.query('UPDATE jobs SET run_at = 0 WHERE id = $1', [due.id]);
     await until(() => t.seen.errors.length > 0);
-    expect([await t.statusOf(first!), await pending()]).toEqual(['done', []]);
-    delete t.on.statement;
+    await whileParked(sweep!, async () => {
+      expect([await t.statusOf(due.id!), await pending()]).toEqual(['done', []]);
+      delete t.on.statement;
+    });
     await until(async () => (await pending()).length === 1);
     expect(t.seen.runs).toBe(1);
   });
