@@ -82,6 +82,12 @@ afterEach(() => {
   setRaceHook(undefined);
 });
 
+/**
+ * The clock stands from here, where a test is about an instant: it moves otherwise, and a millisecond
+ * before midnight is past it by the time a slow host asks.
+ */
+const clockStandsAt = (at: number) => vi.useFakeTimers({ now: at, toFake: ['Date'] });
+
 const refused = () =>
   new AiUnavailableError('provider_error', 'the provider answered HTTP 401', { keyRejected: true });
 const fails = (err: unknown) =>
@@ -537,12 +543,12 @@ describe('the sweep and the drain', () => {
     expect((await rowOf(app, good)).classification).toBe('follow_up');
     // Its call may have been paid for: again on another UTC day alone, once.
     for (const at of [NOW + HOUR, TOMORROW - 1]) {
-      vi.setSystemTime(at);
+      clockStandsAt(at);
       expect(await sweepWaitingMessages(app.db)).toEqual({ queued: 0 });
       await drain(app, a);
     }
     expect(asked()).toEqual(['bad', 'good']);
-    vi.setSystemTime(TOMORROW + MINUTE);
+    clockStandsAt(TOMORROW + MINUTE);
     expect(await sweepWaitingMessages(app.db)).toEqual({ queued: 1 });
     await app.jobs.drain();
     await drain(app, a);
@@ -611,11 +617,11 @@ describe('the sweep and the drain', () => {
     expect(left.classifyWait).toBe('trying');
     expect(left.classifyTriedAt).toBeGreaterThanOrEqual(NOW);
     for (const at of [NOW + HOUR, TOMORROW - 1]) {
-      vi.setSystemTime(at);
+      clockStandsAt(at);
       expect(await listWaitingMessageIds(app.db, ctxOf(a), at)).toEqual([]);
       expect(await sweepWaitingMessages(app.db)).toEqual({ queued: 0 });
     }
-    vi.setSystemTime(TOMORROW);
+    clockStandsAt(TOMORROW);
     expect(await sweepWaitingMessages(app.db)).toEqual({ queued: 1 });
     await app.jobs.drain();
     expect(during).toMatchObject({ classifyWait: 'trying', classification: null });
