@@ -16,12 +16,18 @@
 import { AtsDetectTransientError, detectAts } from './atsDetect';
 import { TITLE_MATCH_THRESHOLD } from './titleMatch';
 import { boardConfig, boardFromUrl, boardOfSource } from './atsBoard';
-import { greenhouseJidOf, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
+import {
+  greenhouseJidOf,
+  NormalizedPostingSchema,
+  workdayPosting,
+  type NormalizedPosting,
+} from '@opportun/core';
 import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import {
   ATS_SOURCE_KINDS,
   getSource,
   hasSource,
+  SourceConfigError,
   type SourceContext,
   type SourceKind,
 } from '../adapters/discoverySource';
@@ -30,7 +36,7 @@ import {
   mapWorkdayPosting,
   workdayBoard,
   readWorkdayListing,
-} from '../adapters/sources/workday';
+} from '../sites/workday';
 import type { Db } from '../db/client';
 import { communications, discoverySources } from '../db/schema';
 import type { AtsJobRefRecord } from '../db/schema.shared';
@@ -38,7 +44,7 @@ import type { UserCtx } from '../repos/base';
 import { getCompany } from '../repos/companies';
 import { splitConfig } from '../repos/discovery';
 import { getOpportunity } from '../repos/opportunities';
-import { atsJobRefOfUrl, extractAtsJobRefs, workdayPosting, type AtsJobRef } from './atsJobRef';
+import { atsJobRefOfUrl, extractAtsJobRefs, type AtsJobRef } from './atsJobRef';
 import { rankCandidates, type PostingCandidate } from './postingCandidates';
 import { sanitizePosting } from './postingSanitize';
 
@@ -335,7 +341,15 @@ function referenceBoards(refs: AtsJobRef[], owned: Board[]): Board[] {
       slug: ref.org,
       ...(ref.host === undefined ? {} : { host: ref.host }),
     };
-    out.push({ kind: ref.kind, org: ref.org, config: boardConfig(board) });
+    let config: Record<string, unknown>;
+    try {
+      config = boardConfig(board);
+    } catch (err) {
+      // A stored reference that names no board: there is none to read, and the others still are.
+      if (!(err instanceof SourceConfigError)) throw err;
+      continue;
+    }
+    out.push({ kind: ref.kind, org: ref.org, config });
     if (out.length >= MAX_REFERENCE_BOARDS) break;
   }
   return out;

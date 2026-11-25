@@ -16,7 +16,7 @@ import { lookup } from 'node:dns/promises';
 import type { IncomingHttpHeaders } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP, type LookupFunction } from 'node:net';
-import { hostMatchesRule, SITES, type HostRule } from '@opportun/core';
+import { hostMatchesRule, SITES, type ExactHost } from '@opportun/core';
 import { provideAtsHosts, type OutboundTarget } from '../obs/catalog';
 import { observeOutbound, outboundTargetFor } from '../obs/outbound';
 
@@ -47,12 +47,12 @@ export class FetchBlockedError extends Error {
 export interface SafeFetchOptions {
   /**
    * The hosts this call may reach, checked on every redirect hop. A string is that host and its
-   * subdomains, as before #769. A site's HostRule (packages/core/src/sites) matches exactly what
-   * it says: `{ exact }` that host only, `{ pattern }` the whole host. Both kinds stay while the
-   * sites move to the registry (https://github.com/bgoleno/opportun/issues/769, step 6): do not
-   * make one match like the other in the meantime.
+   * subdomains, as before #769. A site's `{ exact }` (packages/core/src/sites) is that host only: do
+   * not make one match like the other. Never a site's pattern: it would let one tenant's source
+   * reach every tenant, so it does not compile here and is refused at run time
+   * (https://github.com/bgoleno/opportun/issues/769#issuecomment-7122518060).
    */
-  allowHosts: readonly (string | HostRule)[];
+  allowHosts: readonly (string | ExactHost)[];
   /**
    * Any public https host instead of the allowlist (user-entered URLs). PROHIBITED_HOSTS stay
    * refused and the private-address and redirect checks are unchanged.
@@ -358,9 +358,9 @@ const MAX_HOSTNAME_LENGTH = 253;
 
 /**
  * True when `host` is allowed by one of `entries`, both sides normalized: a string entry is that
- * host or a subdomain of it, a HostRule exactly what it says (see SafeFetchOptions.allowHosts).
+ * host or a subdomain of it, an ExactHost that host alone (see SafeFetchOptions.allowHosts).
  */
-function hostMatches(host: string, entries: readonly (string | HostRule)[]): boolean {
+function hostMatches(host: string, entries: readonly (string | ExactHost)[]): boolean {
   const h = normalizeHost(host);
   return entries.some((raw) => {
     if (typeof raw !== 'string') return hostMatchesRule(h, raw);
@@ -521,7 +521,7 @@ export function createSafeFetch(deps: SafeFetchDeps) {
   /** Scheme, prohibited and allowed hosts, and a public pinned address for one hop. */
   async function checkHop(
     url: URL,
-    allowHosts: readonly (string | HostRule)[],
+    allowHosts: readonly (string | ExactHost)[],
     allowPublic: boolean,
     officialApiUrl: string | undefined,
   ): Promise<FetchTarget> {
@@ -576,6 +576,12 @@ export function createSafeFetch(deps: SafeFetchDeps) {
   async function safeFetchWith(url: string, opts: SafeFetchOptions): Promise<SafeFetchResponse> {
     if (opts.headers !== undefined && opts.allowPublic === true) {
       throw new Error('safeFetch: caller headers are not allowed with allowPublic');
+    }
+    // Before anything is looked up: the type says so too, but a value can be cast past it.
+    if (
+      opts.allowHosts.some((h: unknown) => typeof h !== 'string' && !('exact' in (h as object)))
+    ) {
+      throw new Error('safeFetch: a host pattern is not an allowHosts entry');
     }
     if (opts.officialApiUrl !== undefined) {
       const official = parseTarget(opts.officialApiUrl);

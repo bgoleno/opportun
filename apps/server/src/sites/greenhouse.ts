@@ -4,6 +4,7 @@
 // request with every open job's content, not paginated. Greenhouse HTML-escapes `content` once
 // (`&lt;p&gt;`), which is undone here so the engine's sanitizer sees ordinary markup.
 import {
+  exactHosts,
   ATS_JOB_ID,
   GREENHOUSE_API_HOST,
   greenhouse,
@@ -80,7 +81,7 @@ export const greenhouseModule: SiteModule = {
       const body = await fetchBoardJson(
         sctx,
         urls.board({ site: greenhouse.id, slug: org }, { content: true }),
-        greenhouse.fetchHosts[0]!,
+        exactHosts(greenhouse.fetchHosts)[0]!,
         'Greenhouse',
         org,
       );
@@ -97,7 +98,7 @@ export const greenhouseModule: SiteModule = {
       let res;
       try {
         res = await sctx.fetch(urls.job({ site: greenhouse.id, slug: token }, jid), {
-          allowHosts: greenhouse.fetchHosts,
+          allowHosts: exactHosts(greenhouse.fetchHosts),
           maxBytes: ATS_MAX_BYTES,
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         });

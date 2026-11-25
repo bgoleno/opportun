@@ -88,6 +88,29 @@ describe("the job is the address's own, never one embedded in its query (#521)",
     expect(destinationRefusal(own, SUB)).toBeNull();
     expect(confirmationPageVerdict(own, DESTINATION)).toBe('ok');
   });
+
+  // #769: a page that names no board counts on the destination's own origin only when that is a
+  // Workday tenant's host, whole: not any host of Workday's domain.
+  it("a page naming no board is the application's own on a tenant host alone", () => {
+    const on = (host: string) =>
+      confirmationPageVerdict(`https://${host}/`, {
+        ...DESTINATION,
+        destinationUrl: `https://${host}/External/job/X/Engineer_JR-000001`,
+        atsKind: 'ats_workday',
+        atsRef: 'acme/External',
+        atsExternalId: 'JR-000001',
+      });
+    expect(on('acme.wd5.myworkdayjobs.com')).toBe('ok');
+    for (const host of [
+      'acme.myworkdayjobs.com',
+      'x.acme.wd5.myworkdayjobs.com',
+      'wd5.myworkdayjobs.com',
+      'wd5.myworkdaysite.com',
+      'acme.wd5.myworkdayjobs.com.evil.example',
+    ]) {
+      expect(on(host), host).toBe('wrong_site');
+    }
+  });
 });
 
 // tl and sec at 23f3a37 (#538): every reader of one address reads it the same way.

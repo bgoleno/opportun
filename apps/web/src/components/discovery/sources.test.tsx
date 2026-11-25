@@ -558,6 +558,10 @@ describe('Workday sources', () => {
       'https://acme.wd12.myworkdayjobs.com/',
       'https://acme.myworkdayjobs.com/External',
       'https://acme.wd12.myworkdayjobs.com.evil.example/External',
+      // The API's address, and the second domain the server reads from a careers page.
+      'https://acme.wd12.myworkdayjobs.com/wday/cxs/acme/External/jobs',
+      'https://acme.wd12.myworkdayjobs.com/en-US/wday/x',
+      'https://wd12.myworkdaysite.com/recruiting/acme/External',
       'not a url',
     ]) {
       expect(workdayConfigFromUrl(bad)).toBeNull();

@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import type { SourceKind } from '../src/adapters/discoverySource';
 import { communications } from '../src/db/schema';
+import type { AtsJobRefRecord } from '../src/db/schema.shared';
 import type { safeFetch } from '../src/lib/safeFetch';
 import { findPosting, type BoardLookup } from '../src/lib/postingSearch';
 import { createCompany } from '../src/repos/companies';
@@ -223,6 +224,89 @@ describe('findPosting', () => {
     if (out.status !== 'candidates') throw new Error('expected candidates');
     expect(out.candidates).toHaveLength(1);
     expect(out.candidates[0]!.posting.externalId).toBe('999');
+  });
+
+  // The column may hold another version's rows, and its reader checks the kind only.
+  it.each([
+    [
+      'a Workday board without its host',
+      { kind: 'ats_workday', org: 'acme/External', externalId: 'JR-1', url: 'https://a.example' },
+    ],
+    [
+      'a Lever site that is none',
+      { kind: 'ats_lever', org: 'a_b', externalId: 'x-1', url: 'https://a.example' },
+    ],
+  ] as [string, AtsJobRefRecord][])(
+    "a stored reference that names no board (%s) does not stop the company's own, or the next",
+    async (_, bad) => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      await createCompany(app.db, ctx, {
+        name: 'Sentinel Edge',
+        atsKind: 'ats_greenhouse',
+        atsRef: 'sentineledge',
+        atsVerifiedAt: Date.now(),
+      });
+      const opp = await createOpportunity(app.db, ctx, {
+        companyName: 'Sentinel Edge',
+        title: 'Product Manager, SIEM',
+        sourceKind: 'import',
+      });
+      await linkedMail(app, a, opp.id, 'Next steps', { bodyRef: null });
+      const next: AtsJobRefRecord = {
+        kind: 'ats_greenhouse',
+        org: 'acme',
+        externalId: '999',
+        url: 'https://job-boards.greenhouse.io/acme/jobs/999',
+      };
+      await app.db
+        .update(communications)
+        .set({ atsJobRefs: [bad, next] })
+        .where(eq(communications.opportunityId, opp.id))
+        .run();
+      const { lookup, asked } = board([posting('Product Manager, SIEM', '1')]);
+
+      const out = await findPosting(app.db, ctx, opp.id, sctx(), {
+        readBody: async () => '',
+        board: lookup,
+      });
+
+      expect(out).toMatchObject({ status: 'single', candidate: { posting: { externalId: '1' } } });
+      expect(asked).toEqual([
+        { kind: 'ats_greenhouse', org: 'sentineledge' },
+        { kind: 'ats_greenhouse', org: 'acme' },
+      ]);
+    },
+  );
+
+  it('a stored reference that names no board, and nothing else: there is no board', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    await createCompany(app.db, ctx, { name: 'Meridian Systems' });
+    const opp = await createOpportunity(app.db, ctx, {
+      companyName: 'Meridian Systems',
+      title: 'Staff Product Manager',
+      sourceKind: 'import',
+    });
+    await linkedMail(app, a, opp.id, 'Next steps', { bodyRef: null });
+    await app.db
+      .update(communications)
+      .set({
+        atsJobRefs: [
+          { kind: 'ats_greenhouse', org: '..', externalId: '1', url: 'https://a.example' },
+        ],
+      })
+      .where(eq(communications.opportunityId, opp.id))
+      .run();
+    const { lookup, asked } = board([]);
+
+    const out = await findPosting(app.db, ctx, opp.id, sctx(), {
+      readBody: async () => '',
+      board: lookup,
+    });
+
+    expect(out).toMatchObject({ status: 'no_board' });
+    expect(asked).toEqual([]);
   });
 
   it("prefers the newest message's reference when they name different reqs", async () => {

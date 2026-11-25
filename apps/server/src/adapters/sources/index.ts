@@ -2,7 +2,6 @@
 // built-in (C-2: only these ATS APIs and the user's own MCP servers are ever contacted).
 import { registerBuiltinSource, type SourceKind } from '../discoverySource';
 import { SITE_MODULES } from '../../sites';
-import './workday';
 import './mcp';
 
 // A site with a board listing is the discovery source of its kind (#769).

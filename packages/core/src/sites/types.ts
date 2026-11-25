@@ -25,8 +25,20 @@ export interface SiteUrl {
  * matches (the contract test checks look-alikes of it). Keep each pattern one simple host shape:
  * core is linted by security/detect-unsafe-regex.
  */
-export type HostRule =
-  { readonly exact: string } | { readonly pattern: RegExp; readonly example: string };
+export type HostRule = ExactHost | { readonly pattern: RegExp; readonly example: string };
+
+/** The one kind of rule a request may be allowed by: one tenant's source must not reach another's. */
+export interface ExactHost {
+  readonly exact: string;
+}
+
+/** A site's hosts as what a request may be allowed by, or a throw when one of them is a pattern. */
+export function exactHosts(rules: readonly HostRule[]): readonly ExactHost[] {
+  return rules.map((rule) => {
+    if (!('exact' in rule)) throw new Error('a host pattern allows no request');
+    return rule;
+  });
+}
 
 /**
  * Lowercased, trimmed, with every trailing dot removed, in one pass over the host.
@@ -91,12 +103,20 @@ export interface JobRef {
   readonly site: string;
   readonly board: string | null;
   readonly id: string;
+  /**
+   * Where the site needs them (Workday): the board's host, and the job's path on it, as the link
+   * said. For building and reading links only: a fetch takes its host from a parsed config.
+   */
+  readonly host?: string | undefined;
+  readonly path?: string | undefined;
 }
 
 /** An ATS board: one company's listing on the site. */
 export interface BoardRef {
   readonly site: string;
   readonly slug: string;
+  /** Where a board is not on one fixed host (Workday): the host, as the link or config said. */
+  readonly host?: string | undefined;
 }
 
 export interface SiteIdentity {
@@ -131,6 +151,10 @@ export interface SiteIdentity {
   readonly board?: {
     fromUrl(url: SiteUrl): BoardRef | null;
     readonly configSchema: z.ZodType<Record<string, unknown>>;
+    /** The source config of a board, parsed by configSchema, or a throw. */
+    configOf(board: BoardRef): Record<string, unknown>;
+    /** The board a source config names; null when it names none (an invalid or foreign config). */
+    fromConfig(config: Record<string, unknown>): BoardRef | null;
     pageUrl(board: BoardRef): string;
   };
   /** The routes the site is reached by. A route absent here does not exist for the site. */

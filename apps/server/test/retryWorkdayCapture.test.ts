@@ -1,6 +1,6 @@
 // Issue #101: a Workday posting stored bare after a failed detail fetch was never retried by
 // anything, because both the normal discovery run and lead-resolve's recovery path went through
-// the same known.has(id) short-circuit in workdaySource.fetchPostings. This is the dedicated
+// the same known.has(id) short-circuit in Workday's listBoard. This is the dedicated
 // retry path that does not touch that generator at all.
 import { dedupeKey, type NormalizedPosting } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
