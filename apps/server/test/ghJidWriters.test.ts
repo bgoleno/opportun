@@ -429,8 +429,7 @@ describe('recordAtsJobRef writes only for the link that was checked (tl on #414)
       await recordAtsJobRef(
         app.db,
         ctxOf(a),
-        id,
-        'https://careers.examplecorp.example/jobs?gh_jid=42',
+        { ...before, postingUrl: 'https://careers.examplecorp.example/jobs?gh_jid=42' },
         VERIFIED,
       ),
     ).toBeNull();
@@ -454,7 +453,7 @@ describe('recordAtsJobRef writes only for the link that was checked (tl on #414)
       atsJobRef: other,
     });
     const before = await getOpportunity(app.db, ctxOf(a), id);
-    expect(await recordAtsJobRef(app.db, ctxOf(a), id, CAREERS, VERIFIED)).toBeNull();
+    expect(await recordAtsJobRef(app.db, ctxOf(a), before, VERIFIED)).toBeNull();
     const after = await getOpportunity(app.db, ctxOf(a), id);
     expect(after.atsJobRef).toEqual(other);
     expect(after.updatedAt).toBe(before.updatedAt);
@@ -464,7 +463,8 @@ describe('recordAtsJobRef writes only for the link that was checked (tl on #414)
     const { app, a } = await boot();
     const id = await seed(app, a);
     await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS });
-    expect((await recordAtsJobRef(app.db, ctxOf(a), id, CAREERS, VERIFIED))?.atsJobRef).toEqual(
+    const before = await getOpportunity(app.db, ctxOf(a), id);
+    expect((await recordAtsJobRef(app.db, ctxOf(a), before, VERIFIED))?.atsJobRef).toEqual(
       VERIFIED,
     );
   });

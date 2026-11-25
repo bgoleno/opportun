@@ -857,6 +857,23 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
       expect(screen.queryByText(/confirmed already/)).toBeNull();
     });
 
+    it('what changed while it was looked up is said (#892)', async () => {
+      const SAID =
+        'The company, title or posting link changed while the posting was being looked up.';
+      mockApi({
+        'GET /resumes': { items: [RESUME], total: 1 },
+        'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+        'GET /opportunities/opp-1': () => before,
+        'POST /opportunities/opp-1/find-posting': () => ({
+          status: 409,
+          body: { error: { code: 'opportunity_changed', message: SAID } },
+        }),
+      });
+      renderWithProviders(<Live />);
+      await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+      expect(await screen.findByText(SAID)).toBeInTheDocument();
+    });
+
     it('unreachable: Find posting is there to try again, and the next answer replaces it', async () => {
       let n = 0;
       let now = before;

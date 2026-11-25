@@ -392,11 +392,10 @@ describe('reconcilePosting', () => {
     expect(outcome).toEqual({ status: 'needs_review', detail: 'edited' });
   });
 
-  // Parked inside the write's own transaction, after its read and before its UPDATE. On Postgres
-  // the save commits meanwhile, so a check read in that transaction would be stale and only the
-  // UPDATE's own WHERE sees it. On SQLite the write gate holds the save back until the check
-  // commits; it then lands on top, so the text is kept either way. The check changes no link here:
-  // one that does has the row by then, below.
+  // Parked inside the write's own transaction, after its first read and before it has the row. On
+  // Postgres the save commits meanwhile, so a check read in that transaction would be stale and only
+  // the UPDATE's own WHERE sees it. On SQLite the write gate holds the save back until the check
+  // commits; it then lands on top, so the text is kept either way. From the row on, a save waits, below.
   it("a save that lands inside the write's transaction is kept (#856)", async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
@@ -406,7 +405,7 @@ describe('reconcilePosting', () => {
     await app.db.update(opportunities).set({ postingUrl }).where(eq(opportunities.id, id)).run();
     const before = await getOpportunity(app.db, ctx, id);
     onSlowTransaction(() => undefined);
-    const pause = pauseAt('opportunities.update.locked');
+    const pause = pauseAt('opportunities.update.attemptLocked');
 
     const check = run(app, ctx, id, boardWith([atsPosting()]));
     const [saving, seen] = await whileParked(pause, async () => {
@@ -423,13 +422,18 @@ describe('reconcilePosting', () => {
     expect(Buffer.from(out.descriptionMd ?? '')).toEqual(Buffer.from(SAVED));
   });
 
-  // A check that changes the link holds the row against an application being started (#913), and so
-  // against a save: that waits, on Postgres too, and lands on top.
-  it('a save beside a write that changes the link waits for it, and is kept', async () => {
+  // A check holds the row from there on, for what it settles with it (#892), as one that changes the link
+  // did against an application being started (#913). A save waits, on Postgres too, and lands on top.
+  it.each([
+    ['that changes the link', undefined],
+    ['that does not', atsPosting().postingUrl],
+  ])('a save beside a write %s waits for it, and is kept', async (_what, postingUrl) => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     vi.mocked(runStructured).mockResolvedValue({ passages: [] });
     const { id } = await seedCaptured(app, ctx);
+    if (postingUrl !== undefined)
+      await app.db.update(opportunities).set({ postingUrl }).where(eq(opportunities.id, id)).run();
     onSlowTransaction(() => undefined);
     const pause = pauseAt('opportunities.update.locked');
 

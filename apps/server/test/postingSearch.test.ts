@@ -91,6 +91,13 @@ async function linkedMail(
   };
 }
 
+/** What each answer was found for (#892). */
+const SEARCHED = {
+  companyId: expect.any(String) as string,
+  title: 'Staff Product Manager',
+  postingUrl: null,
+};
+
 describe('findPosting', () => {
   it('resolves the posting from the references extracted at ingest, with no body to read', async () => {
     // Design D-5. Plan 3 stops persisting bodies, so the link a recruiter sent has to survive
@@ -601,7 +608,7 @@ describe('findPosting', () => {
       board: lookup,
     });
 
-    expect(out).toEqual({ status: 'no_board', needsCareersUrl: true });
+    expect(out).toEqual({ status: 'no_board', needsCareersUrl: true, searchedFor: SEARCHED });
   });
 
   // #866: detection that could not finish is not "no board", which would say the company has none.
@@ -627,7 +634,7 @@ describe('findPosting', () => {
       board: lookup,
     });
 
-    expect(out).toEqual({ status: 'unreachable' });
+    expect(out).toEqual({ status: 'unreachable', searchedFor: SEARCHED });
     expect(asked).toEqual([]);
   });
 
@@ -654,7 +661,7 @@ describe('findPosting', () => {
     });
 
     expect(asked).toEqual([{ kind: 'ats_greenhouse', org: 'elsewhere' }]);
-    expect(out).toEqual({ status: 'unreachable' });
+    expect(out).toEqual({ status: 'unreachable', searchedFor: SEARCHED });
   });
 
   it('survives an unreachable board, and says it could not be read (#835)', async () => {

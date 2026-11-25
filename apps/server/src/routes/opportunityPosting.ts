@@ -19,6 +19,7 @@
 // find anything on.
 import { CAPTURE_MAX_TEXT } from '../lib/captureText';
 import { keyedFetch } from '../lib/safeFetch';
+import { createHash } from 'node:crypto';
 import { buffer } from 'node:stream/consumers';
 import { NormalizedPostingSchema, POSTING_STATES } from '@opportun/core';
 import type { FastifyInstance } from 'fastify';
@@ -47,10 +48,16 @@ import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
 import { unfinishedDedupeKeys } from '../repos/jobs';
 import { POSTING_RECONCILE_KIND } from '../lib/jobKinds';
+import { opportunityChanged, stopSearch } from '../lib/postingReconcile';
 import {
+  basisChanges,
   getOpportunity,
   recordAtsJobRef,
+  SearchBasisChanged,
+  searchBasisOf,
   setPostingState,
+  type BasisField,
+  type SearchBasis,
   type OpportunityView as OpportunityRowView,
 } from '../repos/opportunities';
 import { extract, fetchPageText, PASTE_TEXT_HINT } from './capture';
@@ -111,6 +118,8 @@ const FindResponse = z.object({
    *  not own: the user confirms it rather than the server attaching it. */
   needsConfirmation: z.boolean().optional(),
   hint: z.string().optional(),
+  /** What was searched for (#892), opaque: sent back with a row picked from the answer. */
+  searchedFor: z.string().optional(),
   /** A large board was read only in part (FR-D10's Workday lookup cap). */
   note: z.string().optional(),
 });
@@ -119,6 +128,11 @@ const AttachBody = z
   .object({
     /** A candidate from the picker. */
     posting: NormalizedPostingSchema.optional(),
+    /**
+     * With a candidate: the search it came from (#892). Whatever it says, one that is not the answer's for
+     * the opportunity as it now is has been made out of date. A page from before an upgrade has none.
+     */
+    searchedFor: z.string().optional(),
     url: HttpsUrl.optional(),
     text: z.string().trim().min(1).max(200_000).optional(),
     replaceDescription: DescriptionAgreed.optional(),
@@ -127,6 +141,12 @@ const AttachBody = z
   .refine((b) => [b.posting, b.url, b.text].filter((v) => v !== undefined).length === 1, {
     message: 'send exactly one of posting, url or text',
   });
+
+/** A search's basis, for the page that shows its candidates: opaque, and of the stored values exactly. */
+const searchKey = (basis: SearchBasis): string =>
+  createHash('sha256')
+    .update(JSON.stringify([basis.companyId, basis.title, basis.postingUrl]))
+    .digest('hex');
 
 const RederiveBody = z
   .object({
@@ -209,8 +229,36 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
     if (own === null || opp.postingUrl == null) return null;
     const ref = await verifyEmbeddedGreenhouse(db, ctx, opp, own.url, sctx);
     if (ref === null) return null;
-    return await recordAtsJobRef(db, ctx, opp.id, opp.postingUrl, ref);
+    const identified = await recordAtsJobRef(db, ctx, opp, ref);
+    if (identified === null) {
+      // Not written for what the user changed meanwhile (#892), and not for an identity set by another.
+      const changed = basisChanges(opp, await getOpportunity(db, ctx, opp.id));
+      if (changed.length > 0) throw new SearchBasisChanged(changed);
+    }
+    return identified;
   }
+
+  /** A search refused for what the user changed meanwhile (#892): said on the timeline, and to them. */
+  async function refuseChanged(
+    ctx: UserCtx,
+    id: string,
+    fields: readonly BasisField[],
+  ): Promise<never> {
+    await stopSearch(db, ctx, id, fields);
+    throw opportunityChanged();
+  }
+  const unlessChanged = async <T>(
+    ctx: UserCtx,
+    id: string,
+    write: () => Promise<T>,
+  ): Promise<T> => {
+    try {
+      return await write();
+    } catch (err) {
+      if (err instanceof SearchBasisChanged) return await refuseChanged(ctx, id, err.fields);
+      throw err;
+    }
+  };
 
   const readBody: BodyReader = async (bodyRef) =>
     (await buffer(await app.storage.openAttachment(bodyRef))).toString('utf8');
@@ -255,7 +303,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       const agreed = req.query.replaceDescription;
       const usersOwn = userWritten(current, agreed);
       if (usersOwn) {
-        const identified = await identifyOwnLink(ctx, current, sctx);
+        const identified = await unlessChanged(ctx, id, () => identifyOwnLink(ctx, current, sctx));
         if (current.postingState === 'confirmed' && identified !== null) {
           // On the timeline, as every other way a posting is found (#813).
           await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
@@ -267,11 +315,19 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         // proof, one request and no listing read (#398, #414). It now confirms the posting too,
         // user_confirmed so no later pass reads the user's description as the employer's copy.
         if (identified !== null) {
-          const confirmed = await setPostingState(db, ctx, id, {
-            postingState: 'confirmed',
-            postingStateDetail: 'user_confirmed',
-            atsJobRef: identified.atsJobRef,
-          });
+          const confirmed = await unlessChanged(ctx, id, () =>
+            setPostingState(
+              db,
+              ctx,
+              id,
+              {
+                postingState: 'confirmed',
+                postingStateDetail: 'user_confirmed',
+                atsJobRef: identified.atsJobRef,
+              },
+              { ifBasis: searchBasisOf(current) },
+            ),
+          );
           await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
             kept: true,
           });
@@ -285,6 +341,17 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         // already (a Refetch, #812, tl): only its own job refreshes it, below.
       }
       const outcome = await findPosting(db, ctx, id, sctx, { readBody });
+      // Whatever it found, or did not, it is for what the opportunity was then (#892): not said of what
+      // it is now.
+      const { searchedFor } = outcome;
+      const asSearched = async (): Promise<OpportunityRowView> => {
+        const now = await getOpportunity(db, ctx, id);
+        const stale = basisChanges(searchedFor, now);
+        if (stale.length > 0) await refuseChanged(ctx, id, stale);
+        return now;
+      };
+      await racePoint('posting.found');
+      const now = await asSearched();
       // A confirmed posting with the user's own description is refreshed only from its own job
       // (ownJobRef, found on the board): a title match, or another job a message names, never
       // replaces a confirmed identity by itself. It is offered instead (#812, tl).
@@ -299,6 +366,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           candidates: [outcome.candidate],
           board: [outcome.candidate],
           needsConfirmation: false,
+          searchedFor: searchKey(searchedFor),
           ...note,
         };
       }
@@ -307,32 +375,35 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
         // only ever comes from an email-linked job id, never a board read). Forwarded onto the
         // timeline entry (attachPosting) and in this response, so a person watching the moment
         // sees it in the toast and it still stands after the toast is gone.
-        const { opportunity, changed, keptDescription } = await attachSaying(
-          db,
-          ctx,
-          id,
-          outcome.candidate.posting,
-          outcome.status === 'exact'
-            ? outcome.via === 'posting_link'
-              ? 'posting_link'
-              : 'email_link'
-            : 'board',
-          outcome.note,
-          // The board this posting was just read from is the proof an embedded Greenhouse job
-          // needs (#398): no further request.
-          outcome.readFrom === undefined
-            ? {
-                sctx: {
-                  fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
-                  log: req.log,
-                },
-              }
-            : { readFrom: outcome.readFrom },
-          {
-            keepDescription: true,
-            byFindPosting: true,
-            ...(agreed === undefined ? {} : { replaceAgreed: agreed }),
-          },
+        const { opportunity, changed, keptDescription } = await unlessChanged(ctx, id, () =>
+          attachSaying(
+            db,
+            ctx,
+            id,
+            outcome.candidate.posting,
+            outcome.status === 'exact'
+              ? outcome.via === 'posting_link'
+                ? 'posting_link'
+                : 'email_link'
+              : 'board',
+            outcome.note,
+            // The board this posting was just read from is the proof an embedded Greenhouse job
+            // needs (#398): no further request.
+            outcome.readFrom === undefined
+              ? {
+                  sctx: {
+                    fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId),
+                    log: req.log,
+                  },
+                }
+              : { readFrom: outcome.readFrom },
+            {
+              keepDescription: true,
+              byFindPosting: true,
+              ifBasis: searchedFor,
+              ...(agreed === undefined ? {} : { replaceAgreed: agreed }),
+            },
+          ),
         );
         const note = outcome.note === undefined ? {} : { note: outcome.note };
         // A Refetch says what it changed, or that it changed nothing (#835, #866, qa on #830 and
@@ -352,11 +423,13 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       }
       // No board read answered the opportunity's own careers link: its identity can still come
       // from Greenhouse's API, while the posting itself is left to the user to choose (#398).
-      const identified = await identifyOwnLink(ctx, current, sctx);
+      const identified = await unlessChanged(ctx, id, () => identifyOwnLink(ctx, now, sctx));
+      // That can have asked Greenhouse.
+      await asSearched();
       const note = outcome.note === undefined ? {} : { note: outcome.note };
       if (identified !== null && outcome.status !== 'candidates') {
         // On the timeline, as the user-described cases above are (#813, tl on #847).
-        await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
+        await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? now.postingUrl!, {
           kept: false,
         });
         return { outcome: 'identified' as const, opportunity: identified, ...note };
@@ -367,11 +440,17 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           candidates: outcome.candidates,
           board: outcome.board,
           needsConfirmation: outcome.via === 'email_link_unverified',
+          searchedFor: searchKey(searchedFor),
           ...note,
         };
       }
       if (outcome.status === 'none') {
-        return { outcome: 'none' as const, candidates: outcome.candidates, ...note };
+        return {
+          outcome: 'none' as const,
+          candidates: outcome.candidates,
+          searchedFor: searchKey(searchedFor),
+          ...note,
+        };
       }
       if (outcome.status === 'unreachable') return { outcome: 'unreachable' as const };
       return {
@@ -391,7 +470,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       return workflow('capture', { userId: ctx.userId }, async () => {
         const { id } = req.params;
         const opp = await getOpportunity(db, ctx, id);
-        const { posting, text, url, replaceDescription } = req.body;
+        const { posting, text, url, replaceDescription, searchedFor } = req.body;
         const agreed =
           replaceDescription === undefined ? {} : { replaceAgreed: replaceDescription };
         // Anything handed over here, a picked board row included, comes from the client: an
@@ -400,6 +479,12 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           sctx: { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
         };
         if (posting !== undefined) {
+          // Found for a company, title or link that is another now (#892): refused, and the person is
+          // told on the spot. What they paste themselves was found by no search.
+          const ifBasis = searchBasisOf(opp);
+          if (searchedFor !== undefined && searchedFor !== searchKey(ifBasis)) {
+            throw opportunityChanged();
+          }
           // A Workday board row is listed without its description: fetch it now (FR-D10).
           const described = await describeWorkdayPosting(
             { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
@@ -407,10 +492,16 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           );
           // A row picked from the board confirms a posting the user described themselves, the
           // description kept, as Find posting's own match does (#756).
-          return attach(db, ctx, id, described, 'board', undefined, identity, {
-            keepDescription: true,
-            ...agreed,
-          });
+          try {
+            return await attach(db, ctx, id, described, 'board', undefined, identity, {
+              keepDescription: true,
+              ifBasis,
+              ...agreed,
+            });
+          } catch (err) {
+            if (err instanceof SearchBasisChanged) throw opportunityChanged();
+            throw err;
+          }
         }
         if (text !== undefined) {
           return attach(

@@ -33,11 +33,17 @@ import {
 } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
 import {
+  basisChanges,
   DescriptionChanged,
   getOpportunity,
+  leaveSearchUnfinished,
+  SearchBasisChanged,
+  searchBasisOf,
   setPostingState,
   updateOpportunity,
+  type BasisField,
   type OpportunityView,
+  type SearchBasis,
 } from '../repos/opportunities';
 
 /** The board search needs a body reader only for links found in linked mail; none here. */
@@ -47,6 +53,8 @@ export interface ReconcileOutcome {
   /** 'left_alone' (#858): the description changed meanwhile, and the state is as it was too. */
   status: 'confirmed' | 'needs_review' | 'left_alone';
   detail: PostingStateDetail | null;
+  /** What was found was for values the user has changed, so it was not used (#892). */
+  stopped?: true;
 }
 
 export interface CapturedPage {
@@ -147,9 +155,10 @@ async function selectPassages(
 // 'user_confirmed' (issue #250) is excluded: reconcile()'s own guard returns before flag() or
 // confirm() can ever be called with it, so this map never needs to speak for that outcome --
 // postingConfirm.ts writes its own distinct note directly, never through here.
-type ReconcileOutcomeKind = 'confirmed' | Exclude<PostingStateDetail, 'user_confirmed'>;
+type ReconcileOutcomeKind = 'confirmed' | 'stopped' | Exclude<PostingStateDetail, 'user_confirmed'>;
 const RECONCILE_NOTE_TITLES: Record<ReconcileOutcomeKind, string> = {
   confirmed: "Posting confirmed on the company's board",
+  stopped: 'Posting check stopped: the opportunity changed',
   ambiguous: 'Posting search found more than one candidate',
   none_found: "Posting not found on the company's board",
   no_board: 'No ATS board detected for this company',
@@ -209,14 +218,69 @@ export async function flag(
   // Never 'user_confirmed' (issue #250): flag() always pairs with needs_review below, and
   // that detail is only ever valid beside confirmed.
   detail: Exclude<PostingStateDetail, 'user_confirmed'>,
-  noteBody: string,
+  /** Of the opportunity as it was written: a company renamed meanwhile is said by its new name. */
+  noteBody: (opp: OpportunityView) => string,
+  /** What a search said it for (#892): changed since, it says nothing. */
+  ifBasis?: SearchBasis,
 ): Promise<ReconcileOutcome> {
-  await setPostingState(db, ctx, opportunityId, {
-    postingState: 'needs_review',
-    postingStateDetail: detail,
-  });
-  await writeReconcileNote(db, ctx, opportunityId, detail, noteBody);
+  let flagged: OpportunityView;
+  try {
+    flagged = await setPostingState(
+      db,
+      ctx,
+      opportunityId,
+      { postingState: 'needs_review', postingStateDetail: detail },
+      ifBasis === undefined ? {} : { ifBasis },
+    );
+  } catch (err) {
+    if (err instanceof SearchBasisChanged)
+      return await stopSearch(db, ctx, opportunityId, err.fields);
+    throw err;
+  }
+  await writeReconcileNote(db, ctx, opportunityId, detail, noteBody(flagged));
   return { status: 'needs_review', detail };
+}
+
+/** "company", "company and title", "company, title and posting link". */
+function listed(fields: readonly string[]): string {
+  const last = fields.at(-1) ?? '';
+  return fields.length < 2 ? last : `${fields.slice(0, -1).join(', ')} and ${last}`;
+}
+
+/** What Find posting, Re-derive and a picked row answer then. */
+export const opportunityChanged = (): HttpError =>
+  new HttpError(
+    409,
+    'opportunity_changed',
+    'The company, title or posting link changed while the posting was being looked up, so nothing found for the old ones was used. Run Find posting again.',
+    undefined,
+    { userFacing: true },
+  );
+
+/**
+ * Ends a search whose company, title or posting link the user changed meanwhile (#892): nothing found for
+ * the old values is used, and the timeline says so.
+ */
+export async function stopSearch(
+  db: Db,
+  ctx: UserCtx,
+  opportunityId: string,
+  fields: readonly BasisField[],
+): Promise<ReconcileOutcome> {
+  const now = await leaveSearchUnfinished(db, ctx, opportunityId);
+  const what = fields.length === 0 ? 'opportunity' : listed(fields);
+  await writeReconcileNote(
+    db,
+    ctx,
+    opportunityId,
+    'stopped',
+    `The ${what} changed while the posting was being looked up, so nothing found for the old ${fields.length === 1 ? 'value' : 'values'} was used. Find posting can be run again.`,
+  );
+  return {
+    status: now.postingState === 'needs_review' ? 'needs_review' : 'left_alone',
+    detail: now.postingStateDetail,
+    stopped: true,
+  };
 }
 
 /**
@@ -228,7 +292,8 @@ async function leaveEdited(db: Db, ctx: UserCtx, opportunityId: string): Promise
   const body =
     'The description changed while the board was being checked, so the board search left it as it is.';
   const now = await getOpportunity(db, ctx, opportunityId);
-  if (now.postingState !== 'confirmed') return await flag(db, ctx, opportunityId, 'edited', body);
+  if (now.postingState !== 'confirmed')
+    return await flag(db, ctx, opportunityId, 'edited', () => body);
   await writeReconcileNote(db, ctx, opportunityId, 'edited', body);
   return { status: 'left_alone', detail: now.postingStateDetail };
 }
@@ -236,16 +301,16 @@ async function leaveEdited(db: Db, ctx: UserCtx, opportunityId: string): Promise
 type OpportunityPatch = Parameters<typeof updateOpportunity>[3];
 
 /**
- * Writes confirm()'s patch, only while the description is still `opp`'s: DescriptionChanged, with
- * nothing written, when it is not (#856).
+ * Writes confirm()'s patch and settles the posting, under `only`'s conditions: DescriptionChanged or
+ * SearchBasisChanged, with nothing written, when one does not hold (#856, #892).
  */
 async function writeConfirmed(
   db: Db,
   ctx: UserCtx,
   opp: OpportunityView,
   patch: OpportunityPatch,
+  only: NonNullable<Parameters<typeof updateOpportunity>[4]>,
 ): Promise<void> {
-  const only = { ifDescription: opp };
   try {
     await updateOpportunity(db, ctx, opp.id, patch, only);
   } catch (err) {
@@ -272,7 +337,12 @@ export async function confirm(
   found: NormalizedPosting,
   /** The board `found` was just read from (#398), when it came out of a board read. */
   readFrom?: ReadFrom,
+  /** What the search that found it went by: changed since, nothing is written (#892). */
+  ifBasis: SearchBasis = searchBasisOf(opp),
 ): Promise<ReconcileOutcome> {
+  const start = await getOpportunity(db, ctx, opp.id);
+  const stale = basisChanges(ifBasis, start);
+  if (stale.length > 0) return await stopSearch(db, ctx, opp.id, stale);
   const posting = sanitizePosting(found);
   const atsText = posting.descriptionMd ?? '';
   const capture = await capturedPage(db, ctx, opp.id);
@@ -285,7 +355,7 @@ export async function confirm(
       captureText: capture.text,
       passages,
       siteLabel: capture.siteLabel,
-      company: opp.companyName,
+      company: start.companyName,
     });
   }
 
@@ -295,6 +365,9 @@ export async function confirm(
   // write below carries the same condition (#856), for a save that lands after this read; this
   // read also covers a posting that leaves nothing to write.
   const now = await getOpportunity(db, ctx, opp.id);
+  // What the search went by first (#892): with both changed it is that which makes all of it void.
+  const changed = basisChanges(ifBasis, now);
+  if (changed.length > 0) return await stopSearch(db, ctx, opp.id, changed);
   if (
     now.descriptionMd !== opp.descriptionMd ||
     now.descriptionFingerprint !== opp.descriptionFingerprint
@@ -314,13 +387,27 @@ export async function confirm(
   if (posting.remote != null) patch.remote = posting.remote;
   if (posting.compNote != null) patch.compNote = posting.compNote;
   await racePoint('posting.confirm');
-  if (Object.keys(patch).length > 0) {
-    try {
-      await writeConfirmed(db, ctx, opp, patch);
-    } catch (err) {
-      if (err instanceof DescriptionChanged) return await leaveEdited(db, ctx, opp.id);
-      throw err;
-    }
+  try {
+    await writeConfirmed(db, ctx, opp, patch, {
+      ifDescription: opp,
+      ifBasis,
+      // The req identity of the URL stored with it (D25: often there is none), by the one rule every
+      // posting writer shares (lib/atsJobRef, issue #137): a board host's own. A posting out of the
+      // board read just made also proves an embedded Greenhouse job's board (#398), with no further
+      // request; otherwise a verified one is only kept.
+      settle: (was) => ({
+        postingState: 'confirmed',
+        postingStateDetail: null,
+        atsJobRef:
+          readFrom !== undefined && posting.postingUrl != null
+            ? boardReadAtsJobRef(posting, readFrom, Date.now())
+            : postingAtsJobRefKeeping(posting.postingUrl ?? was.postingUrl, was.atsJobRef),
+      }),
+    });
+  } catch (err) {
+    if (err instanceof SearchBasisChanged) return await stopSearch(db, ctx, opp.id, err.fields);
+    if (err instanceof DescriptionChanged) return await leaveEdited(db, ctx, opp.id);
+    throw err;
   }
 
   // Issue #247: name what changed on the timeline, not just that something did. `board` comes
@@ -352,19 +439,6 @@ export async function confirm(
     descriptionNote +
     extraNote;
 
-  // The req identity of the URL now stored (D25: often there is none), by the one rule every
-  // posting writer shares (lib/atsJobRef, issue #137): a board host's own. A posting out of the
-  // board read just made also proves an embedded Greenhouse job's board (#398), with no further
-  // request; otherwise a verified one is only kept.
-  const storedUrl = posting.postingUrl ?? opp.postingUrl;
-  await setPostingState(db, ctx, opp.id, {
-    postingState: 'confirmed',
-    postingStateDetail: null,
-    atsJobRef:
-      readFrom !== undefined && posting.postingUrl != null
-        ? boardReadAtsJobRef(posting, readFrom, Date.now())
-        : postingAtsJobRefKeeping(storedUrl, opp.atsJobRef),
-  });
   await writeReconcileNote(db, ctx, opp.id, 'confirmed', body);
   return { status: 'confirmed', detail: null };
 }
