@@ -234,6 +234,7 @@ merged after it.
   select in Settings > AI no longer draws its arrow below its box
   ([#909](https://github.com/bgoleno/opportun/issues/909); PR
   [#940](https://github.com/bgoleno/opportun/pull/940)).
+- Fixed: a message that arrives again no longer changes what was stored, and a rejected message stays rejected. Once, after a backup, the server clears text left on rejected messages.
 
 ### Discovery
 
