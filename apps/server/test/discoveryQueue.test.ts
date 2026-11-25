@@ -22,13 +22,14 @@ import { DISCOVERY_RUN_KIND, MULTI_POSTED_PREFIX } from '../src/jobs/discoveryRu
 import {
   createRun,
   createSource,
+  getResult,
   insertResult,
   listResults,
   listRuns,
   setDisposition,
   setRanking,
 } from '../src/repos/discovery';
-import { mergeOpportunities } from '../src/repos/opportunities';
+import { createOpportunity, mergeOpportunities } from '../src/repos/opportunities';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
 import { withFailingWrite } from './db';
@@ -894,6 +895,12 @@ describe('levels of one title are different jobs (#968)', () => {
       const { app, a } = await boot();
       const old = await at(app, a, 'Senior Engineer', 'Austin, TX');
       const first = (await accept(a, old)).json();
+      // Found by its result alone: its own title is another's (#971).
+      await app.db
+        .update(opportunities)
+        .set({ title: 'Renamed' })
+        .where(eq(opportunities.id, first.opportunityId))
+        .run();
       const posting: Record<string, unknown> = { ...POSTING, title: 'Senior Engineer' };
       delete posting[missing];
       await app.db
@@ -1519,16 +1526,154 @@ describe('POST /discovery/results/:id/unsuppress (#11)', () => {
     expect(await pendingIds(app, a)).toHaveLength(1);
   });
 
-  it('is a 409 on a pending result', async () => {
+  // #927: its dismissal was undone in another tab, and this one still listed it as dismissed.
+  it('is a 409 on a result put back in the queue, and says so', async () => {
     const { app, a } = await boot();
     const id = await seedResult(app, a);
+    const post = (path: string, payload: Record<string, unknown>) =>
+      a.request({ method: 'POST', url: `/api/v1/discovery/results/${path}`, payload });
+    expect((await post(`${id}/dismiss`, {})).statusCode).toBe(200);
+    const undone = await post('bulk-undo-dismiss', { ids: [id] });
+    expect(undone.json().results).toEqual([{ id, outcome: 'restored' }]);
     const res = await a.request({
       method: 'POST',
       url: `/api/v1/discovery/results/${id}/unsuppress`,
       payload: {},
     });
     expect(res.statusCode).toBe(409);
-    expect(res.json().error.code).toBe('already_pending');
+    expect(res.json().error).toEqual({
+      code: 'already_pending',
+      message:
+        'This result is back in the review queue, so there is nothing to unsuppress. Decide on it there.',
+    });
+  });
+
+  // https://github.com/bgoleno/opportun/issues/1008. A delete lets no key go by itself; Unsuppress
+  // does, as on an accepted result whose opportunity was dismissed.
+  describe('an accepted result whose opportunity was deleted', () => {
+    /** A polled posting, accepted; `repost` polls the same job as another requisition. */
+    async function accepted() {
+      const { app, a } = await boot();
+      let externalId = POSTING.externalId;
+      const { poll } = await board(app, a, () => [{ ...POSTING, externalId }]);
+      expect((await poll()).inserted).toBe(1);
+      const [id] = await pendingIds(app, a);
+      const send = (method: 'POST' | 'DELETE', url: string, payload?: Record<string, unknown>) =>
+        a.request({ method, url: `/api/v1${url}`, ...(payload === undefined ? {} : { payload }) });
+      const accept = await send('POST', `/discovery/results/${id}/accept`, {});
+      expect(accept.statusCode, accept.body).toBe(200);
+      const oppId = accept.json().opportunityId as string;
+      return {
+        app,
+        a,
+        id: id!,
+        oppId,
+        send,
+        remove: async () => {
+          const res = await send('DELETE', `/opportunities/${oppId}`);
+          expect(res.statusCode, res.body).toBe(204);
+        },
+        unsuppress: () => send('POST', `/discovery/results/${id}/unsuppress`, {}),
+        repost: async (as: string) => {
+          externalId = as;
+          const stats = await poll();
+          return { stats, pending: await pendingIds(app, a) };
+        },
+      };
+    }
+
+    it('is unsuppressed, and the next repost is a card', async () => {
+      const { app, a, id, remove, unsuppress, repost } = await accepted();
+      await remove();
+      const res = await unsuppress();
+      expect(res.statusCode, res.body).toBe(200);
+      // What happened to it stays recorded: accepted, and no opportunity now.
+      expect(res.json()).toMatchObject({
+        id,
+        disposition: 'accepted',
+        opportunityId: null,
+        dedupeKey: null,
+      });
+      const { stats, pending } = await repost('gh-2');
+      expect(stats).toMatchObject({ inserted: 1, duplicates: 0 });
+      expect(pending).toHaveLength(1);
+      expect(pending).not.toContain(id);
+      expect((await getResult(app.db, ctxOf(a), id)).disposition).toBe('accepted');
+    });
+
+    it('without it, the repost is none: the delete lets no key go', async () => {
+      const { app, a, id, remove, repost } = await accepted();
+      const { dedupeKey: key } = await getResult(app.db, ctxOf(a), id);
+      await remove();
+      expect((await getResult(app.db, ctxOf(a), id)).dedupeKey).toBe(key);
+      const { stats, pending } = await repost('gh-2');
+      expect(stats).toMatchObject({ inserted: 0, duplicates: 1 });
+      expect(pending).toEqual([]);
+    });
+
+    it('with an opportunity made by hand since for the same job, the repost is none either', async () => {
+      const { remove, unsuppress, repost, send } = await accepted();
+      await remove();
+      expect((await unsuppress()).statusCode).toBe(200);
+      const made = await send('POST', '/opportunities', {
+        companyName: POSTING.company,
+        title: POSTING.title,
+        location: POSTING.location,
+        sourceKind: 'manual',
+      });
+      expect(made.statusCode, made.body).toBe(201);
+      const { stats, pending } = await repost('gh-2');
+      expect(stats).toMatchObject({ inserted: 0, duplicates: 1 });
+      expect(pending).toEqual([]);
+    });
+
+    it('a second time there is nothing left for it to release', async () => {
+      const { remove, unsuppress } = await accepted();
+      await remove();
+      expect((await unsuppress()).statusCode).toBe(200);
+      const again = await unsuppress();
+      expect(again.statusCode).toBe(409);
+      expect(again.json().error.code).toBe('not_suppressing');
+    });
+
+    it.each(['interested', 'closed'] as const)(
+      'one that is there, %s, still refuses it, and the key stays',
+      async (stage) => {
+        const { app, a, id, oppId, unsuppress, send } = await accepted();
+        if (stage === 'closed') {
+          const moved = await send('POST', `/opportunities/${oppId}/stage`, {
+            to: 'closed',
+            closedReason: 'withdrawn',
+          });
+          expect(moved.statusCode, moved.body).toBe(200);
+        }
+        const before = await getResult(app.db, ctxOf(a), id);
+        const res = await unsuppress();
+        expect(res.statusCode).toBe(409);
+        expect(res.json().error.code).toBe('opportunity_still_active');
+        expect(await getResult(app.db, ctxOf(a), id)).toEqual(before);
+      },
+    );
+  });
+
+  // An old race could leave an opportunity on a dismissed row (routes/discovery.ts alreadyDecided):
+  // it says nothing of a dismissal.
+  it('a dismissed result that names an opportunity is unsuppressed', async () => {
+    const { app, a } = await boot();
+    const id = await seedResult(app, a);
+    const opp = await createOpportunity(app.db, ctxOf(a), {
+      companyName: 'Globex',
+      title: 'Data Analyst',
+      sourceKind: 'manual',
+    });
+    await setDisposition(app.db, ctxOf(a), id, 'dismissed', opp.id);
+    const res = await a.request({
+      method: 'POST',
+      url: `/api/v1/discovery/results/${id}/unsuppress`,
+      payload: {},
+    });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ disposition: 'dismissed', dedupeKey: null });
   });
 
   it('is a 409 the second time: nothing is left for it to release', async () => {

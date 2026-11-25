@@ -20,7 +20,7 @@ import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../lib/titleMatch';
 import { boardConfig, boardFromUrl } from '../lib/atsBoard';
 import { AiUnavailableError, CaptureOutputSchema, renderPrompt, runStructured } from '@opportun/ai';
 import { decodeEntities, newId } from '@opportun/core';
-import { and, asc, eq, isNotNull } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import { htmlToText } from '../adapters/gmail';
 import { siteOfKind } from '../sites';
@@ -447,7 +447,7 @@ export async function boardAnchors(
 type OppRow = typeof opportunities.$inferSelect;
 type CompanyRow = typeof companies.$inferSelect;
 
-/** The earliest message linked to the opportunity: the outreach that created it. */
+/** The earliest message linked to the opportunity, not rejected: the outreach that created it. */
 async function sourceFrom(db: Db, ctx: UserCtx, opportunityId: string): Promise<string | null> {
   return (
     (
@@ -458,6 +458,7 @@ async function sourceFrom(db: Db, ctx: UserCtx, opportunityId: string): Promise<
           and(
             eq(communications.userId, ctx.userId),
             eq(communications.opportunityId, opportunityId),
+            isNull(communications.rejectedAt),
           ),
         )
         .orderBy(asc(communications.sentAt))
@@ -767,7 +768,13 @@ export async function enrichOpportunity(
       await db
         .update(communications)
         .set({ needsReview: true, updatedAt: Date.now() })
-        .where(and(eq(communications.userId, ctx.userId), eq(communications.opportunityId, opp.id)))
+        .where(
+          and(
+            eq(communications.userId, ctx.userId),
+            eq(communications.opportunityId, opp.id),
+            isNull(communications.rejectedAt),
+          ),
+        )
         .run();
     }
   }

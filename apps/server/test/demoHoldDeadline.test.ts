@@ -26,6 +26,7 @@ import {
 import { REFERRAL_TASK } from '../src/routes/referrals';
 import { testApp } from './helpers';
 import { signIn } from './isolation';
+import { PATIENCE_MS } from './patience';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -104,7 +105,7 @@ async function visitorWithAiCall(limits: {
       url: `/api/v1/opportunities/${(opp.json() as { id: string }).id}/referral-candidates?rank=true`,
     });
     const settled = Promise.allSettled([request]).then(([r]) => r);
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: 5_000 });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: PATIENCE_MS });
     return { settled };
   };
   return { app, env, gate, user1, send };
@@ -150,7 +151,7 @@ describe('a demo request that outlives its hold writes nothing after the reset (
       resetFinished();
       const outcome = await settled;
       // Let anything the handler still had to do run.
-      await vi.waitFor(() => expect(gate.held).toBe(0), { timeout: 5_000 });
+      await vi.waitFor(() => expect(gate.held).toBe(0), { timeout: PATIENCE_MS });
       await new Promise((r) => setTimeout(r, 300));
 
       // Nothing the request wrote is left in the reseeded account, and nothing came after: on main
@@ -193,7 +194,7 @@ describe('a demo request that outlives its hold writes nothing after the reset (
       const { settled } = await send(fetchMock);
       // The bound gives the gate back with the handler still running, so a reset need not wait for
       // it. The request is rejected meanwhile, with the test waiting for something else.
-      await vi.waitFor(() => expect(gate.held).toBe(0), { timeout: 10_000 });
+      await vi.waitFor(() => expect(gate.held).toBe(0), { timeout: PATIENCE_MS });
       expect(await settled).toMatchObject({
         status: 'rejected',
         reason: { code: 'LIGHT_ECONNRESET' },
@@ -210,7 +211,12 @@ describe('a demo request that outlives its hold writes nothing after the reset (
 });
 
 describe("a hold's stop signal (#684)", () => {
+  // The gate's timers only, moved by the test: no wall clock to be late by (#948).
+  const handTimers = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  afterEach(() => vi.useRealTimers());
+
   it('fires the margin before the bound, not at a release, and is what the held work sees', async () => {
+    handTimers();
     const gate = new DemoResetGate({ stopMarginMs: 100 });
     const hold = await gate.shared({ limitMs: 300 });
     const done = await gate.shared({ limitMs: 300 });
@@ -218,35 +224,40 @@ describe("a hold's stop signal (#684)", () => {
     expect(done.signal.aborted, 'a release does not abort').toBe(false);
     expect(currentHoldStop()).toBeUndefined();
     const seen = await runWithHoldStop(hold.signal, async () => {
-      await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setImmediate(r));
       return currentHoldStop();
     });
     expect(seen).toBe(hold.signal);
-    const started = Date.now();
-    await new Promise<void>((r) => hold.signal.addEventListener('abort', () => r()));
-    const at = Date.now() - started;
-    expect(at).toBeGreaterThanOrEqual(150);
-    expect(at).toBeLessThan(280);
+    vi.advanceTimersByTime(199);
+    expect(hold.signal.aborted, 'not before the margin').toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(hold.signal.aborted, 'at the margin').toBe(true);
     expect(hold.ended, 'the hold is still held at the stop').toBe(false);
-    await vi.waitFor(() => expect(hold.ended).toBe(true));
+    vi.advanceTimersByTime(99);
+    expect(hold.ended, 'not before the bound').toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(hold.ended, 'at the bound').toBe(true);
+    expect(done.signal.aborted, 'nor does anything after a release').toBe(false);
   });
 
   it('a margin as long as the hold stops it at once, while it is still held', async () => {
+    handTimers();
     const gate = new DemoResetGate({ stopMarginMs: 1_000 });
     const hold = await gate.shared({ limitMs: 500 });
-    await vi.waitFor(() => expect(hold.signal.aborted).toBe(true), { timeout: 100 });
+    vi.advanceTimersByTime(0);
+    expect(hold.signal.aborted).toBe(true);
+    expect(hold.ended).toBe(false);
+    vi.advanceTimersByTime(499);
     expect(hold.ended).toBe(false);
   });
 
   it("a gated job is told to stop (ctx.stopping) at its hold's stop signal, before the bound (tl on #704)", async () => {
     const { app } = await testApp({ demo: true });
     const KIND = 'test.demo_hold_stopping';
-    // The stop comes 50 ms in, the bound 50 s in: whatever the job sees is the signal's doing.
+    // The stop comes 50 ms in, the bound 50 s in: whatever the job sees while it holds the gate is
+    // the signal's doing, however late the host lets it look.
     const gate = new DemoResetGate({ stopMarginMs: HOLD_LIMIT_MS - 50 });
-    const seen: { stoppedAfterMs: number | null; heldThen: number } = {
-      stoppedAfterMs: null,
-      heldThen: -1,
-    };
+    const seen = { stopped: false, heldThen: -1 };
     try {
       registerJob({
         kind: KIND,
@@ -254,9 +265,9 @@ describe("a hold's stop signal (#684)", () => {
         maxAttempts: 1,
         async run(_db, _payload, ctx) {
           const started = Date.now();
-          while (Date.now() - started < 2_000) {
+          while (Date.now() - started < PATIENCE_MS) {
             if (ctx.stopping()) {
-              seen.stoppedAfterMs = Date.now() - started;
+              seen.stopped = true;
               seen.heldThen = gate.held;
               return;
             }
@@ -266,8 +277,7 @@ describe("a hold's stop signal (#684)", () => {
       });
       await enqueue(app.db, KIND, {});
       await runDueJobs(app.db, { services: { ...app.jobs.services, demoResetGate: gate } });
-      expect(seen.stoppedAfterMs, 'told to stop').not.toBeNull();
-      expect(seen.stoppedAfterMs!).toBeLessThan(1_000);
+      expect(seen.stopped, 'told to stop').toBe(true);
       expect(seen.heldThen, 'while it still holds the gate').toBe(1);
     } finally {
       unregisterJob(KIND);

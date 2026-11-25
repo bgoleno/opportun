@@ -279,6 +279,11 @@ export const ATTRIBUTES = {
   'opportun.count.cleared': int,
   'opportun.count.returned': int,
   'opportun.count.unmatched': int,
+  'opportun.count.messages': int,
+  'opportun.count.entries_blanked': int,
+  'opportun.count.entries_left': int,
+  'opportun.count.notes_cleared': int,
+  'opportun.count.stage_notes_left': int,
   'opportun.mail.channel': { kind: 'enum', values: COMM_CHANNELS },
   'opportun.db.awaited_outside': { kind: 'bool' },
   // A process warning's class and code (index.ts's handlers): never its text.
@@ -304,6 +309,7 @@ export const ATTRIBUTES = {
   'opportun.count.invalid': int,
   'opportun.count.suppressed': int,
   'opportun.count.filtered': int,
+  'opportun.count.linked': int,
   'opportun.communication.id': { kind: 'id' },
   'opportun.company.id': { kind: 'id' },
   'opportun.source.id': { kind: 'id' },
@@ -697,6 +703,7 @@ export const AUDIT_EVENTS = [
   'job.retry',
   'jobs.pruned',
   'mail.purged',
+  'mail.rejected_tidied',
   'profile.updated',
   'resume.edits_applied',
   'secret.created',
@@ -768,6 +775,7 @@ const SYSTEM_EVENTS = {
       'opportun.count.invalid',
       'opportun.count.suppressed',
       'opportun.count.filtered',
+      'opportun.count.linked',
     ],
   },
 } as const satisfies Record<string, EventDef>;
@@ -991,6 +999,16 @@ const LOG_MESSAGE_ENTRIES: Record<string, readonly AttrKey[]> = {
   'ranking batch cleanup: what the batch holds could not be read; read at the cleanup': [
     'opportun.rank_batch.id',
   ],
+  // The job that tidies rejected messages (jobs/tidyRejected.ts): counts only.
+  'rejected messages tidied': [
+    'opportun.count.messages',
+    'opportun.count.entries_blanked',
+    'opportun.count.entries_left',
+    'opportun.count.notes_cleared',
+    'opportun.count.stage_notes_left',
+  ],
+  'rejected messages not tidied, as the backup before it failed: tried again at the next start': [],
+  'rejected messages not all tidied: tried again at the next start': [],
   'could not read the message again; classifying on the snippet': [
     'opportun.communication.id',
     'opportun.mail.channel',

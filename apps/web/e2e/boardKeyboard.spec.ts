@@ -3,6 +3,7 @@
 // the column. Driven through the real keyboard path (focus the card, Space to pick up, arrows,
 // Space to drop) in a real browser, because the component tests mock the drag library.
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { announced, withoutGlide } from './boardDrag';
 import { card, choose, createOpportunity, registerUser, toasts } from './helpers';
 
 /** dnd-kit's live region: what a screen reader hears during a drag (assertive). */
@@ -32,12 +33,7 @@ async function dismissed(page: Page, opp: { company: string; title: string }) {
 async function stepped(page: Page, key: 'ArrowLeft' | 'ArrowRight'): Promise<boolean> {
   const before = (await liveRegion(page).textContent()) ?? '';
   await page.keyboard.press(key);
-  return expect(liveRegion(page))
-    .not.toHaveText(before, { timeout: 1_000 })
-    .then(
-      () => true,
-      () => false,
-    );
+  return await announced(page, before, { not: true, timeout: 1_000 });
 }
 
 /**
@@ -235,13 +231,7 @@ async function stepTo(page: Page, key: 'ArrowLeft' | 'ArrowRight', wanted: strin
   const before = (await liveRegion(page).textContent()) ?? '';
   for (let i = 0; i < 5; i++) {
     await page.keyboard.press(key);
-    const moved = await expect(liveRegion(page))
-      .not.toHaveText(before, { timeout: 1_000 })
-      .then(
-        () => true,
-        () => false,
-      );
-    if (moved) break;
+    if (await announced(page, before, { not: true, timeout: 1_000 })) break;
   }
   await expect(liveRegion(page)).toHaveText(wanted, { timeout: 1 });
 }
@@ -407,12 +397,16 @@ async function walkColumns(
   await scrollBoard(page, 'start');
   await moved.focus();
   await page.keyboard.press('Space');
+  await announced(page, `${name} is over the ${from} column.`);
   await expect(liveRegion(page)).toHaveText(`${name} is over the ${from} column.`);
   for (const [key, col] of walk) {
     await stepTo(page, key, `${name} is over the ${col} column.`);
-    await expect.poll(() => cardShownOver(page, col), { message: col }).not.toBe(false);
+    await expect
+      .poll(() => cardShownOver(page, col), { message: col, intervals: [10, 20, 40, 80] })
+      .toBe(true);
   }
   await page.keyboard.press('Escape');
+  await announced(page, `Moving ${name} was cancelled.`);
   await expect(liveRegion(page)).toHaveText(`Moving ${name} was cancelled.`);
 }
 
@@ -424,18 +418,17 @@ const leftFrom = (from: number) =>
     .map((col) => ['ArrowLeft', col] as const);
 
 /**
- * Whether the dragged card's centre is over `name`'s column, within the part of it on screen. A
- * chain column with no room on screen at all (768 px with both end columns expanded leaves the
- * chain none) cannot show the card: null.
+ * Whether the dragged card's centre is over `name`'s column, within the part of it on screen; not when
+ * none of it is.
  */
-async function cardShownOver(page: Page, name: string): Promise<boolean | null> {
+async function cardShownOver(page: Page, name: string): Promise<boolean> {
   return page.evaluate((columnName) => {
     const columnEl = document.querySelector(`section[aria-label="${columnName} column"]`)!;
     const c = columnEl.getBoundingClientRect();
     const area = columnEl.closest('[data-board-scroller]')?.getBoundingClientRect();
     const left = Math.max(c.left, area?.left ?? c.left);
     const right = Math.min(c.right, area?.right ?? c.right);
-    if (right <= left) return null;
+    if (right <= left) return false;
     const card = document.querySelector('.cursor-grabbing.shadow-lg')!.getBoundingClientRect();
     const x = card.left + card.width / 2;
     return x >= left - 1 && x <= right + 1;
@@ -464,6 +457,7 @@ test.describe('a keyboard drag reaches every column at any board width (#886)', 
       if (expanded.includes('Closed')) {
         await page.getByRole('button', { name: /^Expand Closed/ }).click();
       }
+      await withoutGlide(page);
       const last = COLUMNS.length - 1;
       for (const width of widths) {
         await test.step(`${width} px, a card in New`, async () => {
@@ -518,12 +512,14 @@ test.describe('a keyboard drag reaches every column at any board width (#886)', 
             await card(page, 'Initrode', `Card in ${col}`).focus();
             if (scrolled !== 'focused') await scrollBoard(page, scrolled);
             await page.keyboard.press('Space');
+            await announced(page, `${name} is over the ${col} column.`);
             await expect(liveRegion(page), scrolled).toHaveText(
               `${name} is over the ${col} column.`,
             );
             // The sensor listens from a timer after the pick-up (see keyboardDrop).
             await page.waitForTimeout(100);
             await page.keyboard.press('Space');
+            await announced(page, `${name} was dropped on the ${col} column.`);
             await expect(liveRegion(page), scrolled).toHaveText(
               `${name} was dropped on the ${col} column.`,
             );

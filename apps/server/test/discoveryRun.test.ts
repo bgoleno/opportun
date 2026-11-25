@@ -38,6 +38,7 @@ import { createCompany } from '../src/repos/companies';
 import { createOpportunity, transitionOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { cpuMs } from './scaling';
 
 const boot = useApi();
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
@@ -157,11 +158,44 @@ describe('sanitizePosting (Review Focus 1)', () => {
     }
   });
 
-  it('stays fast on hostile markup', () => {
-    const nasty = `${'<script>'.repeat(20_000)}${'< '.repeat(50_000)}<${' '.repeat(100_000)}`;
-    const started = Date.now();
+  // One input for each pattern and each pass, so none hides another: an unclosed <script> drops all
+  // that comes after it (#1024). Each is what that pattern costs the most on when it is loosened.
+  const SPACES = ' '.repeat(100_000);
+  it.each([
+    ['unclosed elements, dropped', '<script>'.repeat(100_000)],
+    ['longer names than an element', '<scripts '.repeat(20_000)],
+    ['closed elements', '<script></script>'.repeat(10_000)],
+    ['an element with no end to its closing tag', `${'<style></style '.repeat(10_000)}`],
+    ['comments', '<!--'.repeat(50_000)],
+    ['a comment and spaces', `<!--${SPACES}--`],
+    ['a < and spaces', `<${SPACES}`],
+    ['many < and a space', '< '.repeat(50_000)],
+    ['many <', '<'.repeat(100_000)],
+    ['a </ and spaces', `</${SPACES}`],
+    ['a <! and spaces', `<!${SPACES}`],
+    ['a list item and spaces', `<li${SPACES}`],
+    ['a break and spaces', `<br${SPACES}`],
+    ['a closed block and spaces', `</p${SPACES}`],
+    ['an open block and spaces', `<div${SPACES}`],
+    ['a tag and spaces', `<b${SPACES}`],
+    ['a tag with spaces and letters', `<b${' a'.repeat(50_000)}`],
+    ['a tag cut off, many before it', '<b '.repeat(60_000)],
+    ['tags cut off, and an end of none', `${'<b '.repeat(60_000)}<>`],
+    ['a tag ends and spaces', `<b>${SPACES}</`],
+    ['spaces', `a${SPACES}b`],
+    ['spaces of two kinds', `a${' \u00a0'.repeat(50_000)}b`],
+    ['tabs', `a${'\t'.repeat(100_000)}b`],
+    ['lines', `a${'\n'.repeat(100_000)}b`],
+    ['lines and spaces', `a${' \n'.repeat(50_000)}b`],
+    ['carriage returns', `a${'\r'.repeat(100_000)}b`],
+    ['entities with no end', `&${'a'.repeat(100_000)}`],
+    ['many entities with no end', '&#x1'.repeat(25_000)],
+    ['controls', `a${'\u0001'.repeat(100_000)}b`],
+  ])('stays fast on hostile markup: %s', (_what, nasty) => {
+    // CPU time, which a busy host does not add to (#948).
+    const started = cpuMs();
     sanitizePosting({ company: 'A', title: 'B', descriptionMd: nasty });
-    expect(Date.now() - started).toBeLessThan(1000);
+    expect(cpuMs() - started).toBeLessThan(1000);
   });
 });
 
@@ -194,6 +228,7 @@ describe('discovery.run job', () => {
       invalid: 0,
       suppressed: 0,
       filtered: 0,
+      linked: 0,
     });
     expect(run!.finishedAt).not.toBeNull();
     expect(run!.error).toBeNull();
@@ -212,6 +247,7 @@ describe('discovery.run job', () => {
       invalid: 0,
       suppressed: 0,
       filtered: 0,
+      linked: 0,
     });
   });
 
@@ -239,6 +275,7 @@ describe('discovery.run job', () => {
       invalid: 0,
       suppressed: 2,
       filtered: 0,
+      linked: 0,
     });
     const feedback = await app.db
       .select()
@@ -307,7 +344,7 @@ describe('discovery.run job', () => {
     const ctx = ctxOf(a);
     await createOpportunity(app.db, ctx, {
       companyName: 'Initech',
-      title: 'Senior Staff Platform Engineer',
+      title: 'Staff, Platform Engineer',
       location: 'Austin, TX',
       sourceKind: 'manual',
     });
@@ -372,9 +409,7 @@ describe('discovery.run job', () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);
     registerSource(fakeSource('ats_lever', { postings: [P1] }));
-    registerSource(
-      fakeSource('mcp', { postings: [{ ...P1, title: 'Sr. Staff Platform Engineer' }] }),
-    );
+    registerSource(fakeSource('mcp', { postings: [{ ...P1, title: 'Staff, Platform Engineer' }] }));
     const lever = await createSource(app.db, ctx, {
       kind: 'ats_lever',
       config: { org: 'initech' },

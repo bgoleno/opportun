@@ -15,7 +15,6 @@ import {
   RANK_SKIP_REASONS,
   RESOLUTIONS,
 } from '@opportun/core';
-import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
@@ -23,12 +22,12 @@ import { hasSource } from '../adapters/discoverySource';
 import { DISCOVERY_RUN_KIND } from '../lib/jobKinds';
 import { resumeAfterUndo } from '../jobs/discoveryRankWaiting';
 import { HttpError } from '../lib/errors';
+import { httpLink } from '../lib/httpLink';
+import { openOpportunityFor, recordAlsoPosted } from '../lib/openOpportunity';
 import { racePoint } from '../lib/racePoints';
-import { createActivity } from '../repos/activities';
 import {
   createSource,
   deleteSource,
-  findChainTarget,
   getResult,
   getSourceRow,
   hasRunInProgress,
@@ -39,13 +38,13 @@ import {
   RESULT_SORTS,
   RUN_SORTS,
   setDisposition,
+  undoDismissal,
   SOURCE_SORTS,
   unsuppressResult,
   updateSource,
 } from '../repos/discovery';
 import { createOpportunity, getOpportunity, mergeOpportunities } from '../repos/opportunities';
 import { dismissalFeedback } from '../db/schema';
-import { sourceLabel } from '../lib/sourceLabels';
 import { discoveryCostFigures } from '../repos/discoveryFigures';
 import { IdParams, listQuery, optionalText, pageOf } from './common';
 import { OpportunityView } from './opportunities';
@@ -182,7 +181,8 @@ const BulkItemResultSchema = z.object({
   id: z.string(),
   outcome: z.enum(BULK_OUTCOMES),
   /** Present only for `duplicate`, `attached` and `already_decided`: the opportunity this id
-   *  already matches, was linked to, or was accepted into (when there still is one). */
+   *  already matches, was linked to, or was accepted into (when there still is one; a `duplicate` of
+   *  an undo with none is of another result in the queue). */
   existingId: z.string().optional(),
   /** Present only for `error`: why, for the one item that failed. */
   message: z.string().optional(),
@@ -248,17 +248,6 @@ const RunSchema = z.object({
   stats: z.record(z.string(), z.unknown()).nullable(),
   error: z.string().nullable(),
 });
-
-/** A short, link-safe label for a source kind in activity titles. */
-function httpLink(url: string | null | undefined): string | null {
-  if (url == null) return null;
-  try {
-    const u = new URL(url);
-    return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : null;
-  } catch {
-    return null;
-  }
-}
 
 const TokenSpreadSchema = z.object({ median: z.number(), p90: z.number() }).nullable();
 
@@ -393,9 +382,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * The default accept path (no `attachTo`): creates an opportunity from the result's
-   * posting and marks the result accepted, UNLESS this result's own card (cardKey: one company
-   * and one whole title, #968) already has a live, still-eligible opportunity from an earlier
-   * accept, in which case it links to that one instead (issue #226). Shared by the single and
+   * posting and marks the result accepted, UNLESS this very posting was captured already, or its
+   * own card (cardKey: one company and one whole title, #968) has an open opportunity, in which
+   * case it links to that one instead (issue #226; openOpportunityFor, #971). Shared by the single and
    * bulk accept routes, so a bulk accept runs exactly the same create-or-chain logic as a
    * single one, item by item, rather than a second version of it.
    *
@@ -422,7 +411,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   ): Promise<{ view: DiscoveryResultView; chained: boolean }> {
     const p = result.posting;
     if (opts.force !== true && result.dedupeKey !== null) {
-      const chainTarget = await findChainTarget(tx, ctx, result.dedupeKey, p);
+      const chainTarget = await openOpportunityFor(tx, ctx, p, result.dedupeKey);
       if (chainTarget !== undefined) {
         return { view: await linkTo(tx, ctx, result, chainTarget), chained: true };
       }
@@ -455,18 +444,8 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     result: DiscoveryResultView,
     opportunityId: string,
   ): Promise<DiscoveryResultView> {
-    const p = result.posting;
     const view = await setDisposition(tx, ctx, result.id, 'accepted', opportunityId);
-    await createActivity(tx, ctx, opportunityId, {
-      kind: 'link',
-      title: `Also posted via ${sourceLabel(result.sourceKind)}`,
-      bodyMd: [`${p.company}: ${p.title}`, p.location ?? null]
-        .filter((l): l is string => l !== null)
-        .join('\n'),
-      occurredAt: Date.now(),
-      participants: [],
-      externalUrl: httpLink(p.postingUrl),
-    });
+    await recordAlsoPosted(tx, ctx, opportunityId, result);
     return view;
   }
 
@@ -728,7 +707,9 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
    * re-dismissed, accepted after the fact) is left alone and reported, not forced back. Also
    * removes the dismissal_feedback rows the dismiss wrote, so an undone decision leaves no
    * trace in refineDiscoveryPrompt's evidence: the user said "that didn't happen", not "that
-   * happened but for a reason I'm hiding."
+   * happened but for a reason I'm hiding." One unsuppressed meanwhile takes its key back, or, where its
+   * job is in the pipeline or the queue by then, stays dismissed and answers `duplicate` (#1020:
+   * undoDismissal), with the opportunity when it is one.
    */
   api.post(
     '/discovery/results/bulk-undo-dismiss',
@@ -753,14 +734,14 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
             if (result.disposition !== 'dismissed')
               return { id, outcome: 'already_decided' as const };
             await racePoint('discovery.undo.locked');
-            await tx
-              .delete(dismissalFeedback)
-              .where(
-                and(eq(dismissalFeedback.userId, ctx.userId), eq(dismissalFeedback.resultId, id)),
-              )
-              .run();
-            await setDisposition(tx, ctx, id, 'pending');
-            return { id, outcome: 'restored' as const };
+            const together = results.filter((r) => r.outcome === 'restored').map((r) => r.id);
+            const undone = await undoDismissal(tx, ctx, result, together);
+            if (undone.restored) return { id, outcome: 'restored' as const };
+            return {
+              id,
+              outcome: 'duplicate' as const,
+              ...(undone.opportunityId === null ? {} : { existingId: undone.opportunityId }),
+            };
           }),
         );
       }

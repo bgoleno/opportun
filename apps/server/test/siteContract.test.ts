@@ -20,6 +20,7 @@ import type { SourceContext } from '../src/adapters/discoverySource';
 import { SITE_MODULES, SLUG_SITES, siteOfKind, type SiteModule } from '../src/sites';
 import { INDEED_JOB } from './fixtures/capture/indeedPages';
 import { JOB as LINKEDIN_JOB, type CapturedPage } from './fixtures/capture/pages';
+import { cpuMs } from './scaling';
 
 const fixture = (name: string): unknown =>
   JSON.parse(readFileSync(join(import.meta.dirname, 'fixtures/ats', name), 'utf8'));
@@ -144,10 +145,11 @@ describe('the site registry (#769)', () => {
   it('normalizes a host (case, spaces, trailing dots) in one pass, however long', () => {
     const rule = { exact: 'boards-api.greenhouse.io' };
     expect(hostMatchesRule(' Boards-API.greenhouse.io.. ', rule)).toBe(true);
-    const started = performance.now();
-    expect(hostMatchesRule(`${'.'.repeat(50_000)}x`, rule)).toBe(false);
-    expect(hostMatchesRule(`x${'.'.repeat(50_000)}`, rule)).toBe(false);
-    expect(performance.now() - started).toBeLessThan(1_000);
+    // CPU time, which a busy host does not add to (#948).
+    const started = cpuMs();
+    expect(hostMatchesRule(`${'.'.repeat(100_000)}x`, rule)).toBe(false);
+    expect(hostMatchesRule(`x${'.'.repeat(100_000)}`, rule)).toBe(false);
+    expect(cpuMs() - started).toBeLessThan(1_000);
   });
 
   // An explicit list, so a new or widened host shows in review as a change here (sec, #769).

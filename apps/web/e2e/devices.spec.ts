@@ -2,7 +2,7 @@
 // Tokens are created and revoked through Settings > Integrations > Extensions and Connectors; the
 // Apple Mail connector and the capture extension are played by bearer-only API calls from the
 // test (no Mac, no browser extension in CI), exactly as those programs call the server.
-import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 // The synthetic LinkedIn profile capture the server's own capture tests use.
 import { PROFILE } from '../../server/test/fixtures/capture/pages';
 import { PASSWORD, registerUser } from './helpers';
@@ -393,4 +393,87 @@ test('device token: a long unbroken name leaves the Revoke confirmation inside i
   await row.getByRole('button', { name: 'Revoke' }).click();
   await revoke.click();
   await expect(row.getByText('Revoked', { exact: true })).toBeVisible();
+});
+
+// A dialog's close() gives the focus back at once, and the browser sends its `close` event with the
+// next frame: pressed in between, Revoke opened a confirmation that the late event closed again
+// (#975). The order is forced, not raced for: the event is held, as a late frame holds it, until the
+// press has been made.
+test.describe('device token: Revoke pressed as one confirmation closes opens another, which stays (#975)', () => {
+  type Held = { holdClose: boolean; heldClose: EventTarget[] };
+
+  async function confirmation(page: Page) {
+    await page.addInitScript(() => {
+      const w = window as unknown as Held;
+      w.holdClose = false;
+      w.heldClose = [];
+      window.addEventListener(
+        'close',
+        (e) => {
+          if (!w.holdClose || e.target === null) return;
+          e.stopImmediatePropagation();
+          w.heldClose.push(e.target);
+        },
+        true,
+      );
+    });
+    await registerUser(page);
+    await createDeviceToken(page, 'Laptop', ['mail:push']);
+    await page.route('**/api/v1/device-tokens/*', async (route) => {
+      if (route.request().method() !== 'DELETE') return await route.fallback();
+      await route.fulfill({ status: 204 });
+    });
+    const row = page.getByRole('listitem', { name: 'Laptop', exact: true });
+    const opener = row.getByRole('button', { name: 'Revoke' });
+    const dialog = page.getByRole('dialog', { name: 'Revoke Laptop?' });
+    await opener.click();
+    await expect(dialog).toBeVisible();
+    await page.evaluate(() => void ((window as unknown as Held).holdClose = true));
+    return { opener, dialog };
+  }
+
+  /** Presses `opener` while the first close's event is held, then lets it come. */
+  async function pressedBetween(
+    page: Page,
+    { opener, dialog }: { opener: Locator; dialog: Locator },
+    press: () => Promise<void>,
+  ) {
+    // The dialog has closed (the focus is back) and its event has been sent, not yet received.
+    await expect(opener).toBeFocused();
+    const held = () => page.evaluate(() => (window as unknown as Held).heldClose.length);
+    await expect.poll(held).toBe(1);
+    await press();
+    await page.evaluate(() => {
+      const w = window as unknown as Held;
+      w.holdClose = false;
+      for (const target of w.heldClose.splice(0)) target.dispatchEvent(new Event('close'));
+    });
+    // A frame on, what the event made the page do is done. Still open, not shown again after.
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
+    expect(await dialog.isVisible()).toBe(true);
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    // Nothing opened as this one closes: the focus goes back to the button it came from.
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(opener).toBeFocused();
+  }
+
+  for (const how of ['Enter', 'Space', 'the mouse'] as const) {
+    test(`confirmed, then ${how}`, async ({ page }) => {
+      const both = await confirmation(page);
+      await both.dialog.getByRole('button', { name: 'Revoke' }).click();
+      await pressedBetween(page, both, () =>
+        how === 'the mouse' ? both.opener.click() : page.keyboard.press(how),
+      );
+    });
+  }
+
+  for (const way of ['Escape', 'Cancel'] as const) {
+    test(`left with ${way}, then Enter`, async ({ page }) => {
+      const both = await confirmation(page);
+      if (way === 'Escape') await page.keyboard.press('Escape');
+      else await both.dialog.getByRole('button', { name: 'Cancel' }).click();
+      await pressedBetween(page, both, () => page.keyboard.press('Enter'));
+    });
+  }
 });

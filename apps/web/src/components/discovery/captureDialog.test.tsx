@@ -58,6 +58,47 @@ function renderDialog(lead: DiscoveryResult | null = null) {
 }
 
 describe('CaptureDialog', () => {
+  it('another location of a job in the pipeline: says it was linked, with the way to it (#971)', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'POST /capture': () => ({
+        status: 409,
+        body: { error: { code: 'duplicate', existingId: 'opp-1' } },
+      }),
+    });
+    const { onClose } = renderDialog();
+    await user.type(
+      await screen.findByLabelText('Posting link'),
+      'https://careers.example.com/jobs/42',
+    );
+    await user.click(screen.getByRole('button', { name: 'Capture' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'This job is already in your pipeline, so the posting was linked to that opportunity.',
+    );
+    expect(within(alert).getByRole('link', { name: 'View opportunity' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1',
+    );
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a duplicate without an opportunity reads as before (#971)', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'POST /capture': () => ({ status: 409, body: { error: { code: 'duplicate' } } }),
+    });
+    renderDialog();
+    await user.type(
+      await screen.findByLabelText('Posting link'),
+      'https://careers.example.com/jobs/42',
+    );
+    await user.click(screen.getByRole('button', { name: 'Capture' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('That posting is already in your queue or pipeline.');
+    expect(within(alert).queryByRole('link')).toBeNull();
+  });
+
   it('URL mode posts exactly {url}, toasts and closes', async () => {
     const user = userEvent.setup();
     const { calls } = mockApi({ 'POST /capture': () => ({ status: 201, body: CAPTURED }) });

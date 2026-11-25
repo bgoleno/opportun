@@ -4,12 +4,13 @@
 // AI-unavailable outcome. Off the demo nothing changes. The provider is a stub of the global fetch
 // the provider path ends in: no network, and the key is made up.
 import { AiUnavailableError, runStructured } from '@opportun/ai';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { z } from 'zod';
 import { liveMessage } from '../../../packages/ai/src/anthropicBatch.fixtures';
 import { buildAiDeps } from '../src/lib/ai';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { PATIENCE_MS } from './patience';
 
 const Score = z.object({ score: z.number(), rationale: z.string() });
 const OPTS = { system: 'Score the posting.', prompt: 'A posting.', schema: Score };
@@ -58,14 +59,24 @@ describe('an AI call on a demo server has a time limit (#656)', () => {
     limitMs = 100;
     const { app, a } = await boot({ demo: true });
     await addKey(a);
+    // The limit passes when the test says, once the call is out: a host that takes longer than it to
+    // send the call cannot end it first, and none is slow enough for the answer to come first (#948).
+    const limits: number[] = [];
+    const passes = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      limits.push(ms);
+      return passes.signal;
+    });
+    onTestFinished(() => timeout.mockRestore());
     const fetchMock = provider(5_000);
     const deps = await buildAiDeps(app.db, { userId: a.userId, isAdmin: false });
-    const started = Date.now();
-    await expect(runStructured(deps, 'discovery.rank', OPTS)).rejects.toBeInstanceOf(
+    const call = expect(runStructured(deps, 'discovery.rank', OPTS)).rejects.toBeInstanceOf(
       AiUnavailableError,
     );
-    expect(Date.now() - started).toBeLessThan(4_000);
-    expect(fetchMock).toHaveBeenCalled();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled(), { timeout: PATIENCE_MS });
+    expect(limits).toEqual([100]);
+    passes.abort(new DOMException('The operation timed out.', 'TimeoutError'));
+    await call;
   });
 
   // One deadline for the whole call, its retries included (tl on #670). No clock is read (#915): the
@@ -136,7 +147,8 @@ describe('an AI call on a demo server has a time limit (#656)', () => {
   });
 
   it('on a demo server, a call that answers within the limit is unchanged', async () => {
-    limitMs = 2_000;
+    // Far more than a call of 10 ms takes: a busy host does not reach it (#948).
+    limitMs = PATIENCE_MS;
     const { app, a } = await boot({ demo: true });
     await addKey(a);
     provider(10);

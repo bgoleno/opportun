@@ -5,9 +5,18 @@ import type { NormalizedPosting } from '@opportun/core';
 import { describe, expect, it } from 'vitest';
 import { attachPosting } from '../src/lib/postingAttach';
 import { listActivities } from '../src/repos/activities';
-import { createOpportunity, getOpportunity } from '../src/repos/opportunities';
+import {
+  createOpportunity,
+  deleteOpportunity,
+  getOpportunity,
+  setPostingState,
+  updateOpportunity,
+} from '../src/repos/opportunities';
+import { descriptionFingerprint } from '../src/lib/postingFingerprint';
+import { setRaceHook } from '../src/lib/racePoints';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { pauseAt, whileParked } from './race';
 
 const boot = useApi();
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
@@ -177,6 +186,110 @@ describe('attachPosting', () => {
 
     await expect(attachPosting(app.db, ctxOf(b), opp.id, POSTING, 'board')).rejects.toMatchObject({
       statusCode: 404,
+    });
+  });
+
+  // #858: what it decided from (whose text it is, and whether the user agreed to lose it) has to
+  // hold at the write too.
+  describe('a description saved between its read and its write is kept (#858)', () => {
+    const SAVED = 'typed while the posting was being attached';
+
+    it.each([
+      ["the system's text", 'captured text', { written: 'captured text' }],
+      ['no description', null, {}],
+      ['text the user agreed to lose', 'my notes', { agreed: 'my notes' }],
+      ['text kept as it is', 'my notes', { keep: true }],
+    ] as const)('from %s', async (_what, descriptionMd, from) => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const { id } = await createOpportunity(app.db, ctx, {
+        companyName: 'Sentinel Edge',
+        title: 'Product Manager, SIEM',
+        sourceKind: 'import',
+        ...(descriptionMd === null ? {} : { descriptionMd }),
+      });
+      if ('written' in from) {
+        await updateOpportunity(app.db, ctx, id, {
+          descriptionFingerprint: descriptionFingerprint(from.written),
+        });
+      }
+      await setPostingState(app.db, ctx, id, {
+        postingState: 'needs_review',
+        postingStateDetail: 'edited',
+      });
+      const pause = pauseAt('posting.attach');
+
+      const attaching = attachPosting(app.db, ctx, id, POSTING, 'board', undefined, undefined, {
+        ...('agreed' in from ? { replaceAgreed: descriptionFingerprint(from.agreed) } : {}),
+        ...('keep' in from ? { keepDescription: true } : {}),
+      });
+      const outcome = attaching.then(
+        () => null,
+        (err: unknown) => err,
+      );
+      const saved = await whileParked(pause, () =>
+        a.request({
+          method: 'PATCH',
+          url: `/api/v1/opportunities/${id}`,
+          payload: { descriptionMd: SAVED },
+        }),
+      );
+      expect(saved.statusCode, saved.body).toBe(200);
+      const before = saved.json();
+
+      expect(await outcome).toMatchObject({
+        statusCode: 409,
+        code: 'description_changed',
+        userMessage:
+          "This opportunity's description changed while the posting was being attached, so nothing was changed. Check the description, then try again.",
+      });
+      // Nothing of the attach is there: not the text, the link, the state, or a timeline entry.
+      const after = await getOpportunity(app.db, ctx, id);
+      expect(after).toMatchObject({
+        descriptionMd: SAVED,
+        postingUrl: null,
+        location: null,
+        postingState: 'needs_review',
+        postingStateDetail: 'edited',
+        atsJobRef: null,
+        updatedAt: before.updatedAt,
+      });
+      const { items } = await listActivities(app.db, ctx, id, PAGE);
+      expect(items.filter((i) => i.kind === 'link')).toEqual([]);
+    });
+
+    // Not "the description changed": there is nothing left to say that of.
+    it('an opportunity deleted meanwhile is not found', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const { id } = await createOpportunity(app.db, ctx, {
+        companyName: 'Sentinel Edge',
+        title: 'Product Manager, SIEM',
+        sourceKind: 'import',
+      });
+      const pause = pauseAt('posting.attach');
+      const outcome = attachPosting(app.db, ctx, id, POSTING, 'board').then(
+        () => null,
+        (err: unknown) => err,
+      );
+      await whileParked(pause, () => deleteOpportunity(app.db, ctx, id));
+      expect(await outcome).toMatchObject({ statusCode: 404 });
+    });
+
+    it('a write that fails for another reason is that failure', async () => {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const { id } = await createOpportunity(app.db, ctx, {
+        companyName: 'Sentinel Edge',
+        title: 'Product Manager, SIEM',
+        sourceKind: 'import',
+      });
+      setRaceHook((point) => {
+        if (point === 'opportunities.update.locked') throw new Error('the disk is full');
+      });
+      await expect(attachPosting(app.db, ctx, id, POSTING, 'board')).rejects.toThrow(
+        'the disk is full',
+      );
     });
   });
 });

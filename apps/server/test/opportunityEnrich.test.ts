@@ -482,6 +482,20 @@ describe('enrichOpportunity', () => {
       ).toHaveLength(0);
     });
 
+    it('is not used when the message was rejected', async () => {
+      const { app, a } = await boot();
+      const id = await fromSender(app, a, '"Recruiter" <talent@initechhq.dev>');
+      await app.db
+        .update(communications)
+        .set({ rejectedAt: 1, rejectionReason: 'spam' })
+        .where(eq(communications.opportunityId, id));
+      const { fetch, requested } = net({
+        'https://initechhq.dev/': '<html><body>Initech Labs hiring</body></html>',
+      });
+      await enrichOpportunity(app.db, ctxOf(a), fetch, id);
+      expect(requested.filter((u) => u.includes('initechhq.dev'))).toEqual([]);
+    });
+
     it('a sender on a domain the company name gives is no different from that domain itself', async () => {
       const { app, a } = await boot();
       const id = await fromSender(app, a, '"Recruiter" <talent@initechlabs.com>');
@@ -732,6 +746,25 @@ describe('enrichOpportunity', () => {
     const { app, a } = await boot();
     const id = await outreachOpportunity(app, a, 'Initech Labs', 'Staff Platform Engineer');
     const commId = newId();
+    const rejectedId = newId();
+    await app.db
+      .insert(communications)
+      .values({
+        id: rejectedId,
+        userId: a.userId,
+        channel: 'gmail',
+        externalId: 'ext-enrich-rejected',
+        from: '"R" <r@example.org>',
+        to: [],
+        sentAt: 2,
+        opportunityId: id,
+        needsReview: false,
+        rejectedAt: 1,
+        rejectionReason: 'spam',
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      .run();
     await app.db
       .insert(communications)
       .values({
@@ -790,6 +823,12 @@ describe('enrichOpportunity', () => {
       .where(eq(communications.id, commId))
       .get())!;
     expect(comm.needsReview).toBe(true);
+    const rejected = await app.db
+      .select()
+      .from(communications)
+      .where(eq(communications.id, rejectedId))
+      .get();
+    expect(rejected).toMatchObject({ needsReview: false, updatedAt: 1 });
   });
 
   it('skips an opportunity that already has a description, touching nothing', async () => {

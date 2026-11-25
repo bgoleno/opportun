@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm';
 import { SQLiteSyncDialect } from 'drizzle-orm/sqlite-core';
 import { describe, expect, it, vi } from 'vitest';
 import { rawAll } from '../src/db/client';
-import { jobsListQuery } from '../src/repos/jobs';
+import { jobCountsQuery, jobsListQuery } from '../src/repos/jobs';
 import { useApi } from './api';
 import { testDialect } from './db';
 import type { TestClient } from './isolation';
@@ -80,21 +80,47 @@ describe('the jobs poll reads only what the screen shows, by an index (#592)', (
     expect(text).toMatch(/"updated_at"/);
   });
 
-  it.skipIf(testDialect !== 'sqlite')(
-    'its plan walks an index in updated_at order: no table scan, no sort of every row',
-    async () => {
+  async function plan(q: { toSQL: () => { sql: string; params: unknown[] } }) {
+    const { sql: text, params } = q.toSQL();
+    // Numbers and statuses: inlined for EXPLAIN.
+    const left = [...params];
+    const inlined = text.replace(/\?/g, () => {
+      const p = left.shift();
+      return typeof p === 'number' ? String(p) : `'${String(p)}'`;
+    });
+    const { app } = await boot();
+    const rows = await rawAll<{ detail: string }>(app.db, sql.raw(`EXPLAIN QUERY PLAN ${inlined}`));
+    return rows.map((r) => r.detail).join('\n');
+  }
+
+  // Filtered to Done it is nearly every job kept (#982): the same walk, not a sort of them all.
+  it.skipIf(testDialect !== 'sqlite').each([undefined, 'done'] as const)(
+    'its plan walks an index in updated_at order, with no table scan and no sort of every row: status %s',
+    async (status) => {
       const { app } = await boot();
-      const q = jobsListQuery(app.db, { kind: 'all' }, { limit: 200 }).toSQL();
-      // Its only parameter is the limit, a number: inlined for EXPLAIN.
-      const params = [...q.params] as number[];
-      const inlined = q.sql.replace(/\?/g, () => String(params.shift()));
-      const plan = await rawAll<{ detail: string }>(
-        app.db,
-        sql.raw(`EXPLAIN QUERY PLAN ${inlined}`),
-      );
-      const text = plan.map((r) => r.detail).join('\n');
+      const text = await plan(jobsListQuery(app.db, { kind: 'all' }, { status, limit: 200 }));
       expect(text).toMatch(/USING (COVERING )?INDEX jobs_updated_at_idx/);
       expect(text).not.toMatch(/TEMP B-TREE/);
+    },
+  );
+
+  it.skipIf(testDialect !== 'sqlite').each(['queued', 'retrying', 'running', 'dead'] as const)(
+    'filtered to %s it reads the jobs of that status by an index',
+    async (status) => {
+      const { app } = await boot();
+      const text = await plan(jobsListQuery(app.db, { kind: 'all' }, { status, limit: 200 }));
+      expect(text).toMatch(/USING INDEX jobs_status_run_at_idx \(status=\?\)/);
+    },
+  );
+
+  it.skipIf(testDialect !== 'sqlite')(
+    'the counts read the finished jobs from the index alone (#982)',
+    async () => {
+      const { app } = await boot();
+      const text = await plan(jobCountsQuery(app.db, { kind: 'all' }));
+      expect(text).toMatch(/USING COVERING INDEX jobs_status_run_at_idx/);
+      expect(text).toMatch(/SEARCH jobs USING INDEX jobs_status_run_at_idx \(status=\?\)/);
+      expect(text).not.toMatch(/SCAN jobs(?! USING COVERING)/);
     },
   );
 });

@@ -72,6 +72,7 @@ import { GMAIL_SYNC_ALL_CRON, GMAIL_SYNC_ALL_KIND } from './jobs/gmailSync';
 import { REFINE_CRON, REFINE_JOB_KIND } from './jobs/refineClassifyPrompt';
 import { DISCOVERY_REFINE_CRON, DISCOVERY_REFINE_KIND } from './jobs/refineDiscoveryPrompt';
 import { enqueueRepairAlertLeadsOnce } from './jobs/repairAlertLeads';
+import { enqueueTidyRejectedOnce } from './jobs/tidyRejected';
 import { enqueueRepairDedupeKeysOnce } from './jobs/repairDedupeKeys';
 import { enqueueBackfillAtsJobRefsOnce } from './jobs/atsJobRefBackfill';
 import { enqueueRepairCompanyMatchKeysOnce } from './jobs/companyMatchKeyRepair';
@@ -495,6 +496,9 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // stage before this shipped (issue #239), so an opportunity reported before now does not
   // need to be moved again to pick one up. Guarded by its own marker, same reasoning as above.
   await enqueueCompanyDomainBackfillOnce(db);
+  // One-shot: what a message rejected before this release still holds. Queued at every start until
+  // a run has reached its end, which writes its own marker.
+  await enqueueTidyRejectedOnce(db);
   // Every posting check nothing is left to finish ends here (#869): before the runner's recovery,
   // and before any capture can arrive.
   await settleAbandonedChecks(db, app.log);

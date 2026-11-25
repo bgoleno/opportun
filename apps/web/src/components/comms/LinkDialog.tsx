@@ -73,7 +73,7 @@ export function LinkDialog(props: {
                   onClick={() => link(o.id)}
                   className="grid w-full gap-0.5 rounded-md px-3 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
                 >
-                  <span className="font-medium">
+                  <span className="font-medium [overflow-wrap:anywhere]">
                     {o.title} at {o.companyName}
                   </span>
                   <span className="text-xs text-muted-foreground">{stageLabel(o.stage)}</span>
