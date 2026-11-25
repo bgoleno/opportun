@@ -37,8 +37,16 @@ import {
 } from '../lib/safeFetch';
 import type { UserCtx } from '../repos/base';
 import { getActivePrompt } from '../repos/prompts';
-import { updateOpportunity } from '../repos/opportunities';
+import {
+  DescriptionChanged,
+  getOpportunity,
+  updateOpportunity,
+  type OpportunityView,
+} from '../repos/opportunities';
+import { HttpError } from '../lib/errors';
+import { descriptionFingerprint } from '../lib/postingFingerprint';
 import { sanitizeDescriptionText } from '../lib/postingSanitize';
+import { racePoint } from '../lib/racePoints';
 import { requireService, type JobContext, type JobHandler } from './registry';
 import { continuesTrace } from '../obs/workflow';
 
@@ -584,6 +592,12 @@ async function saveCareersUrl(db: Db, ctx: UserCtx, companyId: string, url: stri
   );
 }
 
+interface ExtractedFields {
+  location?: string;
+  remote?: boolean;
+  compNote?: string;
+}
+
 /**
  * capture.extract when an AI key exists; the raw page text is the fallback description when no
  * AI is configured. When the AI runs but returns nothing usable, `descriptionMd` is null rather
@@ -595,12 +609,7 @@ async function extractFields(
   ctx: UserCtx,
   url: string,
   text: string,
-): Promise<{
-  descriptionMd: string | null;
-  location?: string;
-  remote?: boolean;
-  compNote?: string;
-}> {
+): Promise<ExtractedFields & { descriptionMd: string | null }> {
   const bounded = text.slice(0, DESCRIPTION_MAX);
   const fallback = { descriptionMd: bounded };
   const prompt = await getActivePrompt(db, ctx, 'capture.extract');
@@ -640,6 +649,82 @@ async function compFloor(db: Db, ctx: UserCtx): Promise<number | null> {
     .all();
   const mins = rows.map((r) => r.min).filter((m): m is number => m !== null);
   return mins.length === 0 ? null : Math.min(...mins);
+}
+
+const isCode = (err: unknown, code: string): boolean =>
+  err instanceof HttpError && err.code === code;
+
+/**
+ * Writes what the posting says into what the opportunity lacks now, not when the job read it: it has
+ * fetched pages and asked a model since, and what was saved meanwhile is the user's
+ * (https://github.com/bgoleno/opportun/issues/1011). Null when the opportunity is gone.
+ *
+ * No lock is held from the read to the write: the description has the write's own condition
+ * (`ifDescription`). A link, location, remote or pay saved in the milliseconds between them is still
+ * replaced, as in a capture's fill (lib/captureResolve.ts fillOpportunity).
+ *
+ * The description has its fingerprint, as any text the system writes: without one it reads as the
+ * user's, and no posting check or Attach would replace it.
+ */
+async function fillEmpty(
+  db: Db,
+  ctx: UserCtx,
+  opportunityId: string,
+  postingUrl: string,
+  descriptionMd: string,
+  fields: ExtractedFields,
+): Promise<{ filled: string[]; kept: string } | null> {
+  // Its location would make it another opportunity of the user's: the rest is written without it.
+  let locationTaken = false;
+  for (;;) {
+    let opp: OpportunityView;
+    try {
+      opp = await getOpportunity(db, ctx, opportunityId);
+    } catch (err) {
+      if (isCode(err, 'not_found')) return null;
+      throw err;
+    }
+    await racePoint('enrich.read');
+    const patch: Parameters<typeof updateOpportunity>[3] = {};
+    const filled: string[] = [];
+    const writes = opp.descriptionMd === null || opp.descriptionMd === '';
+    if (writes) {
+      patch.descriptionMd = descriptionMd;
+      patch.descriptionFingerprint = descriptionFingerprint(descriptionMd);
+      filled.push('description');
+    }
+    if (opp.postingUrl === null) {
+      patch.postingUrl = postingUrl;
+      filled.push('link');
+    }
+    if (opp.location === null && fields.location !== undefined && !locationTaken) {
+      patch.location = fields.location;
+      filled.push('location');
+    }
+    if (opp.remote === null && fields.remote !== undefined) {
+      patch.remote = fields.remote;
+      filled.push('remote');
+    }
+    if (opp.compNote === null && fields.compNote !== undefined) {
+      patch.compNote = fields.compNote;
+      filled.push('compensation');
+    }
+    // It was empty when the job began. A capture or a posting check can have filled it, too.
+    const whose = opp.descriptionIsUserWritten
+      ? 'Your own description, saved meanwhile,'
+      : 'The description added meanwhile';
+    const kept = writes ? '' : ` ${whose} was kept.`;
+    if (filled.length === 0) return { filled, kept };
+    try {
+      await updateOpportunity(db, ctx, opportunityId, patch, writes ? { ifDescription: opp } : {});
+      return { filled, kept };
+    } catch (err) {
+      // Each of these reads again, and only what changed meanwhile brings the first back.
+      if (err instanceof DescriptionChanged) continue;
+      if (isCode(err, 'duplicate') && patch.location !== undefined) locationTaken = true;
+      else if (!isCode(err, 'not_found')) throw err;
+    }
+  }
 }
 
 export type EnrichOutcome =
@@ -739,19 +824,20 @@ export async function enrichOpportunity(
       `The posting at ${best.url} could not be parsed into a readable description.`,
     );
   }
-  await updateOpportunity(db, ctx, opp.id, {
-    descriptionMd: fields.descriptionMd,
-    ...(opp.postingUrl == null ? { postingUrl: best.url } : {}),
-    ...(opp.location == null && fields.location !== undefined ? { location: fields.location } : {}),
-    ...(opp.remote == null && fields.remote !== undefined ? { remote: fields.remote } : {}),
-    ...(opp.compNote == null && fields.compNote !== undefined ? { compNote: fields.compNote } : {}),
-  });
+  await racePoint('enrich.extracted');
+  const written = await fillEmpty(db, ctx, opp.id, best.url, fields.descriptionMd, fields);
+  if (written === null) return { outcome: 'skipped', reason: 'missing' };
+  const matched = `Matched "${opp.title}" to ${best.url}`;
   await addNote(
     db,
     ctx,
     opp.id,
-    'Posting details filled from the careers page',
-    `Matched "${opp.title}" to ${best.url} and filled the description${fields.location === undefined ? '' : ', location'}${fields.compNote === undefined ? '' : ', compensation'}.`,
+    written.filled.length === 0
+      ? 'Posting found on the careers page'
+      : 'Posting details filled from the careers page',
+    written.filled.length === 0
+      ? `${matched}. Nothing was filled: the details were there by then.`
+      : `${matched} and filled the ${written.filled.join(', ')}.${written.kept}`,
   );
 
   // The hard-constraint guard's data arrives late on this path: the outreach said nothing,

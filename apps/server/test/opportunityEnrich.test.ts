@@ -1,4 +1,5 @@
 import { ATS_DETECT_KIND } from '../src/lib/atsDetect';
+import { onSlowTransaction } from '../src/db/gate';
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { newId } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
@@ -24,16 +25,27 @@ import {
   pageNamesCompany,
   senderDomain,
 } from '../src/jobs/opportunityEnrich';
+import { reconcilePosting } from '../src/jobs/postingReconcile';
+import { HttpError } from '../src/lib/errors';
+import { descriptionFingerprint } from '../src/lib/postingFingerprint';
 import { createSafeFetch } from '../src/lib/safeFetch';
 import type { UserCtx } from '../src/repos/base';
-import { createOpportunity } from '../src/repos/opportunities';
+import { createOpportunity, getOpportunity, updateOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
+import { testDialect } from './db';
 import type { TestClient } from './isolation';
+import { pauseAt, whileParked } from './race';
 
 // The AI router is mocked; the default behaves like "no key": raw text becomes the description.
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
   return { ...real, runStructured: vi.fn() };
+});
+
+// As it is, but for a test that has it fail.
+vi.mock('../src/repos/opportunities', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/repos/opportunities')>();
+  return { ...real, updateOpportunity: vi.fn(real.updateOpportunity) };
 });
 
 const boot = useApi();
@@ -844,6 +856,361 @@ describe('enrichOpportunity', () => {
     expect(outcome).toEqual({ outcome: 'skipped', reason: 'already_detailed' });
     expect(requested).toEqual([]);
     expect(await notesOf(app, id)).toEqual([]);
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/1011: the job fetches pages and asks a model between its
+// first read and its write, and a save that lands meanwhile wins.
+describe('what is saved while it runs', () => {
+  const URL_ = 'https://initechlabs.com/job/staff-platform-engineer/';
+  const ROUTES = {
+    'https://initechlabs.com/': HOME,
+    'https://initechlabs.com/careers': CAREERS,
+    [URL_]: POSTING,
+  };
+  const TEXT = 'Full posting text.';
+  const GIVES = { location: 'Springfield, VT', remote: false, compNote: '$150,000 annually' };
+  const MINE = 'My own words.  \n\n- kept to the byte';
+  const POINTS = ['enrich.extracted', 'enrich.read'] as const;
+  const FILLED = 'Posting details filled from the careers page';
+
+  const answer = (over: Record<string, unknown> = {}) =>
+    vi.mocked(runStructured).mockResolvedValue({
+      companyName: 'Initech Labs',
+      title: 'Staff Platform Engineer',
+      location: GIVES.location,
+      remote: 'onsite',
+      compNote: GIVES.compNote,
+      descriptionMd: TEXT,
+      postingUrl: null,
+      ...over,
+    });
+  beforeEach(() => {
+    answer();
+  });
+
+  const opportunity = (app: FastifyInstance, c: TestClient) =>
+    outreachOpportunity(app, c, 'Initech Labs', 'Staff Platform Engineer');
+  const enrich = (app: FastifyInstance, c: TestClient, id: string) =>
+    enrichOpportunity(app.db, ctxOf(c), net(ROUTES).fetch, id);
+  const save = async (c: TestClient, id: string, payload: Record<string, unknown>) => {
+    const res = await c.request({ method: 'PATCH', url: `/api/v1/opportunities/${id}`, payload });
+    expect(res.statusCode, res.body).toBe(200);
+  };
+  /** The job, with `act` made from start to end while it is at `point`. */
+  const during = async (
+    app: FastifyInstance,
+    c: TestClient,
+    id: string,
+    point: string,
+    act: () => Promise<unknown>,
+  ) => {
+    const pause = pauseAt(point);
+    const job = enrich(app, c, id);
+    const [outcome] = await Promise.all([job, whileParked(pause, act)]);
+    return outcome;
+  };
+  const noteOf = async (app: FastifyInstance, id: string) => {
+    const notes = await notesOf(app, id);
+    expect(notes).toHaveLength(1);
+    return notes[0]!;
+  };
+  const said = (rest: string) => `Matched "Staff Platform Engineer" to ${URL_}${rest}`;
+  const viewOf = (app: FastifyInstance, c: TestClient, id: string) =>
+    getOpportunity(app.db, ctxOf(c), id);
+
+  it('nothing: all that is empty is filled, and the description is the system’s', async () => {
+    const { app, a } = await boot();
+    const id = await opportunity(app, a);
+    expect(await enrich(app, a, id)).toEqual({ outcome: 'enriched', postingUrl: URL_ });
+    expect(await viewOf(app, a, id)).toMatchObject({
+      ...GIVES,
+      postingUrl: URL_,
+      descriptionMd: TEXT,
+      descriptionFingerprint: descriptionFingerprint(TEXT),
+      descriptionIsUserWritten: false,
+    });
+    expect(await noteOf(app, id)).toEqual({
+      title: FILLED,
+      bodyMd: said(' and filled the description, link, location, remote, compensation.'),
+    });
+  });
+
+  it('a following posting check does not take it for the user’s, and one the user then saves it does', async () => {
+    const { app, a } = await boot();
+    const id = await opportunity(app, a);
+    await enrich(app, a, id);
+    const check = () =>
+      reconcilePosting(app.db, ctxOf(a), id, { log: app.log } as never, { board: async () => [] });
+    expect(await check()).not.toMatchObject({ detail: 'edited' });
+    await save(a, id, { descriptionMd: `${TEXT} Mine.` });
+    expect(await viewOf(app, a, id)).toMatchObject({ descriptionIsUserWritten: true });
+    expect(await check()).toMatchObject({ detail: 'edited' });
+  });
+
+  describe.each(POINTS)('at %s', (point) => {
+    it('a description: kept, and the rest filled', async () => {
+      const { app, a } = await boot();
+      const id = await opportunity(app, a);
+      const outcome = await during(app, a, id, point, () => save(a, id, { descriptionMd: MINE }));
+      expect(outcome).toEqual({ outcome: 'enriched', postingUrl: URL_ });
+      expect(await viewOf(app, a, id)).toMatchObject({
+        ...GIVES,
+        postingUrl: URL_,
+        descriptionMd: MINE,
+        descriptionIsUserWritten: true,
+      });
+      expect(await noteOf(app, id)).toEqual({
+        title: FILLED,
+        bodyMd: said(
+          ' and filled the link, location, remote, compensation. Your own description, saved meanwhile, was kept.',
+        ),
+      });
+    });
+
+    it('a description, with no model: the link is all there is to fill', async () => {
+      vi.mocked(runStructured).mockRejectedValue(new AiUnavailableError('no_key'));
+      const { app, a } = await boot();
+      const id = await opportunity(app, a);
+      await during(app, a, id, point, () => save(a, id, { descriptionMd: MINE }));
+      expect(await viewOf(app, a, id)).toMatchObject({
+        postingUrl: URL_,
+        location: null,
+        descriptionMd: MINE,
+      });
+      expect((await noteOf(app, id)).bodyMd).toBe(
+        said(' and filled the link. Your own description, saved meanwhile, was kept.'),
+      );
+    });
+
+    it('one a capture gave it: kept as that, and not called the user’s', async () => {
+      const { app, a } = await boot();
+      const id = await opportunity(app, a);
+      await during(app, a, id, point, () =>
+        app.db
+          .update(opportunities)
+          .set({ descriptionMd: MINE, descriptionFingerprint: descriptionFingerprint(MINE) })
+          .where(eq(opportunities.id, id))
+          .run(),
+      );
+      expect(await viewOf(app, a, id)).toMatchObject({
+        descriptionMd: MINE,
+        descriptionIsUserWritten: false,
+      });
+      expect((await noteOf(app, id)).bodyMd).toContain(
+        ' The description added meanwhile was kept.',
+      );
+    });
+
+    it.each([null, ''])('a description, cleared again to %j: filled', async (cleared) => {
+      const { app, a } = await boot();
+      const id = await opportunity(app, a);
+      await during(app, a, id, point, async () => {
+        await save(a, id, { descriptionMd: MINE });
+        await app.db
+          .update(opportunities)
+          .set({ descriptionMd: cleared })
+          .where(eq(opportunities.id, id))
+          .run();
+      });
+      expect(await viewOf(app, a, id)).toMatchObject({
+        descriptionMd: TEXT,
+        descriptionIsUserWritten: false,
+      });
+    });
+
+    it('a delete: skipped, and nothing is left', async () => {
+      const { app, a } = await boot();
+      const id = await opportunity(app, a);
+      const outcome = await during(app, a, id, point, async () => {
+        const res = await a.request({ method: 'DELETE', url: `/api/v1/opportunities/${id}` });
+        expect(res.statusCode, res.body).toBe(204);
+      });
+      expect(outcome).toEqual({ outcome: 'skipped', reason: 'missing' });
+      expect(await app.db.select().from(opportunities).all()).toEqual([]);
+      expect(await notesOf(app, id)).toEqual([]);
+    });
+
+    it('a merge into another: skipped, and that one is as it was', async () => {
+      const { app, a } = await boot();
+      const id = await opportunity(app, a);
+      const into = await outreachOpportunity(app, a, 'Initech Labs', 'Another Title');
+      let before: unknown;
+      const outcome = await during(app, a, id, point, async () => {
+        const res = await a.request({
+          method: 'POST',
+          url: `/api/v1/opportunities/${into}/merge`,
+          payload: { otherId: id },
+        });
+        expect(res.statusCode, res.body).toBe(200);
+        before = await oppRow(app, into);
+      });
+      expect(outcome).toEqual({ outcome: 'skipped', reason: 'missing' });
+      expect(await oppRow(app, into)).toEqual(before);
+      expect((await notesOf(app, into)).filter((n) => n.title.startsWith('Posting'))).toEqual([]);
+    });
+
+    it('another user’s saves are nothing to it', async () => {
+      const { app, a, b } = await boot();
+      const id = await opportunity(app, a);
+      const theirs = await opportunity(app, b);
+      await during(app, a, id, point, () => save(b, theirs, { descriptionMd: MINE }));
+      expect((await viewOf(app, a, id)).descriptionMd).toBe(TEXT);
+      expect(await viewOf(app, b, theirs)).toMatchObject({ descriptionMd: MINE, postingUrl: null });
+    });
+  });
+
+  it.each([
+    [{ postingUrl: 'https://example.com/mine' }, 'description, location, remote, compensation'],
+    [{ location: 'Portland, OR' }, 'description, link, remote, compensation'],
+    [{ remote: true }, 'description, link, location, compensation'],
+    [{ remote: false }, 'description, link, location, compensation'],
+    [{ compNote: '$1' }, 'description, link, location, remote'],
+  ])('%j: kept, and the rest filled', async (mine, filled) => {
+    const { app, a } = await boot();
+    const id = await opportunity(app, a);
+    // What the posting gives is not what the user saves.
+    answer({ remote: 'remote' });
+    await during(app, a, id, 'enrich.extracted', () => save(a, id, mine));
+    expect(await viewOf(app, a, id)).toMatchObject({
+      ...GIVES,
+      remote: true,
+      postingUrl: URL_,
+      descriptionMd: TEXT,
+      ...mine,
+    });
+    expect((await noteOf(app, id)).bodyMd).toBe(said(` and filled the ${filled}.`));
+  });
+
+  it('all of it: nothing is filled, and the note says so', async () => {
+    const { app, a } = await boot();
+    const id = await opportunity(app, a);
+    const mine = {
+      descriptionMd: MINE,
+      postingUrl: 'https://example.com/mine',
+      location: 'Portland, OR',
+      remote: true,
+      compNote: '$1',
+    };
+    let row: unknown;
+    const outcome = await during(app, a, id, 'enrich.extracted', async () => {
+      await save(a, id, mine);
+      row = await oppRow(app, id);
+    });
+    expect(outcome).toEqual({ outcome: 'enriched', postingUrl: URL_ });
+    expect(await oppRow(app, id)).toEqual(row);
+    expect(await noteOf(app, id)).toEqual({
+      title: 'Posting found on the careers page',
+      bodyMd: said('. Nothing was filled: the details were there by then.'),
+    });
+  });
+
+  it('a description, the pay below the floor: the pay is said of the posting all the same', async () => {
+    const { app, a } = await boot();
+    const id = await opportunity(app, a);
+    await app.db
+      .insert(roleTargets)
+      .values({
+        id: newId(),
+        userId: a.userId,
+        name: 'Staff+',
+        titleFamily: 'Engineer',
+        compMin: 210_000,
+        currency: 'USD',
+        active: true,
+        createdAt: 1,
+        updatedAt: 1,
+      })
+      .run();
+    await during(app, a, id, 'enrich.read', () =>
+      save(a, id, { descriptionMd: MINE, compNote: '$300,000' }),
+    );
+    expect((await notesOf(app, id)).map((n) => n.title).sort()).toEqual([
+      FILLED,
+      'Stated pay is below your compensation floor',
+    ]);
+  });
+
+  // The link is there, so the job's write takes no lock a save of the description needs.
+  it.runIf(testDialect === 'postgres')(
+    'a description, once the write has read the row: the statement sees it',
+    async () => {
+      const { app, a } = await boot();
+      const id = await opportunity(app, a);
+      await save(a, id, { postingUrl: 'https://example.com/mine', location: 'Portland, OR' });
+      onSlowTransaction(() => undefined); // parked on purpose
+      await during(app, a, id, 'opportunities.update.locked', () =>
+        save(a, id, { descriptionMd: MINE }),
+      );
+      expect(await viewOf(app, a, id)).toMatchObject({
+        descriptionMd: MINE,
+        descriptionIsUserWritten: true,
+        remote: GIVES.remote,
+        compNote: GIVES.compNote,
+      });
+    },
+  );
+
+  describe('its location would make it another opportunity of the user’s', () => {
+    const taken = (app: FastifyInstance, c: TestClient) =>
+      createOpportunity(app.db, ctxOf(c), {
+        companyName: 'Initech Labs',
+        title: 'Staff Platform Engineer',
+        location: GIVES.location,
+        sourceKind: 'manual',
+      });
+
+    it('the rest is written, at the first try and with one call of the model', async () => {
+      const { app, a } = await boot();
+      const id = await opportunity(app, a);
+      await taken(app, a);
+      expect(await enrich(app, a, id)).toEqual({ outcome: 'enriched', postingUrl: URL_ });
+      expect(await viewOf(app, a, id)).toMatchObject({
+        location: null,
+        remote: GIVES.remote,
+        compNote: GIVES.compNote,
+        postingUrl: URL_,
+        descriptionMd: TEXT,
+      });
+      expect((await noteOf(app, id)).bodyMd).toBe(
+        said(' and filled the description, link, remote, compensation.'),
+      );
+      expect(runStructured).toHaveBeenCalledTimes(1);
+    });
+
+    it('and a description saved meanwhile is kept with it', async () => {
+      const { app, a } = await boot();
+      const id = await opportunity(app, a);
+      await taken(app, a);
+      await during(app, a, id, 'enrich.read', () => save(a, id, { descriptionMd: MINE }));
+      expect(await viewOf(app, a, id)).toMatchObject({
+        location: null,
+        remote: GIVES.remote,
+        descriptionMd: MINE,
+      });
+    });
+  });
+
+  it.each([
+    ['conflict', 409],
+    ['duplicate', 409],
+    ['anything', 500],
+  ])('%s of a write that has no location: the job fails with it', async (code, status) => {
+    const { app, a } = await boot();
+    const id = await opportunity(app, a);
+    await save(a, id, { location: 'Portland, OR' });
+    const err = new HttpError(status, code);
+    vi.mocked(updateOpportunity).mockRejectedValueOnce(err);
+    await expect(enrich(app, a, id)).rejects.toBe(err);
+    expect(await notesOf(app, id)).toEqual([]);
+  });
+
+  it('a conflict of a write that has one: the same', async () => {
+    const { app, a } = await boot();
+    const id = await opportunity(app, a);
+    const err = new HttpError(409, 'conflict');
+    vi.mocked(updateOpportunity).mockRejectedValueOnce(err);
+    await expect(enrich(app, a, id)).rejects.toBe(err);
   });
 });
 
