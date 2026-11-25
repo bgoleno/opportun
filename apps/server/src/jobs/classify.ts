@@ -161,7 +161,7 @@ async function messageText(
 export type ClassifyRun =
   | { status: 'classified'; outcome: ApplyOutcome; bodySource: BodySource }
   | { status: 'alert_digest'; leads: number }
-  | { status: 'skipped'; reason: 'missing' | 'no_key' | 'no_prompt' | 'filtered' };
+  | { status: 'skipped'; reason: 'missing' | 'no_key' | 'no_prompt' | 'filtered' | 'rejected' };
 
 /** Classifies one of the user's messages and applies the result. */
 export async function classifyCommunication(
@@ -184,6 +184,8 @@ export async function classifyCommunication(
   // the From header that messageText renders. The backfill's query already excludes these; this
   // is the backstop for a job row enqueued before the rule existed, or replayed afterwards.
   if (row.triageDecision === 'filtered') return { status: 'skipped', reason: 'filtered' };
+  // The user rejected it: nothing more is made of it.
+  if (row.rejectedAt !== null) return { status: 'skipped', reason: 'rejected' };
   if (await isAlertDigest(db, ctx, row.from)) {
     const digest = await processAlertDigest(db, ctx, storage, row.id, body);
     return {
@@ -223,6 +225,8 @@ export async function classifyCommunication(
     throw err;
   }
   const outcome = await applyClassification(db, ctx, row.id, output, bodySource);
+  // Rejected meanwhile.
+  if (outcome === null) return { status: 'skipped', reason: 'rejected' };
   // A just-created outreach opportunity enters the pipeline bare; enrichment goes and finds
   // the posting on the company's careers page or ATS board and fills the record (issue #16).
   if (outcome.createdOpportunityId !== null) {

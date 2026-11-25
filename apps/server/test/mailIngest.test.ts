@@ -328,11 +328,11 @@ describe('Stage 1 at ingest', () => {
     expect(hits.items).toHaveLength(0);
   });
 
-  it('clears an existing index entry if a filtered upsert ever lands on one', async () => {
+  it('clears an index entry left on a filtered row when it is delivered again', async () => {
     // Defense in depth, exercised directly because ingest cannot reach it: triage is
-    // insert-only, so a stored row is never re-triaged and this branch has no caller today.
-    // An index row outliving its text is invisible until someone searches, so the guard stays
-    // and is tested at the seam rather than left to a reader's trust.
+    // insert-only, so a filtered row never had an entry. An index row outliving its text is
+    // invisible until someone searches, so the guard stays and is tested at the seam rather than
+    // left to a reader's trust.
     const { app, a } = await boot();
     const ctx = ctxOf(a.userId);
     const msg = {
@@ -349,6 +349,12 @@ describe('Stage 1 at ingest', () => {
     expect((await search(app.db, ctx, 'Superbill', { limit: 10, offset: 0 })).items).toHaveLength(
       1,
     );
+
+    await app.db
+      .update(communications)
+      .set({ triageDecision: 'filtered', subject: null, snippet: null })
+      .where(eq(communications.userId, a.userId))
+      .run();
 
     await upsertInbound(app.db, ctx, 'gmail', msg, {
       decision: 'filtered',
