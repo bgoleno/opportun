@@ -14,9 +14,7 @@ import {
   type DiscoverySource,
   type SourceContext,
 } from '../src/adapters/discoverySource';
-import { ashbySource } from '../src/adapters/sources/ashby';
-import { greenhouseSource } from '../src/adapters/sources/greenhouse';
-import { LEVER_PAGE_SIZE, leverSource } from '../src/adapters/sources/lever';
+import '../src/adapters/sources/index';
 import { discoveryRuns, jobs } from '../src/db/schema';
 import { DISCOVERY_RUN_KIND } from '../src/jobs/discoveryRun';
 import {
@@ -28,6 +26,12 @@ import {
 import { createSource, getSourceRow, listResults } from '../src/repos/discovery';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+
+// The built-ins, registered from the site modules (#769).
+const greenhouseSource = getSource('ats_greenhouse');
+const leverSource = getSource('ats_lever');
+const ashbySource = getSource('ats_ashby');
+const LEVER_PAGE_SIZE = 100;
 
 const boot = useApi();
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
@@ -116,7 +120,7 @@ describe('lever adapter', () => {
     expect(calls).toEqual([
       {
         url: `https://api.lever.co/v0/postings/initech?mode=json&skip=0&limit=${LEVER_PAGE_SIZE}`,
-        allowHosts: ['api.lever.co'],
+        allowHosts: [{ exact: 'api.lever.co' }],
       },
     ]);
     expect(postings).toHaveLength(2);
@@ -165,7 +169,7 @@ describe('ashby adapter', () => {
     expect(calls).toEqual([
       {
         url: 'https://api.ashbyhq.com/posting-api/job-board/initech?includeCompensation=true',
-        allowHosts: ['api.ashbyhq.com'],
+        allowHosts: [{ exact: 'api.ashbyhq.com' }],
       },
     ]);
     expect(postings.map((p) => p.externalId)).toEqual([

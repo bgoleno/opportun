@@ -58,7 +58,7 @@ flowchart LR
 - **Gmail** uses the user's own OAuth client (`lib/google.ts`, `routes/googleAuth.ts`).
 - **The resume stores** are Google Docs and Drive, Reactive Resume, and local files (`adapters/documentStore.ts`, `adapters/reactiveResume.ts`, `adapters/localFile.ts`).
 - **The sign-in providers** are Google, GitHub and LinkedIn (`lib/oauthProviders.ts`, `routes/oauthLogin.ts`).
-- **ATS boards** are read by four built-in adapters (`adapters/sources/`), through the server's safe fetch layer (`lib/safeFetch.ts`). Job-alert mail from LinkedIn and Indeed is parsed into leads too (`lib/alertParsers`).
+- **ATS boards** are read by four built-in adapters (a site module each in `sites/`; Workday's is still in `adapters/sources/`), through the server's safe fetch layer (`lib/safeFetch.ts`). Job-alert mail from LinkedIn and Indeed is parsed into leads too (`lib/alertParsers`).
 - **The database** is SQLite (better-sqlite3) by default, or Postgres when `DB_DIALECT=postgres` (`db/dialectName.ts`, `db/client.ts`). Files live under `DATA_DIR` (`lib/storage.ts`).
 
 ## 2. Packages and dependency direction

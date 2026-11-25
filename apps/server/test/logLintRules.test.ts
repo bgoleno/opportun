@@ -3,22 +3,13 @@
 // through the repository's real eslint.config.js, as apps/web's no-arbitrary-width test does, so
 // they also fail if a rule is unwired, aimed at the wrong files, or replaced by a later block (the
 // trap the config's own comments describe for no-restricted-syntax, #305).
-import { join, resolve } from 'node:path';
-import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
+import { serverLint } from './serverLint';
 
-const repoRoot = resolve(import.meta.dirname, '../../..');
-const eslint = new ESLint({ cwd: repoRoot });
+const { rules } = await serverLint(['no-console', 'no-restricted-syntax']);
 
-async function rules(code: string, path: string): Promise<string[]> {
-  const [result] = await eslint.lintText(code, { filePath: join(repoRoot, path) });
-  const fatal = result?.messages.find((m) => m.fatal);
-  if (fatal) throw new Error(`fixture did not parse: ${fatal.message}`);
-  return (result?.messages ?? []).map((m) => m.ruleId ?? '');
-}
-
-// Real source paths: the server's lint is type-aware, so a fixture must be a file its project
-// knows. The text linted is the fixture's, never the file's own.
+// Real source paths, as the config's blocks pick by path. The text linted is the fixture's, never the
+// file's own.
 const SERVER = 'apps/server/src/obs/log.ts';
 const CLIENT = 'apps/server/src/db/client.ts';
 const AI = 'packages/ai/src/telemetry.ts';

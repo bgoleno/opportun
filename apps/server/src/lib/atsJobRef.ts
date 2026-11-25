@@ -75,18 +75,8 @@ export function workdayPosting(url: URL): { externalPath: string; reqId: string 
 /** The job id a board link carries, by provider shape; null when the link names no single job. */
 function idFromPath(kind: AtsJobRef['kind'], url: URL): string | null {
   if (kind === 'ats_workday') return workdayPosting(url)?.reqId ?? null;
-  const seg = segmentsOf(url);
-  const host = url.hostname.toLowerCase();
-  let raw: string | undefined;
-  // A site moved to the registry reads its own job links (#769).
-  const site = ATS_SITES.find((s) => s.sourceKind === kind);
-  if (site !== undefined) return site.jobFromUrl(url)?.id ?? null;
-  if (kind === 'ats_lever' && host === 'jobs.lever.co') {
-    raw = seg[1];
-  } else if (kind === 'ats_ashby' && host === 'jobs.ashbyhq.com') {
-    raw = seg[1];
-  }
-  return raw !== undefined && ID.test(raw) ? raw : null;
+  // A site reads its own job links (#769).
+  return ATS_SITES.find((s) => s.sourceKind === kind)?.jobFromUrl(url)?.id ?? null;
 }
 
 /**
