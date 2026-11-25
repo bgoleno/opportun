@@ -318,6 +318,8 @@ interface Match {
    * then gets its own opportunity, flagged as a possible duplicate of this one.
    */
   keptApartFrom: KeptApart | null;
+  /** It joined the open holder of its key as another posting of it (keyHolder). */
+  anotherId?: true;
   /** The leads have no id that can be read: matched by company and whole title alone. */
   withoutId: boolean;
   /** Pending leads this capture consumes, best first. */
@@ -403,15 +405,11 @@ async function findMatch(db: Exec, ctx: UserCtx, posting: NormalizedPosting): Pr
 /** Stages at which a role is over: another location of it is a new one (the owner). */
 const OVER: ReadonlySet<OpportunityStage> = new Set(['closed', 'dismissed']);
 
-/**
- * The open opportunity that holds the key of another posting on this card; the oldest, if several.
- * Not one the captured posting has just been kept apart from.
- */
+/** The open opportunity that holds the key of another posting on this card; the oldest, if several. */
 async function holderOfCard(
   db: Exec,
   ctx: UserCtx,
   card: readonly CardMember[],
-  keptApartFrom: KeptApart | null,
 ): Promise<OpportunityView | null> {
   const keys = [...new Set(card.map((r) => r.dedupeKey))];
   const held = new Set<string | null>();
@@ -440,8 +438,7 @@ async function holderOfCard(
       r.posting.title,
       read,
     );
-    if (opportunity === null || OVER.has(opportunity.stage)) continue;
-    if (opportunity.id !== keptApartFrom?.opportunity.id) holders.push(opportunity);
+    if (opportunity !== null && !OVER.has(opportunity.stage)) holders.push(opportunity);
   }
   return holders.sort((x, y) => x.createdAt - y.createdAt)[0] ?? null;
 }
@@ -513,9 +510,13 @@ const isElsewhere = (r: DiscoveryResultView, key: string): boolean =>
  * one of them is a different posting on the capture's site, the key match is the same
  * contradiction findMatch already drops for leads: for Indeed, whose capture carries no
  * location, "Senior" and "Principal" at one company, or one title in two cities, share a key on
- * every capture after the first (https://github.com/bgoleno/opportun/issues/73). An opportunity
- * with no leads, or with any lead that does not contradict, keeps D20's attach, when its own title is
- * the same whole title (sameTitle): one at another level is another job, whatever is behind it.
+ * every capture after the first (https://github.com/bgoleno/opportun/issues/73). While the role is
+ * open, the same whole title at that key is the role all the same, another posting of it
+ * (`anotherId`; the owner: one role is one opportunity, another id at the same place too,
+ * https://github.com/bgoleno/opportun/issues/1037); closed or dismissed, or at another level, it is
+ * kept apart. An opportunity with no leads, or with any lead that does not contradict, keeps D20's
+ * attach, when its own title is the same whole title (sameTitle): one at another level is another job,
+ * whatever is behind it.
  *
  * A lead of another location of the role (it has one, and is stored under another key) says nothing of
  * who holds this key: Accept chains those (#971), and they made the next capture of the role's own page
@@ -528,7 +529,7 @@ async function keyHolder(
   identity: string | null,
   title: string,
   read: LeadsRead = new Map(),
-): Promise<Pick<Match, 'opportunity' | 'keptApartFrom'>> {
+): Promise<Pick<Match, 'opportunity' | 'keptApartFrom' | 'anotherId'>> {
   const opp = await opportunityWithKey(db, ctx, key);
   if (opp === null) return { opportunity: null, keptApartFrom: null };
   let leads = identity === null ? [] : read.get(opp.id);
@@ -540,17 +541,17 @@ async function keyHolder(
   const contradicted =
     behind.length > 0 &&
     behind.every((r) => identitiesContradict(identity, identityBeside(identity, r)));
-  if (contradicted)
+  const isRole = sameTitle(opp.title, title) && !OVER.has(opp.stage);
+  if (contradicted && !isRole)
     return { opportunity: null, keptApartFrom: { opportunity: opp, why: 'posting' } };
   return sameTitle(opp.title, title)
-    ? { opportunity: opp, keptApartFrom: null }
+    ? { opportunity: opp, keptApartFrom: null, ...(contradicted ? { anotherId: true } : {}) }
     : { opportunity: null, keptApartFrom: { opportunity: opp, why: 'level' } };
 }
 
 /**
- * The open opportunity of the posting's card (findChainTarget), as Accept and ingest find it. Not when
- * the posting has just been kept apart from the open holder of its key as another posting; from one at
- * another level, or that is over, it has, and only that one is not it.
+ * The open opportunity of the posting's card (findChainTarget), as Accept and ingest find it. Not one it
+ * has just been kept apart from as another level; from one that is over it can have been too.
  */
 async function openOfCard(
   tx: Exec,
@@ -559,7 +560,6 @@ async function openOfCard(
   posting: NormalizedPosting,
   keptApartFrom: KeptApart | null,
 ): Promise<OpportunityView | null> {
-  if (keptApartFrom?.why === 'posting' && !OVER.has(keptApartFrom.opportunity.stage)) return null;
   const chained = await findChainTarget(tx, ctx, key, posting);
   if (chained === undefined || chained === keptApartFrom?.opportunity.id) return null;
   return await getOpportunity(tx, ctx, chained);
@@ -940,6 +940,7 @@ async function settleLead(
   let anotherPosting = false;
 
   if (primary !== undefined) {
+    knownOther = match.anotherId === true;
     // The lead keeps its own identity (company, title, so its dedupe key) and gains the
     // description it was waiting for, exactly as the paste path's resolveLeadInPlace does.
     // One whose description a board gave stays known as that: the text is the employer's, and a later
@@ -967,10 +968,11 @@ async function settleLead(
       const holder = await keyHolder(tx, ctx, key, identity, title);
       opportunity = holder.opportunity;
       keptApartFrom ??= holder.keptApartFrom;
+      knownOther = holder.anotherId === true;
     }
     // Then one that holds the key of another location on the card, and then the one an earlier location
     // of the role went to, as Accept does (openOfCard).
-    opportunity ??= await holderOfCard(tx, ctx, card, keptApartFrom);
+    opportunity ??= await holderOfCard(tx, ctx, card);
     if (opportunity === null && filled.dedupeKey !== null) {
       opportunity = await openOfCard(tx, ctx, filled.dedupeKey, filled.posting, keptApartFrom);
     }
@@ -999,6 +1001,7 @@ async function settleLead(
     }
     await setDisposition(tx, ctx, filled.id, 'accepted', opportunity.id);
     if (!createdOpportunity) await recordFoldedLead(tx, ctx, opportunity.id, filled);
+    anotherPosting = knownOther;
   } else if (opportunity === null) {
     // One role is one opportunity (the owner, https://github.com/bgoleno/opportun/issues/1037): a page
     // of another posting of it joins the open one, as an alert's is linked to it. Accepted, not linked:
@@ -1047,6 +1050,7 @@ async function settleLead(
       const lead = await createLead(tx, ctx, posting);
       resultId = lead.id;
       await setDisposition(tx, ctx, lead.id, 'accepted', opportunity.id);
+      if (anotherPosting) await recordFoldedLead(tx, ctx, opportunity.id, lead);
     }
   }
 

@@ -600,6 +600,114 @@ describe.each(SITES)('a capture on %s of another place of an open role', (site) 
   });
 });
 
+// The owner, on the issue: another id of one site at the role's own place is that role too, while it is
+// open. #73 kept it apart; from one that is over, or at another level, it still is.
+describe.each(SITES)('a capture on %s of another id at the place of an open role', (site) => {
+  const P: At = [site, 2];
+  const FROM = {
+    captured: async (app: FastifyInstance, c: TestClient, at: string | null) =>
+      (await capture(app, c, [site, 1], at)).opportunityId,
+    accepted: async (app: FastifyInstance, c: TestClient, at: string | null) =>
+      await accept(c, await card(app, c, [site, 1], at, { descriptionMd: PAGE })),
+  };
+  const CASES = (['captured', 'accepted'] as const).flatMap((from) =>
+    ([HERE, null] as const).map((at) => [from, at] as const),
+  );
+
+  describe.each(CASES)('%s, its place %s', (from, at) => {
+    it.each(OPEN)('at %s: joins it, and gives it nothing of its own', async (stage) => {
+      const { app, a } = await boot();
+      const id = await FROM[from](app, a, at);
+      await set(app, id, { stage, postingUrl: null, descriptionMd: 'what it had' });
+      const before = await opportunitiesOf(app, a);
+      const checks = await checksOf(app, id);
+      const done = await capture(app, a, P, at, { remote: true, compNote: '$1' });
+      expect(done).toMatchObject({
+        opportunityId: id,
+        createdOpportunity: false,
+        anotherPosting: true,
+        description: 'kept',
+        currentStage: stage === 'discovered' ? 'interested' : stage,
+      });
+      const after = await opportunitiesOf(app, a);
+      expect(after.map(own)).toEqual(before.map(own));
+      expect(after[0]).toMatchObject({ descriptionMd: 'what it had', possibleDuplicateOf: null });
+      expect(await checksOf(app, id)).toEqual(checks);
+      expect(
+        (await entriesOf(app, id, 'link')).filter((e) => e.externalUrl === urlOf(P)),
+      ).toHaveLength(1);
+    });
+
+    it('with no description: its page’s, and nothing else', async () => {
+      const { app, a } = await boot();
+      const id = await FROM[from](app, a, at);
+      await set(app, id, { descriptionMd: null, descriptionFingerprint: null, postingUrl: null });
+      expect(await capture(app, a, P, at, { compNote: '$1' })).toMatchObject({
+        opportunityId: id,
+        description: 'added',
+      });
+      expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+        descriptionMd: PAGE,
+        descriptionIsUserWritten: false,
+        postingUrl: null,
+        compNote: null,
+        location: at,
+      });
+    });
+
+    it('each again finds it by its id, with one result each', async () => {
+      const { app, a } = await boot();
+      const id = await FROM[from](app, a, at);
+      const p = await capture(app, a, P, at);
+      const results = (await resultsOf(app, a)).length;
+      for (const [site_, n] of [P, [site, 1], P] as const) {
+        const again = await capture(app, a, [site_, n], at);
+        expect(again).toMatchObject({ opportunityId: id, createdOpportunity: false });
+        expect(again.anotherPosting).toBeUndefined();
+        if (n === 2) expect(again.resultId).toBe(p.resultId);
+      }
+      expect((await resultsOf(app, a)).length).toBe(results);
+      expect(await opportunitiesOf(app, a)).toHaveLength(1);
+      // A third is no other case.
+      expect((await capture(app, a, [site, 3], at)).opportunityId).toBe(id);
+    });
+
+    it('with a card of its own: the card goes to it, and it gets nothing else', async () => {
+      const { app, a } = await boot();
+      const id = await FROM[from](app, a, at);
+      await set(app, id, { postingUrl: null });
+      const before = await opportunitiesOf(app, a);
+      const checks = await checksOf(app, id);
+      const cardId = await card(app, a, P, at);
+      const done = await capture(app, a, P, at, { compNote: '$1' });
+      expect(done).toMatchObject({ opportunityId: id, resultId: cardId, anotherPosting: true });
+      expect((await getResult(app.db, ctxOf(a), cardId)).opportunityId).toBe(id);
+      expect((await opportunitiesOf(app, a)).map(own)).toEqual(before.map(own));
+      expect(await checksOf(app, id)).toEqual(checks);
+      expect(
+        (await entriesOf(app, id, 'link')).filter((e) => e.externalUrl === urlOf(P)),
+      ).toHaveLength(1);
+    });
+  });
+
+  it('one at another level there is kept apart, its own title open elsewhere or not', async () => {
+    for (const open of [false, true]) {
+      const { app, a } = await boot();
+      const principal = (
+        await capture(app, a, [site, 1], HERE, { title: `Principal ${JOB.title}` })
+      ).opportunityId;
+      const senior = open
+        ? await byHand(app, a, { title: `Senior ${JOB.title}`, location: THERE })
+        : undefined;
+      const done = await capture(app, a, P, HERE, { title: `Senior ${JOB.title}` });
+      expect(done.opportunityId).not.toBe(principal);
+      expect(done.createdOpportunity).toBe(!open);
+      if (open) expect(done.opportunityId).toBe(senior);
+      expect(await entriesOf(app, principal, 'capture')).toHaveLength(1);
+    }
+  });
+});
+
 describe('beside what comes at the same moment', () => {
   const P: At = ['linkedin', 2];
   const role = async () => {

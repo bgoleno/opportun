@@ -381,7 +381,7 @@ job alert, an MCP source, or **Capture posting**):
   they are, and nothing is ranked. If several opportunities fit, it goes to the oldest.
 - **The very posting you captured** with the [browser extension](browser-extension.md) (the same
   job id on the same site), even if its title or location has changed: nothing is added. This holds
-  for a Closed opportunity too.
+  for a Closed opportunity too, and for a posting you captured into a role you already tracked.
 
 A place that was linked while the role was open brings a card again, once, when it is posted anew after
 the role is Closed, Dismissed or deleted. The very posting that was linked does not.

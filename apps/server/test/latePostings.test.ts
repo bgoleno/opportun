@@ -815,13 +815,13 @@ describe.each(SITES)('a card on %s captured, another level tracked in its city',
     expect(captured.opportunityId).not.toBe(principal);
   });
 
-  // The kept-apart holder is what #73 says: another posting on the site, under the card's own key.
+  // Another posting on the site, under the card's own key: the role there is the one (the owner, #1037).
   it.each(['accepted', 'made by hand'] as const)(
-    'kept apart as another posting, the other city’s %s: not chained, as before',
+    'another posting at the key of an open one: goes to that, not to the other city’s, %s',
     async (how) => {
       const { app, a } = await boot();
       const boston = await IN_BOSTON[how](app, a);
-      // Closed meanwhile, or the page would join it (#1037).
+      // Closed meanwhile, or the page would join it.
       await move(app, boston, 'closed');
       const holder = (await capture(app, a, site, HERE, { title: SENIOR, location: HERE }))
         .opportunityId;
@@ -832,8 +832,8 @@ describe.each(SITES)('a card on %s captured, another level tracked in its city',
       const captured = await capture(app, a, [siteId, otherId, otherUrl, '', ''], HERE, {
         title: SENIOR,
       });
-      expect([boston, holder]).not.toContain(captured.opportunityId);
-      expect(await opportunitiesOf(app, a)).toHaveLength(3);
+      expect(captured.opportunityId).toBe(holder);
+      expect(await opportunitiesOf(app, a)).toHaveLength(2);
     },
   );
 });
@@ -863,26 +863,31 @@ describe.each(SITES)('a capture on %s of a role with another location on it', (.
     ['without a location', null, 'own'],
     ['under this very key', HERE, 'own'],
     ['with its key released', THERE, 'released'],
-  ] as const)('a lead %s still keeps it apart (#73)', async (_what, location, key) => {
-    const { app, a } = await boot();
-    const id = await ORIGINS['made by hand'](app, a);
-    const cardId = await card(app, a, another(site, location));
-    const res = await a.request({
-      method: 'POST',
-      url: `/api/v1/discovery/results/${cardId}/accept`,
-      payload: { attachTo: id },
-    });
-    expect(res.statusCode, res.body).toBe(200);
-    if (key === 'released') {
-      await app.db
-        .update(discoveryResults)
-        .set({ dedupeKey: null })
-        .where(eq(discoveryResults.id, cardId))
-        .run();
-    }
-    const captured = await capture(app, a, site, HERE);
-    expect(captured.opportunityId).not.toBe(id);
-  });
+  ] as const)(
+    'a lead %s still keeps it apart once it is closed (#73)',
+    async (_what, location, key) => {
+      const { app, a } = await boot();
+      const id = await ORIGINS['made by hand'](app, a);
+      const cardId = await card(app, a, another(site, location));
+      const res = await a.request({
+        method: 'POST',
+        url: `/api/v1/discovery/results/${cardId}/accept`,
+        payload: { attachTo: id },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      if (key === 'released') {
+        await app.db
+          .update(discoveryResults)
+          .set({ dedupeKey: null })
+          .where(eq(discoveryResults.id, cardId))
+          .run();
+      }
+      // Open, it is the role, whatever the lead (the owner, #1037).
+      await move(app, id, 'closed');
+      const captured = await capture(app, a, site, HERE);
+      expect(captured.opportunityId).not.toBe(id);
+    },
+  );
 });
 
 // sec on #985: nobody decided a linked posting, so it says nothing of who holds a key, nor of where a
@@ -895,17 +900,21 @@ describe.each(SITES)('a capture on %s of a role with a linked posting behind it'
   it.each([
     ['without a location', null],
     ['with one', THERE],
-  ])('another posting captured stays kept apart, the linked one %s', async (_what, location) => {
-    const { app, a } = await boot();
-    const first = await capture(app, a, site, HERE);
-    const { stats } = await arrive(app, a, [alertOf(site, location, NO_ID)]);
-    expect(stats.linked).toBe(1);
-    const second = await capture(app, a, SECOND, HERE);
-    expect([second.createdOpportunity, second.opportunityId === first.opportunityId]).toEqual([
-      true,
-      false,
-    ]);
-  });
+  ])(
+    'another posting captured stays kept apart from a closed one, the linked one %s',
+    async (_what, location) => {
+      const { app, a } = await boot();
+      const first = await capture(app, a, site, HERE);
+      const { stats } = await arrive(app, a, [alertOf(site, location, NO_ID)]);
+      expect(stats.linked).toBe(1);
+      await move(app, first.opportunityId, 'closed');
+      const second = await capture(app, a, SECOND, HERE);
+      expect([second.createdOpportunity, second.opportunityId === first.opportunityId]).toEqual([
+        true,
+        false,
+      ]);
+    },
+  );
 
   it('a lead of no id the user accepted still lets it attach, as before', async () => {
     const { app, a } = await boot();
