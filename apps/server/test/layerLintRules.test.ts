@@ -3,22 +3,16 @@
 // through the repository's real eslint.config.js, as logLintRules.test.ts does, so the rule also
 // fails here if it is unwired, aimed at the wrong files, or replaced by a later block, and so the
 // NFR-SEC11 filesystem ban is shown to still apply to the same files.
-import { join, resolve } from 'node:path';
-import { ESLint } from 'eslint';
 import { describe, expect, it } from 'vitest';
+import { serverLint } from './serverLint';
 
-const repoRoot = resolve(import.meta.dirname, '../../..');
-const eslint = new ESLint({ cwd: repoRoot });
+const { rules, configFor } = await serverLint([
+  '@typescript-eslint/no-restricted-imports',
+  'no-restricted-imports',
+]);
 
-async function rules(code: string, path: string): Promise<string[]> {
-  const [result] = await eslint.lintText(code, { filePath: join(repoRoot, path) });
-  const fatal = result?.messages.find((m) => m.fatal);
-  if (fatal) throw new Error(`fixture did not parse: ${fatal.message}`);
-  return (result?.messages ?? []).map((m) => m.ruleId ?? '');
-}
-
-// Real source paths: the server's lint is type-aware, so a fixture must be a file its project
-// knows. The text linted is the fixture's, never the file's own.
+// Real source paths, as the config's blocks pick by path. The text linted is the fixture's, never the
+// file's own.
 const LIB = 'apps/server/src/lib/errors.ts';
 const REPO = 'apps/server/src/repos/companies.ts';
 const NESTED = 'apps/server/src/lib/alertParsers/linkedin.ts';
@@ -91,7 +85,7 @@ describe('the layer rule (#763)', () => {
   });
 
   it('names no job module as an exception any more: repos/ and lib/ import none (#788)', async () => {
-    const config = (await eslint.calculateConfigForFile(join(repoRoot, LIB))) as {
+    const config = (await configFor(LIB)) as {
       rules: Record<string, [unknown, { patterns: { group: string[] }[] }]>;
     };
     const [, options] = config.rules['@typescript-eslint/no-restricted-imports']!;
@@ -103,6 +97,11 @@ describe('the layer rule (#763)', () => {
     expect(
       await rules("import { triageMessage } from './mailIngest';\nvoid triageMessage;\n", JOB),
     ).not.toContain(RULE);
+    // Spelled as the rule's own patterns are, which the one above is not: aimed at jobs/ too, it would
+    // refuse these.
+    for (const mod of ['../jobs/mailIngest', '../routes/capture']) {
+      expect(await rules(`import { x } from '${mod}';\nvoid x;\n`, JOB), mod).not.toContain(RULE);
+    }
   });
 
   it('keeps the NFR-SEC11 filesystem ban on those same files', async () => {
