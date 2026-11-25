@@ -11,7 +11,7 @@ import type { PostgresConfig } from '../src/config';
 import { connectDatabase, pgPoolConfig, type Db } from '../src/db/client';
 import { onSlowTransaction } from '../src/db/gate';
 import { jobs } from '../src/db/schema';
-import { DemoResetGate, HOLD_LIMIT_MS } from '../src/lib/demoResetGate';
+import { DemoResetGate } from '../src/lib/demoResetGate';
 import { enqueue, setSchedule } from '../src/lib/jobQueue';
 import { racePoint } from '../src/lib/racePoints';
 import { registerJob, unregisterJob } from '../src/jobs/registry';
@@ -19,6 +19,7 @@ import { runDueJobs, startRunner, type Runner } from '../src/jobs/runner';
 import { useApi } from './api';
 import { testDialect } from './db';
 import { captureLogs } from './helpers';
+import { PATIENCE_MS } from './patience';
 import { pauseAt, whileParked } from './race';
 
 const KIND = 'test.sweep';
@@ -28,14 +29,15 @@ const PUT_BACK = 'a job left running with nothing running it: queued again';
 const MADE_DEAD = 'a job left running with nothing running it: dead';
 
 const until = async (done: () => Promise<boolean> | boolean): Promise<void> => {
-  for (let i = 0; i < 400; i += 1) {
+  const deadline = performance.now() + PATIENCE_MS;
+  for (;;) {
     if (await done()) return;
+    if (performance.now() > deadline) throw new Error('never came');
     await new Promise((r) => setTimeout(r, 25));
   }
-  throw new Error('never came');
 };
-/** Longer than several sweeps. */
-const sweeps = () => new Promise((r) => setTimeout(r, SWEEP_MS * 5));
+/** Longer than several sweeps, where none is made or let through: nothing is to come of it. */
+const aWhile = () => new Promise((r) => setTimeout(r, SWEEP_MS * 5));
 
 let logs = captureLogs();
 const boot = useApi(() => ({ logStream: logs }));
@@ -64,16 +66,21 @@ async function hooked(app: FastifyInstance) {
   open.push(() => pool.end());
   const { db } = await connectDatabase(app.config, { pool });
   const query = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+  /** Of the runner's: the claims begun (none before the startup's own recovery is over), and the sweeps. */
+  const made = { claims: 0, sweeps: 0 };
   /** Around each statement: `run` makes it. */
   const on: { statement?: (text: string, run: () => Promise<unknown>) => Promise<unknown> } = {};
   pool.query = (async (...args: unknown[]) => {
     const text = (args[0] as { text?: string }).text ?? String(args[0]);
+    if (isClaim(text)) made.claims += 1;
+    if (isSweep(text)) made.sweeps += 1;
     const run = () => query(...args);
     return on.statement === undefined ? run() : on.statement(text, run);
   }) as never;
-  return { db, on };
+  return { db, on, made };
 }
 const isClaim = (text: string) => text.includes("SET status = 'running'");
+const isSweep = (text: string) => /^select .*"locked_at".* from "jobs"/.test(text);
 const endsJob = (text: string) => /^update "jobs" set /.test(text);
 
 async function setUp(job: Job = {}) {
@@ -120,6 +127,13 @@ async function setUp(job: Job = {}) {
     open.push(() => runner.stop());
     return runner;
   };
+  /** The startup's recovery, which takes every running row, is over. */
+  const started = () => until(() => h.made.claims > 0);
+  /** Three sweeps from here: the one that began last is not counted on to have ended. */
+  const sweeps = async () => {
+    const from = h.made.sweeps;
+    await until(() => h.made.sweeps >= from + 4);
+  };
   const add = (opts: Parameters<typeof enqueue>[3] = {}) =>
     enqueue(app.db, KIND, { text: 'secret' }, opts);
   const rowOf = async (id: string) =>
@@ -145,7 +159,23 @@ async function setUp(job: Job = {}) {
   /** Of the test's own job: the app's schedules come due too when a test's clock goes ahead. */
   const said = (message: string) =>
     logs.lines.filter((l) => l.includes(message) && l.includes(KIND));
-  return { app, a, by, seen, start, add, rowOf, statusOf, refuse, refuseWhen, accept, said, ...h };
+  return {
+    app,
+    a,
+    by,
+    seen,
+    start,
+    started,
+    sweeps,
+    add,
+    rowOf,
+    statusOf,
+    refuse,
+    refuseWhen,
+    accept,
+    said,
+    ...h,
+  };
 }
 
 describe.runIf(testDialect === 'postgres')('the claim’s answer is lost (#974)', () => {
@@ -188,7 +218,7 @@ describe.runIf(testDialect === 'postgres')('the claim’s answer is lost (#974)'
     t.start();
     await until(() => lost() === 1);
     await until(async () => (await t.statusOf(id)) === 'dead' && t.seen.dead > 0);
-    await sweeps();
+    await t.sweeps();
     expect([t.seen.runs, t.seen.dead, t.said(MADE_DEAD).length]).toEqual([0, 1, 1]);
     const row = await t.rowOf(id);
     expect(row).toMatchObject({ attempts: 1, locked_by: null });
@@ -199,7 +229,7 @@ describe.runIf(testDialect === 'postgres')('the claim’s answer is lost (#974)'
   it('a claim the server makes late, after its connection ended, is found too', async () => {
     const t = await setUp();
     const runner = t.start();
-    await sweeps();
+    await t.started();
     // What the server committed for this worker after the claim had failed here.
     const id = await t.add({ runAt: Date.now() + 1e9 });
     await t.by.query(
@@ -248,7 +278,7 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     await t.accept();
     await until(async () => (await t.statusOf(id)) === 'done');
     t.seen.ahead = 60 * 60 * 1000;
-    await sweeps();
+    await t.sweeps();
     expect(await t.rowOf(id)).toMatchObject({ status: 'done', attempts: 1 });
     expect((await t.rowOf(id)).payload).toBe('{}');
     expect([t.seen.runs, t.said(PUT_BACK).length]).toEqual([1, 0]);
@@ -286,7 +316,7 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     expect([await t.statusOf(id), t.seen.dead]).toEqual(['running', 0]);
     await t.accept();
     await until(async () => (await t.statusOf(id)) === 'dead' && t.seen.dead > 0);
-    await sweeps();
+    await t.sweeps();
     expect(await t.rowOf(id)).toMatchObject({ last_error: 'Error: failed' });
     expect((await t.rowOf(id)).payload).toBe('{}');
     expect([t.seen.runs, t.seen.dead]).toEqual([1, 1]);
@@ -331,7 +361,7 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     );
     const before = await t.rowOf(id);
     await t.accept();
-    await sweeps();
+    await t.sweeps();
     expect(await t.rowOf(id)).toEqual(before);
     // For good: the very claim on the row again, and it is nobody's outcome.
     await t.by.query(
@@ -371,7 +401,7 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     await t.accept();
     await t.by.query("UPDATE jobs SET status = 'done' WHERE id = $1", [id]);
     pause.release();
-    await sweeps();
+    await t.sweeps();
     expect([await t.statusOf(id), t.seen.dead]).toEqual(['done', 0]);
   });
 
@@ -433,6 +463,7 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     await until(() => t.seen.errors.length > 0);
     await t.refuse('done', '22021');
     await until(async () => (await t.statusOf(id)) === 'pending');
+    await until(() => t.said(PUT_BACK).length > 0); // said once its answer has come
     expect(await t.rowOf(id)).toMatchObject({ attempts: 1, locked_by: null });
     expect([t.seen.runs, t.said(PUT_BACK).length]).toEqual([1, 1]);
   });
@@ -467,7 +498,7 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     const before = await t.rowOf(id);
     expect(before.status).toBe('done');
     delete t.on.statement;
-    await sweeps();
+    await t.sweeps();
     expect(await t.rowOf(id)).toEqual(before);
     expect([t.seen.runs, t.said(PUT_BACK).length]).toEqual([1, 0]);
   });
@@ -480,20 +511,33 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
     await until(() => t.said("a job's row could not be written").length > 0);
     await runner.stop();
     await t.accept();
-    await sweeps();
+    await aWhile();
     expect(await t.rowOf(id)).toMatchObject({ status: 'running', attempts: 1 });
   });
 
   describe('under the demo reset’s hold', () => {
-    const ENDS_SOON = () => new DemoResetGate({ stopMarginMs: HOLD_LIMIT_MS - 400 });
+    /** A gate whose holds are told to stop when the test says, not by a timer. */
+    function stoppedByHand() {
+      const gate = new DemoResetGate();
+      const stop = new AbortController();
+      const shared = gate.shared.bind(gate);
+      gate.shared = async (opts) => {
+        const hold = await shared(opts);
+        return Object.create(hold, { signal: { value: stop.signal } }) as typeof hold;
+      };
+      return { gate, stop: () => stop.abort(new Error('the hold is about to end')) };
+    }
 
     it('an instance job whose hold ended unwritten is queued again', async () => {
-      const t = await setUp({ gate: ENDS_SOON(), limitMs: 60_000 });
+      const hold = stoppedByHand();
+      const t = await setUp({ gate: hold.gate, limitMs: 60_000 });
       await t.refuse('done', '57P03');
       const id = await t.add();
       t.start();
       await until(() => t.said("a job's row could not be written").length > 0);
+      hold.stop();
       await until(async () => (await t.statusOf(id)) === 'pending');
+      await until(() => t.said(PUT_BACK).length > 0);
       expect(await t.rowOf(id)).toMatchObject({ attempts: 1, locked_by: null });
       expect([t.seen.runs, t.said(PUT_BACK).length]).toEqual([1, 1]);
     });
@@ -506,21 +550,24 @@ describe.runIf(testDialect === 'postgres')('the end of a job was never written (
       await until(() => t.seen.errors.length > 0);
       await t.accept();
       await until(async () => (await t.statusOf(id)) !== 'running');
+      await until(() => t.said(PUT_BACK).length > 0);
       expect(await t.rowOf(id)).toMatchObject({ status: 'pending', attempts: 1 });
       expect(t.said(PUT_BACK)).toHaveLength(1);
     });
 
     it('one whose row the reset deleted before the write: nothing is written or said', async () => {
-      const t = await setUp({ gate: ENDS_SOON(), limitMs: 60_000 });
+      const hold = stoppedByHand();
+      const t = await setUp({ gate: hold.gate, limitMs: 60_000 });
       await t.refuse('done', '57P03');
       const id = await t.add();
       t.start();
       await until(() => t.said("a job's row could not be written").length > 0);
+      hold.stop();
       const pause = pauseAt('jobs.sweep.found');
       await pause.reached;
       await t.by.query('DELETE FROM jobs WHERE id = $1', [id]);
       pause.release();
-      await sweeps();
+      await t.sweeps();
       expect(await t.rowOf(id)).toBeUndefined();
       expect([t.said(PUT_BACK).length, t.said(MADE_DEAD).length, t.seen.dead]).toEqual([0, 0, 0]);
     });
@@ -535,7 +582,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     t.start();
     await parked.reached;
     const before = await t.rowOf(id);
-    await sweeps();
+    await t.sweeps();
     expect(await t.rowOf(id)).toEqual(before);
     parked.release();
     await until(async () => (await t.statusOf(id)) === 'done');
@@ -549,7 +596,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     t.start();
     await until(() => t.said("a job's row could not be written").length > 0);
     const before = await t.rowOf(id);
-    await sweeps();
+    await t.sweeps();
     expect(await t.rowOf(id)).toEqual(before);
     await t.accept();
     await until(async () => (await t.statusOf(id)) === 'done');
@@ -574,7 +621,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     await until(() => claimed === 1);
     const before = await t.rowOf(id);
     expect(before.status).toBe('running');
-    await sweeps();
+    await aWhile();
     expect(await t.rowOf(id)).toEqual(before);
     answer();
     await until(async () => (await t.statusOf(id)) === 'done');
@@ -599,7 +646,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
   it('another worker’s row is left alone', async () => {
     const t = await setUp();
     t.start();
-    await sweeps(); // past the startup's own recovery
+    await t.started();
     const mine = row({});
     const theirs = row({ lockedBy: 'another-worker' });
     await t.app.db
@@ -623,7 +670,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     async (_by, change) => {
       const t = await setUp();
       t.start();
-      await sweeps(); // past the startup's own recovery
+      await t.started();
       const left = row({});
       const first = pauseAt('jobs.sweep.found');
       await t.app.db
@@ -637,7 +684,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
       next.reached.catch(() => undefined); // not for the first two
       first.release();
       // Still this worker's by the last two: the next sweep finds it, as it is now.
-      if (change.startsWith('status') || change.startsWith('locked_by')) await sweeps();
+      if (change.startsWith('status') || change.startsWith('locked_by')) await t.sweeps();
       else await next.reached;
       expect(await t.rowOf(left.id)).toEqual(before);
       expect(t.said(PUT_BACK)).toEqual([]);
@@ -648,7 +695,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
   it('at its last attempt, changed between the read and the write: not dead, not settled', async () => {
     const t = await setUp();
     t.start();
-    await sweeps();
+    await t.started();
     const left = row({ attempts: 3 });
     const pause = pauseAt('jobs.sweep.found');
     await t.app.db
@@ -658,7 +705,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     await pause.reached;
     await t.by.query("UPDATE jobs SET status = 'done' WHERE id = $1", [left.id]);
     pause.release();
-    await sweeps();
+    await t.sweeps();
     expect(await t.statusOf(left.id)).toBe('done');
     expect([t.said(MADE_DEAD).length, t.seen.dead]).toEqual([0, 0]);
   });
@@ -668,15 +715,15 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     const held = new Promise<void>((r) => (letGo = r));
     const t = await setUp({ body: () => held });
     t.start();
-    await sweeps();
+    await t.started();
     const pause = pauseAt('jobs.sweep.reading');
     await pause.reached;
     const id = await t.add();
-    await sweeps();
+    await aWhile();
     expect(await t.statusOf(id)).toBe('pending');
     pause.release();
     await until(() => t.seen.runs === 1);
-    await sweeps();
+    await t.sweeps();
     expect(await t.rowOf(id)).toMatchObject({ status: 'running', attempts: 1 });
     letGo();
     await until(async () => (await t.statusOf(id)) === 'done');
@@ -702,7 +749,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     };
     t.start();
     await until(() => t.seen.runs === 2);
-    await sweeps();
+    await t.sweeps();
     expect(await t.rowOf(id)).toMatchObject({ status: 'running', attempts: 2 });
     letGo();
     await until(async () => (await t.statusOf(id)) === 'done');
@@ -719,9 +766,9 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     // The startup's recovery takes every running row (one process): after it, then.
     await t.by.query("UPDATE jobs SET status = 'done' WHERE id = $1", [id]);
     t.start();
-    await sweeps();
+    await t.started();
     await t.by.query("UPDATE jobs SET status = 'running' WHERE id = $1", [id]);
-    await sweeps();
+    await t.sweeps();
     expect(await t.rowOf(id)).toMatchObject({ status: 'running', locked_by: before.locked_by });
     parked.release();
     await draining;
@@ -731,7 +778,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
   it('a row that keeps failing does not stop the sweep for the next', async () => {
     const t = await setUp();
     t.start();
-    await sweeps();
+    await t.started();
     const [bad, good] = [row({ runAt: 0 }), row({ runAt: 1 })];
     await t.refuseWhen('row', `NEW.id = '${bad.id}'`, '57P03');
     await t.app.db
@@ -759,7 +806,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     });
     open.push(async () => unregisterJob(THROWS));
     t.start();
-    await sweeps();
+    await t.started();
     const first = row({ kind: THROWS, attempts: 1, maxAttempts: 1, runAt: 0 });
     const second = row({ attempts: 3, runAt: 1 });
     await t.app.db
@@ -789,7 +836,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
       },
     });
     t.start();
-    await sweeps();
+    await t.started();
     const left = row({ attempts: 3 });
     await t.app.db
       .insert(jobs)
@@ -805,10 +852,10 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
   it('a sweep that fails says so, and the next one goes on', async () => {
     const t = await setUp();
     t.start();
-    await sweeps();
+    await t.started();
     let failed = 0;
     t.on.statement = async (text, run) => {
-      if (/^select .*"locked_at".* from "jobs"/.test(text) && failed === 0) {
+      if (isSweep(text) && failed === 0) {
         failed += 1;
         throw new Error('Connection terminated unexpectedly');
       }
@@ -826,7 +873,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
   it('a stop waits for a sweep under way, and none follows', async () => {
     const t = await setUp();
     const runner = t.start();
-    await sweeps();
+    await t.started();
     const left = row({});
     const pause = pauseAt('jobs.sweep.found');
     await t.app.db
@@ -836,7 +883,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
     await pause.reached;
     let stopped = false;
     const stopping = runner.stop().then(() => (stopped = true));
-    await sweeps();
+    await aWhile();
     expect(stopped).toBe(false);
     pause.release();
     await stopping;
@@ -845,7 +892,7 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
       .insert(jobs)
       .values(later as never)
       .run();
-    await sweeps();
+    await aWhile();
     expect(await t.statusOf(later.id)).toBe('running');
   });
 });
@@ -853,8 +900,19 @@ describe.runIf(testDialect === 'postgres')('what is not left running (#974)', ()
 describe.runIf(testDialect === 'sqlite')('SQLite (#974)', () => {
   it('is not swept: as before, the next start recovers the row', async () => {
     const { app } = await boot({ logLevel: 'warn' });
+    registerJob({
+      kind: KIND,
+      payloadSchema: z.object({}),
+      maxAttempts: 1,
+      run: () => Promise.resolve(),
+    });
+    open.push(async () => unregisterJob(KIND));
+    const statusOf = async (of: string) =>
+      (await app.db.select().from(jobs).where(eq(jobs.id, of)).get())?.status;
+    // One has run: the startup's recovery, which takes every running row, is over.
+    const first = await enqueue(app.db, KIND, {}, {});
     const runner = startRunner(app.db, { intervalMs: 20, sweepMs: SWEEP_MS, workerId: WORKER });
-    await sweeps();
+    await until(async () => (await statusOf(first)) === 'done');
     const id = newId();
     await app.db
       .insert(jobs)
@@ -872,9 +930,8 @@ describe.runIf(testDialect === 'sqlite')('SQLite (#974)', () => {
         updatedAt: 1,
       } as never)
       .run();
-    await sweeps();
-    const row = await app.db.select().from(jobs).where(eq(jobs.id, id)).get();
-    expect(row?.status).toBe('running');
+    await aWhile();
+    expect(await statusOf(id)).toBe('running');
     await runner.stop();
   });
 });

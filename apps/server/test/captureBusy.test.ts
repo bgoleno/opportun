@@ -43,6 +43,7 @@ import { useApi } from './api';
 import { queryOne, testDialect } from './db';
 import { JOB } from './fixtures/capture/pages';
 import type { TestClient } from './isolation';
+import { PATIENCE_MS } from './patience';
 import { pauseAt } from './race';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
@@ -269,7 +270,9 @@ describe('#309: the per-user capture slot', () => {
 // read waited for one until the 10 s connection timeout and got a 500.
 describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from outside', () => {
   let holder: pg.Client | undefined;
+  const cleanups: (() => void)[] = [];
   afterEach(async () => {
+    for (const clean of cleanups.splice(0)) clean();
     await holder?.end();
     holder = undefined;
   });
@@ -279,6 +282,24 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
     await holder.connect();
     await holder.query('SELECT pg_advisory_lock(hashtext($1))', [scope]);
   }
+  /** How many of the app's connections wait for a lock. */
+  const waitingForLocks = async (app: FastifyInstance): Promise<number> =>
+    (await queryOne<{ n: number }>(
+      app,
+      `SELECT count(*)::int AS n FROM pg_stat_activity
+       WHERE datname = current_database() AND wait_event_type = 'Lock'`,
+    ))!.n;
+  /** The limits asked for the waits for a lock. Before boot: a connection can keep the `query` it had. */
+  function lockLimits(): () => string[] {
+    const sent = vi.spyOn(pg.Client.prototype, 'query');
+    cleanups.push(() => sent.mockRestore());
+    return () =>
+      sent.mock.calls
+        .map((call) => JSON.stringify((call as unknown[]).slice(0, 2)))
+        .filter((call) => call.includes('lock_timeout'))
+        .flatMap((call) => call.match(/\b\d+ms\b/g) ?? []);
+  }
+  const ASKED = `${CAPTURE_SLOT.lockTimeoutMs}ms`;
   const holdIngestLock = (app: FastifyInstance, userId: string) =>
     holdLock(app, ingestScope({ userId, isAdmin: false }));
 
@@ -286,14 +307,22 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
     const { app, a, b } = await boot();
     const poolMax = (app.config.db as PostgresConfig).poolMax;
     await holdIngestLock(app, a.userId);
+    const timers = vi.spyOn(globalThis, 'setTimeout');
     const captures = Array.from({ length: poolMax + 4 }, (_, i) => paste(a, i + 1));
-    // Let them reach the lock (or the slot), as qa's did.
-    await new Promise((r) => setTimeout(r, 1000));
-    const began = Date.now();
+    // All of them have reached the lock (the first) or the slot (the rest).
+    await vi.waitFor(
+      () =>
+        expect(timers.mock.calls.filter(([, ms]) => ms === CAPTURE_SLOT.waitMs)).toHaveLength(
+          poolMax + 3,
+        ),
+      { timeout: PATIENCE_MS },
+    );
+    timers.mockRestore();
+    // One connection waits for it, and the others are there for the read.
+    expect(await waitingForLocks(app)).toBeLessThanOrEqual(1);
     const read = await b.request({ method: 'GET', url: '/api/v1/opportunities' });
-    const took = Date.now() - began;
     expect(read.statusCode, read.body).toBe(200);
-    expect(took).toBeLessThan(5_000);
+    expect(await waitingForLocks(app)).toBeLessThanOrEqual(1);
     await holder?.query('SELECT pg_advisory_unlock_all()');
     for (const res of await Promise.all(captures)) {
       // Never a 500: each was either refused clearly or went through once the lock was free.
@@ -305,19 +334,29 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
   // A capture parked inside its locked transaction. Postgres only: on SQLite that transaction
   // holds the one write gate, so the next capture waits at its first write, before the slot, as
   // every writer does there.
-  it('behind a capture stalled in the lock, the next one is refused in under 10 s', async () => {
+  it('each wait is shorter than the 10 s in which a read would fail', () => {
+    expect(CAPTURE_SLOT.waitMs).toBeLessThan(10_000);
+    expect(CAPTURE_SLOT.lockTimeoutMs).toBeLessThan(10_000);
+  });
+
+  it('behind a capture stalled in the lock, the next one is refused at the slot’s wait', async () => {
     const { a } = await boot();
     // Parked on purpose: the watchdog would fail a transaction held this long.
     onSlowTransaction(() => undefined);
     const stalled = pauseAt('discovery.ingest.locked');
-    const first = paste(a, 1);
+    let done = false;
+    const first = paste(a, 1).finally(() => (done = true));
     await stalled.reached;
+    const timers = vi.spyOn(globalThis, 'setTimeout');
     const began = Date.now();
     const second = await paste(a, 2);
     const took = Date.now() - began;
+    const waits = timers.mock.calls.filter(([, ms]) => ms === CAPTURE_SLOT.waitMs);
+    timers.mockRestore();
     expectBusy(second);
+    expect(waits).toHaveLength(1);
     expect(took).toBeGreaterThanOrEqual(CAPTURE_SLOT.waitMs - 100);
-    expect(took).toBeLessThan(10_000);
+    expect(done, 'the first is stalled still').toBe(false);
     stalled.release();
     expect((await first).statusCode).toBe(201);
     // The slot is free again once the stalled one is done.
@@ -338,7 +377,8 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
     expect([200, 201]).toContain((await first).statusCode);
   }, 30_000);
 
-  it('the capture holding the slot is refused once the lock wait runs out, in under 10 s', async () => {
+  it('the capture holding the slot is refused once the lock wait runs out', async () => {
+    const limits = lockLimits();
     const { app, a } = await boot();
     await holdIngestLock(app, a.userId);
     const began = Date.now();
@@ -346,7 +386,7 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
     const took = Date.now() - began;
     expectBusy(res);
     expect(took).toBeGreaterThanOrEqual(CAPTURE_SLOT.lockTimeoutMs - 100);
-    expect(took).toBeLessThan(10_000);
+    expect(limits()).toEqual([ASKED]);
     // Nothing half written: the refused capture stored no lead.
     const list = await a.request({ method: 'GET', url: '/api/v1/discovery/results' });
     expect(list.json<{ items: unknown[] }>().items).toEqual([]);
@@ -365,13 +405,12 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
   }, 30_000);
 
   it('the extension route too', async () => {
+    const limits = lockLimits();
     const { app, a } = await boot();
     const bearer = await token(a);
     await holdIngestLock(app, a.userId);
-    const began = Date.now();
-    const res = await push(app, bearer);
-    expectBusy(res);
-    expect(Date.now() - began).toBeLessThan(10_000);
+    expectBusy(await push(app, bearer));
+    expect(limits()).toEqual([ASKED]);
   }, 30_000);
 
   // sec on https://github.com/bgoleno/opportun/pull/318: the bound is for the lock's wait alone, and
@@ -393,14 +432,14 @@ describe.runIf(testDialect === 'postgres')('#309 on Postgres: a lock held from o
   });
 
   it("the user's own lock held: the extension capture is refused too, before anything is written", async () => {
+    const limits = lockLimits();
     const { app, a } = await boot();
     const bearer = await token(a);
     // settleLead takes user:<id> after the ingest lock (captureResolve.ts).
     await holdLock(app, `user:${a.userId}`);
-    const began = Date.now();
-    const res = await push(app, bearer);
-    expectBusy(res);
-    expect(Date.now() - began).toBeLessThan(10_000);
+    expectBusy(await push(app, bearer));
+    // The ingest lock's, and then this one's.
+    expect(limits()).toEqual([ASKED, ASKED]);
     expect(
       await app.db.select().from(opportunities).where(eq(opportunities.userId, a.userId)).all(),
     ).toEqual([]);
