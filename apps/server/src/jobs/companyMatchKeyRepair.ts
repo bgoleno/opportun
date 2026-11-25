@@ -4,7 +4,7 @@
 // only exists in JS, not as something a migration's DDL can compute per row. New and edited
 // companies get it written synchronously by repos/companies.ts and jobs/companySuggest.ts;
 // this repairs everything that existed before that code shipped, the same one-shot-per-
-// deployment shape as repairDedupeKeys.ts.
+// deployment shape as repairAlertLeads.ts.
 //
 // Until a user's repair has run, the near-miss dedupe scan (opportunityDedupe.ts's
 // findMatches, which now filters on company_match_key in SQL) simply finds no match for that

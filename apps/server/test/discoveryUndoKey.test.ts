@@ -345,10 +345,10 @@ describe('undo of a dismissal whose result was unsuppressed (#1020)', () => {
   });
 
   describe('against what comes at the same moment', () => {
-    // tl on #1030: a writer without the user's lock (the dedupe-key repair) is not written over. Only
-    // on Postgres can it write there; SQLite's gate keeps it out.
+    // tl on #1030: a writer without the user's lock is not written over. Only on Postgres can it write
+    // there; SQLite's gate keeps it out.
     it.runIf(testDialect === 'postgres')(
-      'one that kept its key keeps what a repair makes of it meanwhile',
+      'one that kept its key keeps what such a writer makes of it meanwhile',
       async () => {
         const s = await setup();
         const id = await s.result();
@@ -361,12 +361,15 @@ describe('undo of a dismissal whose result was unsuppressed (#1020)', () => {
           async () =>
             await s.app.db
               .update(discoveryResults)
-              .set({ dedupeKey: 'repaired' })
+              .set({ dedupeKey: 'another key' })
               .where(eq(discoveryResults.id, id))
               .run(),
         );
         expect(await undoing).toEqual([{ id, outcome: 'restored' }]);
-        expect(await s.read(id)).toMatchObject({ disposition: 'pending', dedupeKey: 'repaired' });
+        expect(await s.read(id)).toMatchObject({
+          disposition: 'pending',
+          dedupeKey: 'another key',
+        });
       },
     );
 
