@@ -103,6 +103,8 @@ export interface CaptureResolution {
   description?: 'added' | 'kept';
   /** False when the capture is saved and the details the opportunity lacked are not (#914). */
   filled: boolean;
+  /** It joined the role's opportunity as another posting of it (#1037). */
+  anotherPosting?: true;
 }
 
 /** The note on the stage entry a capture makes. */
@@ -322,6 +324,8 @@ interface Match {
   leads: DiscoveryResultView[];
   /** Leads for this req already accepted, so a re-capture reuses one instead of adding noise. */
   accepted: DiscoveryResultView[];
+  /** Those of them that are this very posting, by its id. */
+  acceptedById: DiscoveryResultView[];
 }
 
 /** The site part of a `<site>:<id>` identity. */
@@ -372,6 +376,7 @@ async function findMatch(db: Exec, ctx: UserCtx, posting: NormalizedPosting): Pr
   // An accepted candidate names the opportunity directly, which is the only way to reach one
   // by identity: opportunities carry no externalId column.
   const accepted = found.filter((r) => r.disposition === 'accepted');
+  const acceptedById = accepted.filter((r) => ids.has(r.id));
   for (const decided of accepted) {
     if (decided.opportunityId !== null) {
       const opp = await getOpportunity(db, ctx, decided.opportunityId).catch(() => null);
@@ -384,7 +389,7 @@ async function findMatch(db: Exec, ctx: UserCtx, posting: NormalizedPosting): Pr
         opp !== null &&
         OVER.has(opp.stage);
       if (opp !== null && !isOver) {
-        return { opportunity: opp, keptApartFrom: null, leads, withoutId, accepted };
+        return { opportunity: opp, keptApartFrom: null, leads, withoutId, accepted, acceptedById };
       }
     }
   }
@@ -392,7 +397,7 @@ async function findMatch(db: Exec, ctx: UserCtx, posting: NormalizedPosting): Pr
   // D20's residual case: a key collision with nothing to contradict it attaches, visibly and
   // reversibly, rather than failing the capture.
   const holder = await keyHolder(db, ctx, key, identity, posting.title);
-  return { ...holder, leads, withoutId, accepted };
+  return { ...holder, leads, withoutId, accepted, acceptedById };
 }
 
 /** Stages at which a role is over: another location of it is a new one (the owner). */
@@ -542,6 +547,63 @@ async function keyHolder(
     : { opportunity: null, keptApartFrom: { opportunity: opp, why: 'level' } };
 }
 
+/**
+ * The open opportunity of the posting's card (findChainTarget), as Accept and ingest find it. Not when
+ * the posting has just been kept apart from the open holder of its key as another posting; from one at
+ * another level, or that is over, it has, and only that one is not it.
+ */
+async function openOfCard(
+  tx: Exec,
+  ctx: UserCtx,
+  key: string,
+  posting: NormalizedPosting,
+  keptApartFrom: KeptApart | null,
+): Promise<OpportunityView | null> {
+  if (keptApartFrom?.why === 'posting' && !OVER.has(keptApartFrom.opportunity.stage)) return null;
+  const chained = await findChainTarget(tx, ctx, key, posting);
+  if (chained === undefined || chained === keptApartFrom?.opportunity.id) return null;
+  return await getOpportunity(tx, ctx, chained);
+}
+
+/**
+ * Whether the captured posting is known to be another than the opportunity's own
+ * (https://github.com/bgoleno/opportun/issues/1037, tl): both places are there and differ, by the key's
+ * own measure, or its id contradicts every lead behind it (of this place, when the places are the same).
+ * What it says of its place, its link and its pay is then not the opportunity's.
+ *
+ * One found by its id is judged by what was stored of it (`sameId`), not by how its place reads this
+ * time, and never when it is the one the opportunity came from.
+ */
+async function isKnownOther(
+  tx: Exec,
+  ctx: UserCtx,
+  opp: OpportunityView,
+  posting: NormalizedPosting,
+  identity: string | null,
+  sameId: readonly DiscoveryResultView[],
+): Promise<boolean> {
+  if (sameId.some((r) => r.id === opp.sourceRef)) return false;
+  const placeOf = (location: string | null | undefined): string | null =>
+    (location ?? '').trim() === '' ? null : dedupeKey('', '', location);
+  const own = placeOf(opp.location);
+  const places = (sameId.length > 0 ? sameId.map((r) => r.posting) : [posting]).map((p) =>
+    placeOf(p.location),
+  );
+  if (own !== null && places.every((p) => p !== null && p !== own)) return true;
+  if (identity === null) return false;
+  const contradicts = (r: DiscoveryResultView): boolean =>
+    identitiesContradict(identity, identityBeside(identity, r));
+  const here = own !== null && places.includes(own);
+  const behind = await leadsBehind(tx, ctx, opp.id);
+  if (sameId.length > 0) {
+    const origin = behind.find((r) => r.id === opp.sourceRef);
+    return !here && origin !== undefined && contradicts(origin);
+  }
+  const key = dedupeKey(posting.company, posting.title, posting.location);
+  const asked = here ? behind.filter((r) => !isElsewhere(r, key)) : behind;
+  return asked.length > 0 && asked.every(contradicts);
+}
+
 /** Pending leads, the one to complete first: the sole `needs_capture`, else the oldest. */
 function pendingOf(results: DiscoveryResultView[]): DiscoveryResultView[] {
   const pending = results
@@ -638,6 +700,8 @@ async function isStandIn(
  * with each retry (em and tl on https://github.com/bgoleno/opportun/issues/914). It is not said:
  * `filled: false` is for what can be added by hand, and this would be refused there too. Called in one
  * transaction: each try is a savepoint, and a wait that ends in a later one undoes them all.
+ *
+ * `descriptionOnly`: a known other posting's page (isKnownOther). The rest it has is that posting's.
  */
 async function fillOpportunity(
   db: Exec,
@@ -645,17 +709,21 @@ async function fillOpportunity(
   opp: OpportunityView,
   posting: NormalizedPosting,
   identity: string | null,
+  descriptionOnly: boolean,
 ): Promise<boolean> {
   let patch: Parameters<typeof updateOpportunity>[3] = {};
   const hasDescription = opp.descriptionMd != null && opp.descriptionMd.trim() !== '';
-  if (posting.descriptionMd && (!hasDescription || (await isStandIn(db, ctx, opp, identity)))) {
+  const standsIn = async () => !descriptionOnly && (await isStandIn(db, ctx, opp, identity));
+  if (posting.descriptionMd && (!hasDescription || (await standsIn()))) {
     patch.descriptionMd = posting.descriptionMd;
     patch.descriptionFingerprint = descriptionFingerprint(posting.descriptionMd);
   }
-  if (opp.postingUrl == null && posting.postingUrl != null) patch.postingUrl = posting.postingUrl;
-  if (opp.location == null && posting.location != null) patch.location = posting.location;
-  if (opp.remote == null && posting.remote != null) patch.remote = posting.remote;
-  if (opp.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
+  if (!descriptionOnly) {
+    if (opp.postingUrl == null && posting.postingUrl != null) patch.postingUrl = posting.postingUrl;
+    if (opp.location == null && posting.location != null) patch.location = posting.location;
+    if (opp.remote == null && posting.remote != null) patch.remote = posting.remote;
+    if (opp.compNote == null && posting.compNote != null) patch.compNote = posting.compNote;
+  }
   for (;;) {
     if (Object.keys(patch).length === 0) return false;
     const writes = patch.descriptionMd !== undefined;
@@ -826,6 +894,10 @@ interface Settled {
   keptApartFrom: KeptApart | null;
   linkedLeadIds: string[];
   linked: number;
+  /** The posting is known to be another than the opportunity's own (isKnownOther). */
+  knownOther: boolean;
+  /** It joined the opportunity as another posting of its role, now. */
+  anotherPosting: boolean;
 }
 
 /**
@@ -864,6 +936,8 @@ async function settleLead(
   let keptApartFrom = match.keptApartFrom;
   let resultId: string;
   let createdOpportunity = false;
+  let knownOther = false;
+  let anotherPosting = false;
 
   if (primary !== undefined) {
     // The lead keeps its own identity (company, title, so its dedupe key) and gains the
@@ -895,15 +969,10 @@ async function settleLead(
       keptApartFrom ??= holder.keptApartFrom;
     }
     // Then one that holds the key of another location on the card, and then the one an earlier location
-    // of the role went to, as Accept does (findChainTarget), unless this posting has just been kept
-    // apart from the holder of its key as another posting. One at another level is another job, which
-    // refuses itself alone.
+    // of the role went to, as Accept does (openOfCard).
     opportunity ??= await holderOfCard(tx, ctx, card, keptApartFrom);
-    if (opportunity === null && filled.dedupeKey !== null && keptApartFrom?.why !== 'posting') {
-      const chained = await findChainTarget(tx, ctx, filled.dedupeKey, filled.posting);
-      if (chained !== undefined && chained !== keptApartFrom?.opportunity.id) {
-        opportunity = await getOpportunity(tx, ctx, chained);
-      }
+    if (opportunity === null && filled.dedupeKey !== null) {
+      opportunity = await openOfCard(tx, ctx, filled.dedupeKey, filled.posting, keptApartFrom);
     }
     if (opportunity === null) {
       opportunity = await createOpportunity(
@@ -931,9 +1000,21 @@ async function settleLead(
     await setDisposition(tx, ctx, filled.id, 'accepted', opportunity.id);
     if (!createdOpportunity) await recordFoldedLead(tx, ctx, opportunity.id, filled);
   } else if (opportunity === null) {
+    // One role is one opportunity (the owner, https://github.com/bgoleno/opportun/issues/1037): a page
+    // of another posting of it joins the open one, as an alert's is linked to it. Accepted, not linked:
+    // the user decided it.
+    const key = dedupeKey(posting.company, posting.title, posting.location);
+    opportunity = await openOfCard(tx, ctx, key, posting, keptApartFrom);
+    if (opportunity !== null) {
+      knownOther = await isKnownOther(tx, ctx, opportunity, posting, identity, []);
+      anotherPosting = true;
+      keptApartFrom = null;
+    }
     const lead = await createLead(tx, ctx, posting);
     resultId = lead.id;
-    opportunity = await createOpportunity(
+    if (opportunity !== null) await recordFoldedLead(tx, ctx, opportunity.id, lead);
+    createdOpportunity = opportunity === null;
+    opportunity ??= await createOpportunity(
       tx,
       ctx,
       {
@@ -950,12 +1031,15 @@ async function settleLead(
       },
       forceIfKeptApart(keptApartFrom),
     );
-    createdOpportunity = true;
     await setDisposition(tx, ctx, lead.id, 'accepted', opportunity.id);
   } else {
     // Re-capturing a job already tracked reuses the lead that recorded it rather than piling
     // up one extension lead per capture.
     const holder = opportunity;
+    const sameId = match.acceptedById.filter((r) => r.opportunityId === holder.id);
+    knownOther = await isKnownOther(tx, ctx, holder, posting, identity, sameId);
+    // Said by the first capture of a posting, as the place is.
+    anotherPosting = knownOther && sameId.length === 0;
     const reusable = match.accepted.find((r) => r.opportunityId === holder.id);
     if (reusable !== undefined) {
       resultId = reusable.id;
@@ -1000,6 +1084,8 @@ async function settleLead(
     keptApartFrom,
     linkedLeadIds,
     linked: card.length,
+    knownOther,
+    anotherPosting,
   };
 }
 
@@ -1026,6 +1112,7 @@ export async function resolveCapture(
 
   const { opportunity, resultId, createdOpportunity, keptApartFrom, linkedLeadIds, linked } =
     settled;
+  const { knownOther, anotherPosting } = settled;
 
   await racePoint('captureResolve.settled');
   // Bounded as the locks above: nothing is on the timeline yet, so a wait that runs out is
@@ -1079,7 +1166,7 @@ export async function resolveCapture(
     // updateOpportunity keeps its own lock order (the attempt, the user, rows): a savepoint in this
     // transaction, which holds nothing before it.
     const fill = await unlessBlocked('saved capture: the fill gave up a lock wait', () =>
-      bounded((tx) => fillOpportunity(tx, ctx, opportunity, posting, identity)),
+      bounded((tx) => fillOpportunity(tx, ctx, opportunity, posting, identity, knownOther)),
     );
     filled = fill !== null;
     describedIt = fill?.value ?? false;
@@ -1103,7 +1190,9 @@ export async function resolveCapture(
   }
 
   const current = await getOpportunity(db, ctx, opportunity.id);
-  if (current.postingState !== 'confirmed') {
+  // Another posting's page has nothing to look up for the opportunity's own, unless it gave it its
+  // description: an alert of it would change nothing either (#1037).
+  if (current.postingState !== 'confirmed' && !(knownOther && !describedIt)) {
     await unlessBlocked('saved capture: the posting state gave up a lock wait', () =>
       bounded((tx) =>
         setPostingState(tx, ctx, opportunity.id, {
@@ -1137,5 +1226,6 @@ export async function resolveCapture(
     linkedLeadIds,
     linked,
     filled,
+    ...(anotherPosting ? { anotherPosting: true as const } : {}),
   };
 }

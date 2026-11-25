@@ -821,9 +821,12 @@ describe.each(SITES)('a card on %s captured, another level tracked in its city',
     async (how) => {
       const { app, a } = await boot();
       const boston = await IN_BOSTON[how](app, a);
+      // Closed meanwhile, or the page would join it (#1037).
+      await move(app, boston, 'closed');
       const holder = (await capture(app, a, site, HERE, { title: SENIOR, location: HERE }))
         .opportunityId;
       expect(holder).not.toBe(boston);
+      await move(app, boston, 'interested');
       await card(app, a, another(site, HERE, { title: SENIOR }));
       const [siteId, , , otherId, otherUrl] = site;
       const captured = await capture(app, a, [siteId, otherId, otherUrl, '', ''], HERE, {
@@ -945,7 +948,8 @@ describe.each(SITES)('a capture on %s of a role with a linked posting behind it'
     async (rankSkipReason) => {
       const { app, a } = await boot();
       const id = await byHand(app, a);
-      const cardId = await card(app, a, another(site, THERE, { descriptionMd: OWN }));
+      // At the role's own place: one of another place is another posting, and replaces nothing (#1037).
+      const cardId = await card(app, a, another(site, HERE, { descriptionMd: OWN }));
       const res = await a.request({
         method: 'POST',
         url: `/api/v1/discovery/results/${cardId}/accept`,

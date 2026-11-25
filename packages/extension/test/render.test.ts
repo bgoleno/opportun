@@ -151,6 +151,32 @@ describe('renderOutcome', () => {
       );
     });
 
+    // https://github.com/bgoleno/opportun/issues/1037
+    it('another posting of the role is said to be, once, then what became of the description', () => {
+      const another = 'This page is another posting of that job, and was added to its timeline.';
+      expect(text({ ...there, currentStage: 'interested', anotherPosting: true })).toBe(
+        `Already in your pipeline, at Interested. ${another}`,
+      );
+      expect(text({ ...moved, anotherPosting: true })).toBe(
+        `Already in your pipeline: moved to Interested. ${another}`,
+      );
+      expect(text({ ...there, anotherPosting: true, description: 'added' })).toBe(
+        `Already in your pipeline, at Applied. ${another} Its description was added.`,
+      );
+      for (const what of [there, moved]) {
+        expect(text({ ...what, anotherPosting: true, description: 'kept' })).toMatch(
+          /and was added to its timeline\. Its own description was kept\.$/,
+        );
+      }
+      expect(
+        text({ created: false, stage: null, currentStage: 'discovered', anotherPosting: true }),
+      ).toBe(
+        `Already in your pipeline, at New. It could not be moved to Interested just now: move it on its page. ${another}`,
+      );
+      // Nobody's when it was made by this capture, whatever a server says.
+      expect(text({ ...made, anotherPosting: true })).toBe('Added to your pipeline as Interested.');
+    });
+
     it('then the rest of its card', () => {
       expect(text({ ...made, linked: 1 })).toBe(
         'Added to your pipeline as Interested. The other posting on its card was linked to it.',

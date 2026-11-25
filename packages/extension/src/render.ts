@@ -119,7 +119,12 @@ function jobSentences(job: Job): string[] {
       `Already in your pipeline, at ${at}. It could not be moved to Interested just now: move it on its page.`,
     );
   } else {
-    out.push(`Already in your pipeline, at ${at}. This page was added to its timeline.`);
+    out.push(`Already in your pipeline, at ${at}.`);
+    if (job.anotherPosting !== true) out.push('This page was added to its timeline.');
+    timelineSaid = true;
+  }
+  if (!job.created && job.anotherPosting === true) {
+    out.push('This page is another posting of that job, and was added to its timeline.');
     timelineSaid = true;
   }
   if (job.description === 'added') out.push('Its description was added.');

@@ -38,7 +38,7 @@ export type Outcome =
       opportunityId?: string;
       /** The stage the capture moved it to, null when the stage was left alone. */
       stage?: string | null;
-      /** Whether this capture made the opportunity, and the stage it is at (#967). All four below are
+      /** Whether this capture made the opportunity, and the stage it is at (#967). All five below are
        *  absent from an older server. */
       created?: boolean;
       currentStage?: string;
@@ -48,6 +48,8 @@ export type Outcome =
       linked?: number;
       /** Sent only when what the opportunity lacked was not added (#914); absent otherwise. */
       filled?: false;
+      /** It joined the opportunity as another posting of its role (#1037); absent otherwise. */
+      anotherPosting?: true;
     }
   | { kind: 'connected' }
   // What the server refused.
@@ -161,6 +163,7 @@ function success(status: number, body: unknown): Outcome {
           : {}),
         ...(isCount(body.linked, 1_000_000) ? { linked: body.linked } : {}),
         ...(body.filled === false ? { filled: false as const } : {}),
+        ...(body.anotherPosting === true ? { anotherPosting: true as const } : {}),
       };
     }
   }
