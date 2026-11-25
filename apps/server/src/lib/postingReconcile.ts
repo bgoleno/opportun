@@ -15,6 +15,8 @@ import type { Db } from '../db/client';
 import { buildAiDeps } from './ai';
 import { HttpError } from './errors';
 import { boardReadAtsJobRef, postingAtsJobRefKeeping } from './atsJobRef';
+import { httpLink } from './httpLink';
+import { ofSeveralPostings, ownPage } from './ownPosting';
 import { descriptionFingerprint } from './postingFingerprint';
 import { mergePostingText } from './postingMerge';
 import { racePoint } from './racePoints';
@@ -22,7 +24,13 @@ import { type BodyReader, type ReadFrom } from './postingSearch';
 import { sanitizePosting } from './postingSanitize';
 import { siteLabel, siteOfLabel, siteOfUrl } from './captureSites';
 import { sourceLabel } from './sourceLabels';
-import { createActivity, listActivities, updateActivity } from '../repos/activities';
+import {
+  createActivity,
+  getActivity,
+  listActivities,
+  listCaptures,
+  updateActivity,
+} from '../repos/activities';
 import type { UserCtx } from '../repos/base';
 import {
   DescriptionChanged,
@@ -41,21 +49,31 @@ export interface ReconcileOutcome {
   detail: PostingStateDetail | null;
 }
 
+export interface CapturedPage {
+  text: string;
+  siteLabel: string;
+  siteId: string | null;
+  /** Its posting's address, where that is a link. */
+  url: string | null;
+  /** Another posting's page is on the timeline too. */
+  ofSeveral: boolean;
+}
+
 /**
- * The capture this opportunity was built from, as the extension read it (design D12, D26).
- * Exported for issue #264: re-deriving a description reuses this exact selection (the latest
- * capture activity), rather than a second copy of the same "which one" rule.
+ * The capture this opportunity was built from, as the extension read it (design D12, D26): the newest
+ * of its own posting (ownPage). Exported for issue #264: re-deriving a description reuses this exact
+ * selection, rather than a second copy of the same "which one" rule.
  */
 export async function capturedPage(
   db: Db,
   ctx: UserCtx,
   opportunityId: string,
-): Promise<{ text: string; siteLabel: string; siteId: string | null } | null> {
-  const { items } = await listActivities(db, ctx, opportunityId, { limit: 50, offset: 0 });
-  const capture = items
-    .filter((a) => a.kind === 'capture' && a.bodyMd != null && a.bodyMd !== '')
-    .sort((x, y) => y.occurredAt - x.occurredAt)[0];
+): Promise<CapturedPage | null> {
+  const opp = await getOpportunity(db, ctx, opportunityId);
+  const pages = await listCaptures(db, ctx, opportunityId);
+  const capture = await ownPage(db, ctx, opp, pages);
   if (capture === undefined) return null;
+  const { bodyMd } = await getActivity(db, ctx, capture.id);
   // "Captured from LinkedIn" names the site the merge heading has to read, and the site whose
   // extraction re-derive runs over the text (https://github.com/bgoleno/opportun/issues/93).
   // recordCapture writes that title for every capture; a title without it is read as LinkedIn,
@@ -68,9 +86,11 @@ export async function capturedPage(
   const site =
     siteOfLabel(label) ?? (capture.externalUrl == null ? null : siteOfUrl(capture.externalUrl));
   return {
-    text: capture.bodyMd as string,
+    text: bodyMd ?? '',
     siteLabel: label,
     siteId: site?.id ?? null,
+    url: httpLink(capture.externalUrl),
+    ofSeveral: ofSeveralPostings(pages),
   };
 }
 
@@ -299,11 +319,12 @@ export async function confirm(
   // survived its grounding/dedup checks: comparing trimmed strings is the direct way to tell
   // whether anything was actually appended, rather than re-deriving its internal decision.
   const merged = patch.descriptionMd !== undefined && description.trim() !== atsText.trim();
+  const which = capture?.ofSeveral === true ? ` (${capture.siteLabel})` : '';
   const descriptionNote =
     patch.descriptionMd === undefined
       ? ''
       : merged
-        ? " Merged the board's copy with details only the captured page had."
+        ? ` Merged the board's copy with details only the captured page${which} had.`
         : " Replaced the description with the board's copy.";
   const changedExtra = [
     posting.location != null ? 'location' : null,
