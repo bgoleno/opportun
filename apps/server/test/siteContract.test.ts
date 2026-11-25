@@ -70,7 +70,11 @@ const PATTERN_REFUSES: Record<string, string[]> = {
 /** Hosts that look like the rule's but are not it (sec, #769 point 3). */
 const lookAlikes = (rule: HostRule): string[] => {
   const h = hostOf(rule);
-  const around = [`x.${h}`, `${h}.evil.example`, `${h}x`];
+  // Each dot as a letter: an unescaped one in a pattern takes another registered domain's host.
+  const dotless = [...h].flatMap((c, i) =>
+    c === '.' ? [`${h.slice(0, i)}x${h.slice(i + 1)}`] : [],
+  );
+  const around = [`x.${h}`, `${h}.evil.example`, `${h}x`, ...dotless];
   if ('exact' in rule) return [...around, `evil-${h}`];
   const refused = PATTERN_REFUSES[rule.example];
   if (refused === undefined) throw new Error(`no look-alikes for ${rule.example}`);
@@ -313,6 +317,7 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
         expect(site.board!.fromConfig({ org: bad }), bad).toBeNull();
         // Each part of a board that is more than one slug, in turn.
         const config = site.board!.configOf(board);
+        expect(site.board!.configSchema.safeParse({ ...config, more: 'x' }).success).toBe(false);
         for (const key of Object.keys(config)) {
           const moved = { ...config, [key]: bad };
           expect(site.board!.configSchema.safeParse(moved).success, `${key} ${bad}`).toBe(false);
