@@ -421,6 +421,14 @@ a search box over the whole board. If no board is reachable, paste the posting l
 description text instead. LinkedIn and Indeed links are never fetched: paste the text, or use
 the [capture extension](discovery.md#capture-a-posting-yourself).
 
+If you change the company, the title or the posting link while Opportun is looking, nothing found for the
+old ones is used, and what you saved stays. Find posting says so and can be pressed again; a background
+check ends as one that did not finish, with **Try again**. The timeline has "Posting check stopped: the
+opportunity changed", naming what changed. A posting picked from a list that was found before the change is
+refused too; a link or text you add by hand is not. Nothing is searched again by itself. Renaming the
+company on its own page changes nothing here. **Confirm** asks you to check the link first if it was
+changed while you confirmed.
+
 A large Workday board (see [install guide section
 8](../install.md#8-attaching-a-posting-to-an-opportunity)) is read only in part: a note says
 so, "Large Workday board: showing the first N of M postings", and invites you to paste the
