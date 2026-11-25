@@ -14,6 +14,7 @@ import {
   canSubmissionTransition,
   newId,
   submissionFieldProblem,
+  type AtsJobRef,
   type Submission,
   type SubmissionAnswer,
   type SubmissionFields,
@@ -233,6 +234,20 @@ export interface DraftOptions {
   actor?: string | null;
 }
 
+/** What a draft was being pinned from is no longer what the opportunity has (#913). */
+class PostingChanged extends Error {}
+
+/** Whether a draft made from either would be pinned alike. Not when, or by what, it was checked. */
+function pinnedAlike(a: AtsJobRef | null, b: AtsJobRef): boolean {
+  return (
+    a !== null &&
+    a.kind === b.kind &&
+    a.org === b.org &&
+    a.externalId === b.externalId &&
+    a.url === b.url
+  );
+}
+
 /**
  * Starts a draft for one opportunity, or returns the one this key already created
  * (`replayed`). Eligible (#114 criterion 1): the opportunity has an ATS identity whose posting
@@ -355,6 +370,26 @@ export async function createSubmissionDraft(
     const created = await withTransaction(db, async (tx) => {
       // Gone since it was read above is not found (#944), as for anything added to one (#925).
       await holdOpportunity(tx, ctx, opportunityId);
+      // What this is pinned from, as it is now that no save can change it (#913): one that did since
+      // it was read above has marked no draft, as there was none. Inserted as it stands, this one
+      // would be live on a posting the opportunity has left, with nothing to say so.
+      const fresh = await tx
+        .select({
+          postingUrl: opportunities.postingUrl,
+          atsJobRef: opportunities.atsJobRef,
+          postingState: opportunities.postingState,
+        })
+        .from(opportunities)
+        .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, opportunityId)))
+        .get();
+      if (fresh === undefined) throw notFound();
+      if (
+        fresh.postingUrl !== opp.postingUrl ||
+        fresh.postingState !== opp.postingState ||
+        !pinnedAlike(fresh.atsJobRef, ref)
+      ) {
+        throw new PostingChanged();
+      }
       const [row] = await tx
         .insert(applicationSubmissions)
         .values({
@@ -387,12 +422,24 @@ export async function createSubmissionDraft(
     if (resume !== null) await enqueueSnapshot(db, ctx.userId, created.id, resume.id);
     return { submission: view(created), replayed: false };
   } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
-    // Lost a race: either the same key (a double click) or another live attempt.
+    const changed = err instanceof PostingChanged;
+    if (!changed && !isUniqueViolation(err)) throw err;
+    // Lost a race: either the same key (a double click) or another live attempt. A changed posting
+    // hides the same two: what it changed beside can have been started, and marked, meanwhile (tl on
+    // https://github.com/bgoleno/opportun/pull/996).
     const raced = await replay();
     if (raced !== null) return raced;
     const winner = await liveFor(db, ctx, opportunityId);
     if (winner !== undefined) throw liveExists(winner);
+    if (changed) {
+      throw new HttpError(
+        409,
+        'posting_changed',
+        "This opportunity's posting changed while you were starting the application. Check the posting, then start again.",
+        undefined,
+        { userFacing: true },
+      );
+    }
     // The row that won was finished in between (cancelled, say). The race is over: the client
     // retries as for any conflict, rather than seeing the raw driver error as a 500.
     throw new HttpError(
@@ -784,6 +831,19 @@ export async function lockLiveAttempt(
   ctx: UserCtx,
   opportunityId: string,
 ): Promise<string | null> {
+  const live = await liveAttemptId(tx, ctx, opportunityId);
+  if (live === null) return null;
+  await lockScope(tx, `submission:${live}`);
+  // The caller passes this id to markPostingChanged (#157): the attempt marked is the one locked.
+  return live;
+}
+
+/** The opportunity's live attempt that a posting change would reach, if it has one. */
+export async function liveAttemptId(
+  tx: Exec,
+  ctx: UserCtx,
+  opportunityId: string,
+): Promise<string | null> {
   const live = await tx
     .select({ id: applicationSubmissions.id })
     .from(applicationSubmissions)
@@ -795,10 +855,7 @@ export async function lockLiveAttempt(
       ),
     )
     .get();
-  if (live === undefined) return null;
-  await lockScope(tx, `submission:${live.id}`);
-  // The caller passes this id to markPostingChanged (#157): the attempt marked is the one locked.
-  return live.id;
+  return live?.id ?? null;
 }
 
 /**

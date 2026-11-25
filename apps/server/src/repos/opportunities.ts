@@ -48,7 +48,13 @@ import {
 } from '../db/schema';
 import { postingAtsJobRefKeeping } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
-import { attemptIdsOf, lockAttemptsOf, lockLiveAttempt, markPostingChanged } from './submissions';
+import {
+  attemptIdsOf,
+  liveAttemptId,
+  lockAttemptsOf,
+  lockLiveAttempt,
+  markPostingChanged,
+} from './submissions';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
 import { lastActivityAt } from './activities';
@@ -518,6 +524,11 @@ export class DescriptionChanged extends Error {
  */
 const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
 
+interface UpdateOptions {
+  atsJobRef?: AtsJobRef | null;
+  ifDescription?: Pick<OpportunityRow, 'descriptionMd' | 'descriptionFingerprint'>;
+}
+
 /**
  * Edits descriptive fields. Changing company, title or location re-claims the dedupe key; a patch
  * with none of the three writes neither the company nor the key, so it cannot put back what another
@@ -540,10 +551,17 @@ export async function updateOpportunity(
    * fingerprint: a user's save leaves the fingerprint as it was, which is how it is known to be
    * theirs (lib/postingFingerprint).
    */
-  opts: {
-    atsJobRef?: AtsJobRef | null;
-    ifDescription?: Pick<OpportunityRow, 'descriptionMd' | 'descriptionFingerprint'>;
-  } = {},
+  opts: UpdateOptions = {},
+): Promise<OpportunityView> {
+  return await withEveryAttempt(() => updateOnce(db, ctx, id, patch, opts));
+}
+
+async function updateOnce(
+  db: Exec,
+  ctx: UserCtx,
+  id: string,
+  patch: UpdateOpportunityInput,
+  opts: UpdateOptions,
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
     let current = await getViewSync(tx, ctx, id);
@@ -552,6 +570,7 @@ export async function updateOpportunity(
     // is a change is known only from the read made under the user's lock, below.
     const lockedAttempt =
       patch.postingUrl === undefined ? null : await lockLiveAttempt(tx, ctx, id);
+    if (patch.postingUrl !== undefined) await racePoint('opportunities.update.attemptLocked');
     if (patch.roleTargetId != null) await assertRoleTargetOwned(tx, ctx, patch.roleTargetId);
     const { companyName, ...fields } = patch;
     const changesKey =
@@ -563,6 +582,18 @@ export async function updateOpportunity(
     if (changesKey || patch.postingUrl !== undefined) {
       await lockScope(tx, userScope(ctx));
       current = await getViewSync(tx, ctx, id);
+    }
+    const urlChanged = fields.postingUrl !== undefined && fields.postingUrl !== current.postingUrl;
+    if (urlChanged) {
+      // An application can have been started while this waited for the user's lock, with a lock this
+      // doesn't hold and which comes before it: then the save is started over with it, nothing being
+      // written yet (#913). The row is held against a start first, so none can come after the look:
+      // one that waits for it reads the link again and is refused (createSubmissionDraft).
+      if (!(await lockOpportunityRow(tx, ctx, id, true))) throw notFound();
+      // Not all that write the row take the user's lock: from here it is as it stays.
+      current = await getViewSync(tx, ctx, id);
+      const live = await liveAttemptId(tx, ctx, id);
+      if (live !== null && live !== lockedAttempt) throw new AttemptMade();
     }
     let companyId = current.companyId;
     if (companyName !== undefined)
@@ -581,7 +612,6 @@ export async function updateOpportunity(
     // old URL would name another requisition while the posting still reads confirmed (a URL
     // edit through PATCH leaves postingState as it is). A verified `gh_jid` identity survives
     // only while the new link names its job (#398).
-    const urlChanged = fields.postingUrl !== undefined && fields.postingUrl !== current.postingUrl;
     const newRef =
       opts.atsJobRef !== undefined
         ? opts.atsJobRef
@@ -907,15 +937,16 @@ async function activityIdsForUpdate(tx: Exec, ctx: UserCtx, id: string): Promise
   return rows.map((r) => r.id);
 }
 
-/** An attempt whose lock this transaction doesn't hold is on the opportunity that is going. */
+/** An attempt that this transaction is about to reach has a lock it doesn't hold. */
 class AttemptMade extends Error {}
-/** How often a merge or a delete starts over for one: a live attempt is one at a time. */
+/** How often a merge, a delete or a link's save starts over for one: a live one is one at a time. */
 const ATTEMPT_TRIES = 3;
 
 /**
- * A merge or a delete takes the locks of the attempts there are and then waits for the user's, and
- * an attempt can be made in between (#944). It can't be locked then: an attempt's lock comes before
- * the rows. So the transaction is rolled back, and starts over with that attempt among them.
+ * A merge, a delete or a link's save takes the locks of the attempts there are and then waits for
+ * the user's, and an attempt can be made in between (#944, #913). It can't be locked then: an
+ * attempt's lock comes before the rows. So the transaction is rolled back, and starts over with that
+ * attempt among them.
  */
 async function withEveryAttempt<T>(run: () => Promise<T>): Promise<T> {
   for (let tries = 1; ; tries += 1) {
