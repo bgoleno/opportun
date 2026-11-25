@@ -20,11 +20,7 @@ merged after it.
 - **Pipeline board: a card moved by keyboard is picked up in its own column and reaches every
   column on a board narrower than its columns.** In 0.5.0 it could not reach every column at 768
   and 1024 px, or at wider widths with Dismissed and Closed expanded. Left and Right now scroll the next
-  column into view, and the card is announced in the column it is over. Pointer drags are
-  unchanged. At 768 px with both end columns expanded the chain has no width left, so no chain
-  column is on screen, though the card still steps through all of them
-  ([#886](https://github.com/bgoleno/opportun/issues/886),
-  [#902](https://github.com/bgoleno/opportun/issues/902); PR
+  column into view, and the card is announced in the column it is over. Pointer drags are unchanged ([#886](https://github.com/bgoleno/opportun/issues/886); PR
   [#900](https://github.com/bgoleno/opportun/pull/900)).
 - **Pipeline board: a card dropped with the mouse lands in the column under the pointer.** Dropped
   quickly on an expanded Dismissed or Closed, a card could move to a stage hidden behind it, without
@@ -33,24 +29,25 @@ merged after it.
   unchanged
   ([#960](https://github.com/bgoleno/opportun/issues/960); PR
   [#965](https://github.com/bgoleno/opportun/pull/965)).
-- **Pipeline board: with both end columns expanded on a narrow screen, the other columns keep a whole
-  column, and on a phone the page never scrolls sideways.** The other columns keep one whole column
-  (288 px), or on a phone what two rails would leave of it. The end columns scroll sideways in an
-  area of their own beside them, each at least 160 px wide, and an expanded end column comes into
-  view, so at 768 px with both expanded a chain column is on screen again. At 1280 px and wider, or with either end column a rail, nothing changes. With exactly one end
-  column expanded on a phone, the other columns keep up to 112 px, the expanded one gives way from
-  288 px down to 160 px and the other one's rail stays whole, where the page scrolled sideways by up
-  to 64 px. A card's company and title now break anywhere, so a long unbroken word no longer makes
-  the page scroll sideways
-  ([#902](https://github.com/bgoleno/opportun/issues/902), [#997](https://github.com/bgoleno/opportun/issues/997); PRs [#991](https://github.com/bgoleno/opportun/pull/991), [#1009](https://github.com/bgoleno/opportun/pull/1009)).
+- **Pipeline board: with both end columns expanded on a narrow screen, the board keeps a whole
+  column for the stages between them, and on a phone the page never scrolls sideways.** The columns
+  between the end columns keep one whole column (288 px), or on a phone what two rails would leave
+  of it. The end columns scroll sideways in an area of their own beside them, each at least 160 px
+  wide, and an expanded end column comes into view. At 1280 px and wider nothing changes. On a
+  phone with exactly one end column expanded, the columns between keep up to 112 px, the expanded
+  one gives way from 288 px down to 160 px and the other one's rail stays whole, where the page
+  scrolled sideways by up to 64 px. A card's company and title now break anywhere, so a long
+  unbroken word no longer makes the page scroll sideways
+  ([#902](https://github.com/bgoleno/opportun/issues/902),
+  [#997](https://github.com/bgoleno/opportun/issues/997); PRs
+  [#991](https://github.com/bgoleno/opportun/pull/991),
+  [#1009](https://github.com/bgoleno/opportun/pull/1009)).
 
 ### Opportunities and posting links
 
 - **A description you save at the very moment a background posting check writes is kept.** The
   check writes only while the description is still the one it read. When it is not, the check
-  writes nothing, including no location, link or duplicate key, and the timeline says it skipped
-  the description: "The description changed while the board was being checked, so the board search
-  left it as it is."
+  writes nothing, including no location, link or duplicate key, and the timeline says the check kept the description ("Posting check: description kept").
   ([#856](https://github.com/bgoleno/opportun/issues/856); PR
   [#883](https://github.com/bgoleno/opportun/pull/883)).
 - **While a background check reads the company's board, the Apply panel and the Resume tab say so
@@ -137,8 +134,7 @@ merged after it.
 - **Posting: your own description is replaced only with your agreement, and a Re-derive never
   overwrites one saved meanwhile.** At a posting you have edited, Review board copy, Find posting and
   a paste in "Add the posting" ask "Replace your description?", saying that the edit can't be
-  recovered. The server refuses the replacement without that agreement (409 `already_described`);
-  the Apply panel never asks and says the description was kept. A Re-derive from a capture that
+  recovered. Without that agreement the server refuses a pasted text or link (409 `already_described`), and Find posting and a picked row go on and keep the description, saying so. The Apply panel never asks and says the description was kept. A Re-derive from a capture that
   finds a description saved after it started writes nothing and the timeline note says the
   description was kept ("Posting check: description kept"). A refused write does not undo a
   confirmation
@@ -150,13 +146,10 @@ merged after it.
   ([#1010](https://github.com/bgoleno/opportun/issues/1010); PR [#1018](https://github.com/bgoleno/opportun/pull/1018)).
 - **Resumes: a tailored copy that was made is never refused after the copy.** When the opportunity
   or base resume is deleted while the copy is made, the copy is kept as a resume that is not
-  attached to it, and the page says "The opportunity was deleted while the copy was made, so the
-  resume is not attached to one." A failure of the database says where the copy is, in Resumes or in
-  Google Docs, instead of leaving an unseen copy
+  attached to it, and, for a deleted opportunity, the page says "The opportunity was deleted while the copy was made, so the resume is not attached to one." If the database then fails, the answer is "The resume may not have been saved. Look in Resumes: if it is not there, the copy named X was left in Google Docs" (or Reactive Resume)
   ([#962](https://github.com/bgoleno/opportun/issues/962); PR [#1005](https://github.com/bgoleno/opportun/pull/1005)).
 - **Import: a row whose opportunity was deleted meanwhile says so, and the rest is imported.** The
-  report says "the opportunity was deleted while the import ran" at its line. Before, the whole
-  import failed and the job was tried again, up to three times
+  report says "the opportunity was deleted while the import ran" at its line. Before, a stage move of such a row failed the whole import, and the job was tried again, up to three times
   ([#934](https://github.com/bgoleno/opportun/issues/934); PR [#1032](https://github.com/bgoleno/opportun/pull/1032)).
 
 ### Sign-in and settings
@@ -199,7 +192,7 @@ merged after it.
   [#933](https://github.com/bgoleno/opportun/pull/933)).
 - **Sign-in: the reason is said once, and the page asked for survives a provider's round trip.** The
   sign-in page takes the reason it was sent with out of its address, so a reload or Back says
-  nothing. The page you asked for is kept in your browser, never by the server, and only one of the
+  nothing. The page you asked for is kept in that browser tab for ten minutes at most, never by the server, and only one of the
   app's own pages is opened after the sign-in
   ([#942](https://github.com/bgoleno/opportun/issues/942); PR [#1019](https://github.com/bgoleno/opportun/pull/1019)).
 - **Settings > Security says the result of linking an account once, not again on a reload.** The
@@ -207,8 +200,7 @@ merged after it.
   ([#1021](https://github.com/bgoleno/opportun/issues/1021); PR [#1025](https://github.com/bgoleno/opportun/pull/1025)).
 - **Errors: more refusals say what happened and what to do, instead of a code.** Unsuppress on a
   result that is back in the review queue, finishing a tailoring session twice, setting a password
-  for a provider that is not linked and setting one when the account has one each have a sentence,
-  and what they were about is read again
+  with a provider that is no longer linked and setting one when the account has one each have a sentence, and what they were about is read again. The Posting attached notice now ends with a full stop
   ([#927](https://github.com/bgoleno/opportun/issues/927), [#1016](https://github.com/bgoleno/opportun/issues/1016); PR [#1013](https://github.com/bgoleno/opportun/pull/1013)).
 
 ### Inbox
@@ -294,8 +286,7 @@ merged after it.
   opportunity lets no key go by itself: its repost is skipped as a duplicate until you unsuppress
   its result. An opportunity that is still there, closed included, still refuses it
   ([#1008](https://github.com/bgoleno/opportun/issues/1008); PR [#1023](https://github.com/bgoleno/opportun/pull/1023)).
-- **Discovery: Undo after Unsuppress takes the key back, or says the job is there already.** Where
-  the job is in your pipeline or in the review queue by then, the result stays dismissed and the page
+- **Discovery: Undo after Unsuppress takes the key back, or says the job is there already.** A dismissed result is restored with its key, so a repost makes no second card. Where the job is in your pipeline or in the review queue by then, the result stays dismissed and the page
   says "1 not restored: this job is already in your pipeline" (or "in the review queue"), with
   **View opportunity** or **Review queue**
   ([#1020](https://github.com/bgoleno/opportun/issues/1020); PR [#1030](https://github.com/bgoleno/opportun/pull/1030)).
@@ -341,7 +332,7 @@ merged after it.
   `running` until the next start and was not run again until then
   ([#963](https://github.com/bgoleno/opportun/issues/963); PR
   [#972](https://github.com/bgoleno/opportun/pull/972)).
-- **MCP: no child an MCP server started is left running.** When the server exits, what it left is
+- **MCP: no child an MCP server started is left running.** When the MCP server exits, what it left is
   asked to end, and what is still there after 2 seconds is killed. A process the server puts in a
   session or group of its own is not reached
   ([#1024](https://github.com/bgoleno/opportun/issues/1024); PR [#1027](https://github.com/bgoleno/opportun/pull/1027)).
