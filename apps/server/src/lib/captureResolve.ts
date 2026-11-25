@@ -919,11 +919,16 @@ async function settleLead(
     opportunity = await openOfCard(tx, ctx, key, posting, keptApartFrom);
     if (opportunity !== null) {
       knownOther = await isKnownOther(tx, ctx, opportunity, posting, identity);
-      anotherPosting = true;
+      // Not where there is nothing it could be another than: it is the first one's own (#1064).
+      anotherPosting =
+        (opportunity.postingUrl ?? '') !== '' ||
+        (opportunity.location ?? '').trim() !== '' ||
+        (await leadsBehind(tx, ctx, opportunity.id)).length > 0;
     }
     const lead = await createLead(tx, ctx, posting);
     resultId = lead.id;
-    if (opportunity !== null) await recordFoldedLead(tx, ctx, opportunity.id, lead);
+    if (opportunity !== null && anotherPosting)
+      await recordFoldedLead(tx, ctx, opportunity.id, lead);
     createdOpportunity = opportunity === null;
     opportunity ??= await createOpportunity(
       tx,
