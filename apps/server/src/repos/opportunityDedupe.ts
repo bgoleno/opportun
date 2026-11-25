@@ -193,14 +193,13 @@ async function findMatches(
   title: string,
 ): Promise<MatchCandidate[]> {
   const key = companyMatchKey(companyName);
-  // `OR company_match_key IS NULL` is the correctness backstop for a company the one-shot
-  // backfill (companyMatchKeyRepair.ts) has not reached yet, or that failed partway through:
-  // without it, a missing key would silently narrow the scan instead of widening it, which
-  // would make a cache miss look like "no duplicate" rather than "not sure yet". A row that
-  // survives the SQL filter this way still needs its own companyMatchKey recomputed and
-  // compared below, the same check findMatches ran on every row before this column existed;
-  // it is now paid only for the shrinking set of not-yet-backfilled companies, not the user's
-  // whole active set.
+  // `OR company_match_key IS NULL` is the correctness backstop for a company stored before the
+  // column existed (no public version stores one, and nothing fills it in, #1034): without it, a
+  // missing key would silently narrow the scan instead of widening it, which would make a cache miss
+  // look like "no duplicate" rather than "not sure yet". A row that survives the SQL filter this way
+  // still needs its own companyMatchKey recomputed and compared below, the same check findMatches ran
+  // on every row before this column existed; it is now paid only for a company with no key, not the
+  // user's whole active set.
   const others = await exec
     .select({
       id: opportunities.id,

@@ -81,10 +81,9 @@ export const companyDomainResolveJob: JobHandler<z.infer<typeof PayloadSchema>> 
 // gets resolved too, so an opportunity reported before this existed does not need to be moved
 // again to pick one up. Bounded to companies actually in the pipeline today, not all of them --
 // the companies a user has only discovered, not actioned, are not what the issue asked for and
-// would make this a 1,154-row sweep instead of the handful actually in play. Same one-shot-
-// per-deployment shape as companyMatchKeyRepair.ts: a settings marker row, queued once per user
-// on boot; see enqueueRepairAlertLeadsOnce for why a fresh install with no users yet is skipped
-// rather than marked done.
+// would make this a 1,154-row sweep instead of the handful actually in play. Queued once per user on
+// boot, by a settings marker row. A fresh install with no users yet is skipped rather than marked
+// done, so that a database restored into it is still swept.
 
 export const COMPANY_DOMAIN_BACKFILL_KIND = 'company.domain_resolve_backfill';
 export const COMPANY_DOMAIN_BACKFILL_MARKER_KEY = 'company_domain_backfill:done';

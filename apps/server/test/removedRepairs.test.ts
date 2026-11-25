@@ -1,8 +1,9 @@
-// The one-time repair of dedupe keys is gone (https://github.com/bgoleno/opportun/issues/912): no
-// public version wrote the keys it corrected, and at a new install's second start, its first with
-// users, it undid keys that are kept on purpose.
+// Three one-time repairs are gone, as no public version wrote what they repaired. That of dedupe keys
+// (https://github.com/bgoleno/opportun/issues/912) also undid, at a new install's second start, its
+// first with users, keys that are kept on purpose. Those of shifted alert leads and of companies' match
+// keys (https://github.com/bgoleno/opportun/issues/1034) found nothing there.
 import { dedupeKey } from '@opportun/core';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, expect, it } from 'vitest';
 import { discoveryResults, jobs, opportunities, settings } from '../src/db/schema';
@@ -17,8 +18,14 @@ import { restartableTestApp } from './helpers';
 import { registerTwoUsers } from './isolation';
 import { runQueuedJob } from './runQueuedJob';
 
-const KIND = 'discovery.repair_dedupe_keys';
-const MARKER = 'repair_dedupe_keys:done';
+/** Each repair's job kind, and the marker it wrote once queued. */
+const REMOVED: [string, string][] = [
+  ['discovery.repair_dedupe_keys', 'repair_dedupe_keys:done'],
+  ['discovery.repair_alert_leads', 'repair_alert_leads:done'],
+  ['companies.repair_match_keys', 'repair_company_match_keys:done'],
+];
+const KINDS = REMOVED.map(([kind]) => kind);
+const MARKERS = REMOVED.map(([, marker]) => marker);
 
 let close: (() => Promise<void>) | undefined;
 afterEach(async () => {
@@ -31,12 +38,14 @@ async function install() {
   return t;
 }
 
-const ofKind = async (app: FastifyInstance) =>
-  await app.db.select().from(jobs).where(eq(jobs.kind, KIND)).all();
-const marker = async (app: FastifyInstance) =>
-  await app.db.select().from(settings).where(eq(settings.key, MARKER)).all();
+const queued = async (app: FastifyInstance) =>
+  await app.db.select().from(jobs).where(inArray(jobs.kind, KINDS)).all();
+const markers = async (app: FastifyInstance) =>
+  (await app.db.select().from(settings).where(inArray(settings.key, MARKERS)).all())
+    .map((s) => s.key)
+    .sort();
 
-it("a new install's second start leaves the keys kept on purpose, and queues nothing", async () => {
+it("a new install's second start leaves the keys kept on purpose, and queues none of them", async () => {
   const t = await install();
   const { a } = await registerTwoUsers(t.app());
   const { db } = t.app();
@@ -87,35 +96,38 @@ it("a new install's second start leaves the keys kept on purpose, and queues not
   expect(before.map((r) => r!.dedupeKey)).toEqual([leadKey, 'initech|dev|remote']);
 
   const app = await t.restart({});
-  for (const job of await ofKind(app)) await runQueuedJob(app, job.id);
+  for (const job of await queued(app)) await runQueuedJob(app, job.id);
   expect(await stored(app)).toEqual(before);
-  expect(await ofKind(app)).toEqual([]);
-  expect(await marker(app)).toEqual([]);
+  expect(await queued(app)).toEqual([]);
+  expect(await markers(app)).toEqual([]);
 });
 
-it('a job of it that an older version left pending ends as one with no handler, and its row says so', async () => {
-  const t = await install();
-  const { a } = await registerTwoUsers(t.app());
-  const id = await enqueue(t.app().db, KIND, {}, { dedupeKey: `${KIND}:x`, userId: a.userId });
-  const app = await t.restart({});
-  await runQueuedJob(app, id);
-  expect((await ofKind(app)).find((j) => j.id === id)).toMatchObject({
-    status: 'dead',
-    attempts: 1,
-    lastError: `no handler registered for kind ${KIND}`,
-  });
-});
+it.each(KINDS)(
+  'a %s an older version left pending ends with no handler, and says so',
+  async (kind) => {
+    const t = await install();
+    const { a } = await registerTwoUsers(t.app());
+    const id = await enqueue(t.app().db, kind, {}, { dedupeKey: `${kind}:x`, userId: a.userId });
+    const app = await t.restart({});
+    await runQueuedJob(app, id);
+    expect((await queued(app)).find((j) => j.id === id)).toMatchObject({
+      status: 'dead',
+      attempts: 1,
+      lastError: `no handler registered for kind ${kind}`,
+    });
+  },
+);
 
-it('a marker an older version wrote stays, and nothing reads it', async () => {
+it('the markers an older version wrote stay, and nothing reads them', async () => {
   const t = await install();
   await registerTwoUsers(t.app());
   await t
     .app()
     .db.insert(settings)
-    .values({ key: MARKER, userId: null, value: 1, updatedAt: 1 })
+    .values(MARKERS.map((key) => ({ key, userId: null, value: 1, updatedAt: 1 })))
     .onConflictDoNothing()
     .run();
   const app = await t.restart({});
-  expect(await marker(app)).toHaveLength(1);
-  expect(await ofKind(app)).toEqual([]);
+  expect(await markers(app)).toEqual([...MARKERS].sort());
+  expect(await queued(app)).toEqual([]);
 });

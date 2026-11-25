@@ -45,7 +45,7 @@ export async function isAlertDigest(exec: Exec, ctx: UserCtx, from: string): Pro
 }
 
 /** Leads from a digest body: the first parser that recognizes it wins. */
-export function parseAlertDigest(text: string): NormalizedPosting[] {
+function parseAlertDigest(text: string): NormalizedPosting[] {
   for (const alert of ALERTS) {
     const leads = alert.parse(text);
     if (leads.length > 0) return leads;

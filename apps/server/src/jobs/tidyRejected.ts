@@ -243,8 +243,8 @@ export async function tidyRejectedMessages(db: Db, deps: TidyDeps): Promise<Tidy
 
 /**
  * Queues the job at a start, until a run of it has reached its end: the job writes the marker, not
- * this. As enqueueRepairAlertLeadsOnce, nothing is queued while there are no users, so that a
- * database restored into a fresh install is tidied.
+ * this. Nothing is queued while there are no users, so that a database restored into a fresh install
+ * is tidied.
  */
 export async function enqueueTidyRejectedOnce(db: Db): Promise<boolean> {
   const marker = await db

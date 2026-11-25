@@ -11,8 +11,8 @@
 //
 // Safe to run twice: a second run derives the same refs and finds nothing to change. Each write
 // is conditional on the row being as it was read (the same posting URL and updated_at), so an
-// attach, reconcile or URL edit landing meanwhile wins. Same one-shot-per-deployment shape as
-// companyMatchKeyRepair.ts.
+// attach, reconcile or URL edit landing meanwhile wins. Queued once per deployment, by a settings
+// marker row.
 import { enqueue } from '../lib/jobQueue';
 import type { AtsJobRef } from '@opportun/core';
 import { and, eq, isNotNull } from 'drizzle-orm';
@@ -109,9 +109,9 @@ export async function backfillAtsJobRefs(db: Db, ctx: UserCtx): Promise<AtsJobRe
 }
 
 /**
- * Queues the backfill for every user, once per deployment. As in companyMatchKeyRepair.ts, the
- * marker is not written on a fresh install with no users: there is nothing to backfill, and a
- * later first user's rows are written by the fixed code.
+ * Queues the backfill for every user, once per deployment. The marker is not written on a fresh
+ * install with no users: there is nothing to backfill, and a later first user's rows are written by
+ * the fixed code.
  */
 export async function enqueueBackfillAtsJobRefsOnce(db: Db): Promise<number> {
   const marker = await db

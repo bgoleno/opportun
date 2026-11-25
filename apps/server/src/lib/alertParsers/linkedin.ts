@@ -36,7 +36,7 @@ const SEPARATOR = /^-{5,}$/;
  * and the company becomes the location (observed live, 15 rows, 2026-10-19). Anchored at the
  * start so a posting legitimately titled "Manager, Your Job Alert Platform" still parses.
  */
-export const ALERT_HEADER = /^Your job alert for\b/i;
+const ALERT_HEADER = /^Your job alert for\b/i;
 /** Badge lines between the location and the link, not part of the job's identity. */
 const BADGES: readonly RegExp[] = [
   /^actively recruiting$/i,

@@ -250,7 +250,7 @@ export async function drainWaitingResults(
         continue;
       }
       // Its text changed during the call. A capture or a new run queues a rank job, so another try
-      // here would pay twice; retryWorkdayCapture, repairAlertLeads and a purge change text and queue
+      // here would pay twice; retryWorkdayCapture and a purge change text and queue
       // none. Either way it keeps its wait, so the cost is only the delay until the next sweep takes
       // it. Not a provider error, and true of this posting alone.
       if (run.reason === POSTING_CHANGED) continue;
