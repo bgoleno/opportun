@@ -4,7 +4,8 @@
 // (https://github.com/bgoleno/opportun/issues/997) it gives way beside the other's rail. Measured as
 // drawn, in a real browser, with the mouse and with the keyboard.
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { card, createOpportunity, registerUser } from './helpers';
+import { announced, dialogIs, frames, withoutGlide } from './boardDrag';
+import { card, registerUser } from './helpers';
 
 const COLUMNS = [
   'New',
@@ -25,17 +26,28 @@ const expand = (page: Page, name: string) => page.getByRole('button', { name: `E
 const collapse = (page: Page, name: string) =>
   page.getByRole('button', { name: `Collapse ${name}` });
 
-/** Resizes, and waits out the resize: dnd-kit cancels a drag on one. */
-async function resize(page: Page, width: number) {
+/**
+ * Resizes, and waits until the page has been drawn at the new width. A drag waits out the rest of the
+ * resize too (`settled`): dnd-kit cancels a drag on one.
+ */
+async function resize(page: Page, width: number, { settled = false } = {}) {
   await page.setViewportSize({ width, height: 900 });
-  await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(width);
-  await page.waitForTimeout(200);
+  await page.waitForFunction((w) => window.innerWidth === w, width, { polling: 'raf' });
+  await frames(page);
+  if (settled) await page.waitForTimeout(100);
 }
 
 async function board(page: Page, expanded: readonly string[] = ['Dismissed', 'Closed']) {
   await page.setViewportSize({ width: 1920, height: 900 });
   await registerUser(page);
-  await createOpportunity(page, OPP);
+  const csrf = (await page.context().cookies()).find((c) => c.name === 'opportun_csrf')?.value;
+  const made = await page.request.post('/api/v1/opportunities', {
+    headers: { 'x-csrf-token': csrf ?? '' },
+    data: { companyName: OPP.company, title: OPP.title, sourceKind: 'manual' },
+  });
+  expect(made.status(), await made.text()).toBe(201);
+  await page.goto('/pipeline');
+  await expect(card(page, OPP.company, OPP.title)).toBeVisible();
   for (const name of expanded) await expand(page, name).click();
 }
 
@@ -231,9 +243,14 @@ test('with room for all, with neither end column expanded, and with both: as bef
   page,
 }) => {
   await board(page, []);
+  let now: readonly string[] | null = null;
   for (const [expanded, width, want] of AS_BEFORE) {
-    await resize(page, 1920);
-    await only(page, expanded);
+    // Toggled at a width with room for all.
+    if (now === null || now.join() !== expanded.join()) {
+      await resize(page, 1920);
+      await only(page, expanded);
+      now = expanded;
+    }
     await resize(page, width);
     const got: number[] = [];
     for (const name of COLUMNS) got.push(Math.round(shown(await drawn(page, name))));
@@ -373,15 +390,16 @@ for (const width of [768, 900]) {
     page,
   }) => {
     await board(page);
-    await resize(page, width);
+    await resize(page, width, { settled: true });
     const cancel = async (end: string) => {
       await expect(liveRegion(page)).toContainText(`waiting for a reason to move to the ${end}`);
       await page.keyboard.press('Escape');
+      await dialogIs(page, false);
       await expect(page.getByRole('dialog')).toBeHidden();
       await page.evaluate(() => {
         for (const a of document.querySelectorAll('[data-board-scroller]')) a.scrollLeft = 0;
       });
-      await page.waitForTimeout(200);
+      await frames(page);
     };
     const dragged = card(page, OPP.company, OPP.title);
     await test.step('to Dismissed', async () => {
@@ -431,9 +449,11 @@ for (const width of [768, 900]) {
 
 /** Moves the card through every column and back with the keyboard, seen and announced at each. */
 async function keyboardSteps(page: Page, width: number, seen = 100) {
-  await resize(page, width);
+  await resize(page, width, { settled: true });
+  await withoutGlide(page);
   await card(page, OPP.company, OPP.title).focus();
   await page.keyboard.press('Space');
+  await announced(page, `${NAME} is over the New column.`);
   await expect(liveRegion(page)).toHaveText(`${NAME} is over the New column.`);
   // The sensor listens from a timer after the pick-up (boardKeyboard.spec.ts, keyboardDrop).
   await page.waitForTimeout(100);
@@ -446,6 +466,7 @@ async function keyboardSteps(page: Page, width: number, seen = 100) {
   ];
   for (const [key, name] of steps) {
     await page.keyboard.press(key);
+    await announced(page, `${NAME} is over the ${name} column.`);
     await expect(liveRegion(page)).toHaveText(`${NAME} is over the ${name} column.`);
     // The card's centre is in the part of the column that is on screen, which is a real part.
     await expect
@@ -456,11 +477,12 @@ async function keyboardSteps(page: Page, width: number, seen = 100) {
           const x = c.x + c.width / 2;
           return { in: x >= d.left && x <= d.right, seen: shown(d) >= seen, page: d.sideways };
         },
-        { message: `${name} at ${width} px` },
+        { message: `${name} at ${width} px`, intervals: [10, 20, 40, 80] },
       )
       .toEqual({ in: true, seen: true, page: 0 });
   }
   await page.keyboard.press('Escape');
+  await announced(page, `Moving ${NAME} was cancelled.`);
   await expect(liveRegion(page)).toHaveText(`Moving ${NAME} was cancelled.`);
 }
 
@@ -515,17 +537,19 @@ for (const end of ENDS) {
       await page.evaluate(() => {
         for (const a of document.querySelectorAll('[data-board-scroller]')) a.scrollLeft = 0;
       });
-      await page.waitForTimeout(200);
+      await frames(page);
     };
     for (const { width } of PHONES) {
-      await resize(page, width);
+      await resize(page, width, { settled: true });
       for (const name of ENDS) {
         await drag(page, dragged, await pointIn(page, name));
         await page.mouse.up();
+        await dialogIs(page, true);
         await expect(liveRegion(page), `${width} px`).toContainText(
           `waiting for a reason to move to the ${name}`,
         );
         await page.keyboard.press('Escape');
+        await dialogIs(page, false);
         await expect(page.getByRole('dialog')).toBeHidden();
         await unscroll();
       }
@@ -541,9 +565,10 @@ for (const end of ENDS) {
       .click();
     await expect(dialog).toBeHidden();
     for (const { width } of PHONES) {
-      await resize(page, width);
+      await resize(page, width, { settled: true });
       await unscroll();
       await drag(page, dragged, await pointIn(page, 'New'));
+      await announced(page, `${NAME} is over the New column.`);
       await expect(liveRegion(page), `${width} px`).toHaveText(`${NAME} is over the New column.`);
       await page.mouse.up();
       // The stage rules' answer, for the column it was over.
