@@ -836,26 +836,20 @@ function sameRequisition(
 /**
  * Records the ATS identity proven for the posting link the opportunity has now (#398: an
  * embedded Greenhouse job checked on Greenhouse's API), and nothing else: the description, the
- * posting state and the link stay as they are. Written only while the link and the company, whose boards
- * were asked (#785), are still `was`'s and no identity is set, so one changed meanwhile, or an identity a
- * writer set meanwhile, wins. Returns the opportunity, or null when it was not written.
+ * posting state and the link stay as they are. Written only while the link, the company, whose boards
+ * were asked (#785), and the title are still `was`'s (#892) and no identity is set, so one changed
+ * meanwhile, or an identity a writer set meanwhile, wins. Returns the opportunity, or null when it was not written.
  */
 export async function recordAtsJobRef(
   db: Db,
   ctx: UserCtx,
-  was: Pick<SearchBasis, 'companyId' | 'postingUrl'> & { id: string },
+  was: SearchBasis & { id: string },
   ref: AtsJobRef,
 ): Promise<OpportunityView | null> {
   const written = await db
     .update(opportunities)
     .set({ atsJobRef: ref, updatedAt: Date.now() })
-    .where(
-      and(
-        owned(ctx, was.id),
-        basisIs({ companyId: was.companyId, postingUrl: was.postingUrl }),
-        isNull(opportunities.atsJobRef),
-      ),
-    )
+    .where(and(owned(ctx, was.id), basisIs(searchBasisOf(was)), isNull(opportunities.atsJobRef)))
     .returning({ id: opportunities.id });
   return written.length === 0 ? null : await getOpportunity(db, ctx, was.id);
 }

@@ -229,7 +229,13 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
     if (own === null || opp.postingUrl == null) return null;
     const ref = await verifyEmbeddedGreenhouse(db, ctx, opp, own.url, sctx);
     if (ref === null) return null;
-    return await recordAtsJobRef(db, ctx, opp, ref);
+    const identified = await recordAtsJobRef(db, ctx, opp, ref);
+    if (identified === null) {
+      // Not written for what the user changed meanwhile (#892), and not for an identity set by another.
+      const changed = basisChanges(opp, await getOpportunity(db, ctx, opp.id));
+      if (changed.length > 0) throw new SearchBasisChanged(changed);
+    }
+    return identified;
   }
 
   /** A search refused for what the user changed meanwhile (#892): said on the timeline, and to them. */
@@ -297,7 +303,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       const agreed = req.query.replaceDescription;
       const usersOwn = userWritten(current, agreed);
       if (usersOwn) {
-        const identified = await identifyOwnLink(ctx, current, sctx);
+        const identified = await unlessChanged(ctx, id, () => identifyOwnLink(ctx, current, sctx));
         if (current.postingState === 'confirmed' && identified !== null) {
           // On the timeline, as every other way a posting is found (#813).
           await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
@@ -417,7 +423,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       }
       // No board read answered the opportunity's own careers link: its identity can still come
       // from Greenhouse's API, while the posting itself is left to the user to choose (#398).
-      const identified = await identifyOwnLink(ctx, now, sctx);
+      const identified = await unlessChanged(ctx, id, () => identifyOwnLink(ctx, now, sctx));
       // That can have asked Greenhouse.
       await asSearched();
       const note = outcome.note === undefined ? {} : { note: outcome.note };

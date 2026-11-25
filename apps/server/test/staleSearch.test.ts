@@ -1035,14 +1035,40 @@ describe('a careers link that Greenhouse is asked about', () => {
     expect(res.statusCode, res.body).toBe(409);
     expect(await stateOf(app, id)).toEqual([null, null]);
     expect((await entriesOf(app, id)).map((e) => e.title)).toEqual([STOPPED]);
+    // All of it is refused, so that all of it can be found again.
+    expect((await factsOf(app, id)).atsJobRef).toBeNull();
+    expect((await find(a, id)).json()).toMatchObject({ outcome: 'identified' });
+    expect((await factsOf(app, id)).atsJobRef).toMatchObject({ externalId: JID });
+    expect(await stateOf(app, id)).toEqual(['confirmed', 'user_confirmed']);
   });
 
-  it('the title changed while it is asked after the search: no result is shown', async () => {
+  it.each([false, true])(
+    'the title changed while it is asked after the search (it has the job: %s): no result is shown, and no identity written',
+    async (has) => {
+      const { app, a } = await boot();
+      const id = await seed(app, a, AT());
+      hasJob = has;
+      asked = () => save(a, id, { title: OTHER_TITLE });
+      expect((await find(a, id)).statusCode).toBe(409);
+      expect((await factsOf(app, id)).atsJobRef).toBeNull();
+      expect((await entriesOf(app, id)).map((e) => e.title)).toEqual([STOPPED]);
+      expect((await find(a, id)).json()).toMatchObject({ outcome: has ? 'identified' : 'none' });
+    },
+  );
+
+  it('an identity another request set meanwhile is no change: the search goes on', async () => {
     const { app, a } = await boot();
-    const id = await seed(app, a, AT());
-    hasJob = false;
-    asked = () => save(a, id, { title: OTHER_TITLE });
-    expect((await find(a, id)).statusCode).toBe(409);
+    const id = await seed(app, a, AT(MINE));
+    const ref = {
+      kind: 'ats_greenhouse' as const,
+      org: 'examplecorp',
+      externalId: JID,
+      url: jobUrl('examplecorp', JID),
+    };
+    asked = () =>
+      app.db.update(opportunities).set({ atsJobRef: ref }).where(eq(opportunities.id, id)).run();
+    expect((await find(a, id)).statusCode).toBe(200);
+    expect((await factsOf(app, id)).atsJobRef).toEqual(ref);
   });
 });
 
@@ -1255,8 +1281,9 @@ describe('the user’s own confirm', () => {
 
   it.each([
     ['the link', { postingUrl: NEW_LINK }, 409],
+    ['the company', { companyName: 'Other Corp' }, 409],
     ['the title', { title: OTHER_TITLE }, 200],
-    ['the company', { companyName: 'Other Corp' }, 200],
+    ['nothing', {}, 200],
   ])('%s saved meanwhile', async (_what, patch, status) => {
     const { app, a, b } = await boot();
     const over = { postingState: 'needs_review', postingStateDetail: 'none_found' };
@@ -1269,5 +1296,31 @@ describe('the user’s own confirm', () => {
     expect(await factsOf(app, id)).toEqual(await twinOf(app, b, patch, over));
     expect(await stateOf(app, id)).toEqual(['needs_review', 'none_found']);
     expect(await entriesOf(app, id)).toEqual([]);
+  });
+
+  // A company's save drops it, as it was proven on that company's boards (#785): not written back.
+  it('a company saved meanwhile, over an identity proven on the other’s boards: it stays dropped', async () => {
+    const { app, a } = await boot();
+    const id = await seed(app, a, {
+      postingUrl: CAREERS,
+      postingState: 'needs_review',
+      postingStateDetail: 'none_found',
+      atsJobRef: {
+        kind: 'ats_greenhouse',
+        org: 'examplecorp',
+        externalId: JID,
+        url: jobUrl('examplecorp', JID),
+        verifiedVia: 'gh_jid',
+        verifiedAt: 1,
+      },
+    });
+    const pause = pauseAt('posting.userConfirm');
+    const [res] = await Promise.all([
+      confirm(a, id),
+      whileParked(pause, () => save(a, id, { companyName: 'Other Corp' })),
+    ]);
+    expect(res.statusCode, res.body).toBe(409);
+    expect((await factsOf(app, id)).atsJobRef).toBeNull();
+    expect(await stateOf(app, id)).toEqual(['needs_review', 'none_found']);
   });
 });

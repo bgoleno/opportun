@@ -59,15 +59,16 @@ export async function confirmPosting(
         // verified `gh_jid` identity stays while the link still names its job (#398).
         atsJobRef: postingAtsJobRefKeeping(current.postingUrl, current.atsJobRef),
       },
-      // Made from this link: one saved meanwhile would have its identity (#892).
-      { ifBasis: { postingUrl: current.postingUrl } },
+      // Made from this link, and an identity proven on this company's boards is dropped with it (#785):
+      // one saved meanwhile would have the other's (#892). A title is no reason to refuse it.
+      { ifBasis: { companyId: current.companyId, postingUrl: current.postingUrl } },
     );
   } catch (err) {
     if (!(err instanceof SearchBasisChanged)) throw err;
     throw new HttpError(
       409,
       'opportunity_changed',
-      'The posting link changed while you were confirming it, so nothing was confirmed. Check the link, then try again.',
+      'The company or the posting link changed while you were confirming the posting, so nothing was confirmed. Check them, then try again.',
       undefined,
       { userFacing: true },
     );

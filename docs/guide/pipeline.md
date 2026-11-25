@@ -426,8 +426,8 @@ old ones is used, and what you saved stays. Find posting says so and can be pres
 check ends as one that did not finish, with **Try again**. The timeline has "Posting check stopped: the
 opportunity changed", naming what changed. A posting picked from a list that was found before the change is
 refused too; a link or text you add by hand is not. Nothing is searched again by itself. Renaming the
-company on its own page changes nothing here. **Confirm** asks you to check the link first if it was
-changed while you confirmed.
+company on its own page changes nothing here. **Confirm** asks you to check the company and the
+link first if one was changed while you confirmed.
 
 A large Workday board (see [install guide section
 8](../install.md#8-attaching-a-posting-to-an-opportunity)) is read only in part: a note says
