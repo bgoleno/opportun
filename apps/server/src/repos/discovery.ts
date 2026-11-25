@@ -741,7 +741,7 @@ export async function findChainTarget(
  *
  * Decided and written under the user's lock, as accept, dismiss and undo are (routes/discovery.ts
  * decidePending), and only where the row still is the one decided from: a writer without that lock
- * (the dedupe-key repair, the purge) may have been at it.
+ * (the purge, for one) may have been at it.
  */
 export async function unsuppressResult(
   db: Db,
@@ -888,7 +888,7 @@ export async function undoDismissal(
 ): Promise<{ restored: true } | { restored: false; opportunityId: string | null }> {
   const { company, title, location } = result.posting;
   // Written only where there was none: one that kept its key keeps what a writer without the user's
-  // lock (the dedupe-key repair) makes of it.
+  // lock makes of it.
   const key = result.dedupeKey === null ? dedupeKey(company, title, location) : undefined;
   if (key !== undefined) {
     const holder = await keyHolder(tx, ctx, key, title, together);

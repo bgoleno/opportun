@@ -148,7 +148,6 @@
     "discovery.rank_waiting_sweep",
     "discovery.refine_prompt",
     "discovery.repair_alert_leads",
-    "discovery.repair_dedupe_keys",
     "discovery.retry_workday_capture",
     "discovery.run",
     "discovery.title_variants",

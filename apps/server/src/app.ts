@@ -74,7 +74,6 @@ import { REFINE_CRON, REFINE_JOB_KIND } from './jobs/refineClassifyPrompt';
 import { DISCOVERY_REFINE_CRON, DISCOVERY_REFINE_KIND } from './jobs/refineDiscoveryPrompt';
 import { enqueueRepairAlertLeadsOnce } from './jobs/repairAlertLeads';
 import { enqueueTidyRejectedOnce } from './jobs/tidyRejected';
-import { enqueueRepairDedupeKeysOnce } from './jobs/repairDedupeKeys';
 import { enqueueBackfillAtsJobRefsOnce } from './jobs/atsJobRefBackfill';
 import { enqueueRepairCompanyMatchKeysOnce } from './jobs/companyMatchKeyRepair';
 import { enqueueCompanyDomainBackfillOnce } from './jobs/companyDomainResolve';
@@ -487,9 +486,6 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // One-shot: repair alert leads the pre-fix LinkedIn parser shifted. Guarded by its own
   // marker, so this is a no-op on every boot after the first.
   await enqueueRepairAlertLeadsOnce(db);
-  // One-shot: recompute dedupe keys the pre-fallback formula collapsed on non-Latin locations
-  // (issue #13). Guarded by its own marker, same reasoning as the one above.
-  await enqueueRepairDedupeKeysOnce(db);
   // One-shot: backfill company_match_key for companies written before that column existed
   // (issue #193). Guarded by its own marker, same reasoning as the one above.
   await enqueueRepairCompanyMatchKeysOnce(db);

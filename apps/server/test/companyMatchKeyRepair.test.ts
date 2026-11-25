@@ -1,5 +1,5 @@
 // One-shot backfill of companies.company_match_key (issue #193): companies written before
-// that column existed get it filled in lazily, the same shape as repairDedupeKeys.test.ts.
+// that column existed get it filled in lazily, the same shape as repairAlertLeads.test.ts.
 import { companyMatchKey } from '@opportun/core';
 import { and, eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
