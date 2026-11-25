@@ -14,7 +14,8 @@ import { createRun, ensureChannelSource, getResult, insertResult } from '../src/
 import { createOpportunity, getOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
 import { testDialect } from './db';
-import { heldApart } from './race';
+import { onSlowTransaction } from '../src/db/gate';
+import { heldApart, pauseAt, settledOrWaiting, whileParked } from './race';
 import type { TestClient } from './isolation';
 
 const boot = useApi();
@@ -791,29 +792,131 @@ describe('beside what comes at the same moment', () => {
     expect(await opportunitiesOf(app, a)).toHaveLength(1);
   });
 
-  it.each(['merge', 'capture'] as const)('a merge of the role, the %s first', async (first) => {
+  // The capture's own steps after it is saved (its entry, the fill, the stage) each find the opportunity
+  // as it then is, so one gone between two of them is not found, as for any capture. Captured again, the
+  // page is where its result is.
+  const orGone = (capturing: Promise<Awaited<ReturnType<typeof capture>>>) =>
+    capturing.catch((err: unknown) => {
+      expect(err).toMatchObject({ statusCode: 404 });
+      return null;
+    });
+
+  it('the capture first, then a delete: nothing is left of it but its result, and again it has its own', async () => {
     const { app, a, id, joins } = await role();
-    const keep = await byHand(app, a, { title: 'Data Analyst' });
-    const merging = () => send(a, 'POST', `/opportunities/${keep}/merge`, { otherId: id });
-    const [m, done] =
-      first === 'merge'
-        ? await heldApart(app, 'opportunities.merge.locked', merging, joins)
-        : await heldApart(app, 'captureResolve.matched.locked', joins, merging).then(
-            ([c, r]) => [r, c] as const,
-          );
-    expect(m.statusCode, m.body).toBe(200);
-    const result = await getResult(app.db, ctxOf(a), done.resultId);
-    // Merged away first, the role has another title, so the posting has its own; else it went along.
-    expect(result.opportunityId).toBe(first === 'merge' ? done.opportunityId : keep);
-    expect(result.opportunityId).not.toBeNull();
+    const [, removed] = await heldApart(
+      app,
+      'captureResolve.matched.locked',
+      () => orGone(joins()),
+      () => send(a, 'DELETE', `/opportunities/${id}`),
+    );
+    expect(removed.statusCode, removed.body).toBe(204);
+    expect(await opportunitiesOf(app, a)).toEqual([]);
+    expect((await resultsOf(app, a)).map((r) => [r.disposition, r.opportunityId])).toEqual([
+      ['accepted', null],
+    ]);
+    expect((await capture(app, a, P, THERE)).createdOpportunity).toBe(true);
+    expect(await opportunitiesOf(app, a)).toHaveLength(1);
   });
 
-  it.skipIf(testDialect !== 'postgres')('a close meanwhile: never a second one', async () => {
+  it('a merge of the role first: its title is gone, so the page has its own', async () => {
     const { app, a, id, joins } = await role();
-    const done = await joins();
-    await move(app, id, 'closed');
-    expect(done.opportunityId).toBe(id);
+    const keep = await byHand(app, a, { title: 'Data Analyst' });
+    const [merged, done] = await heldApart(
+      app,
+      'opportunities.merge.locked',
+      () => send(a, 'POST', `/opportunities/${keep}/merge`, { otherId: id }),
+      joins,
+    );
+    expect(merged.statusCode, merged.body).toBe(200);
+    expect(done.createdOpportunity).toBe(true);
+    expect((await opportunitiesOf(app, a)).map((o) => o.id).sort()).toEqual(
+      [keep, done.opportunityId].sort(),
+    );
+  });
+
+  it('the capture first, then a merge: it goes along, and again it is found there', async () => {
+    const { app, a, id, joins } = await role();
+    const keep = await byHand(app, a, { title: 'Data Analyst' });
+    const [, merged] = await heldApart(
+      app,
+      'captureResolve.matched.locked',
+      () => orGone(joins()),
+      () => send(a, 'POST', `/opportunities/${keep}/merge`, { otherId: id }),
+    );
+    expect(merged.statusCode, merged.body).toBe(200);
+    expect((await opportunitiesOf(app, a)).map((o) => o.id)).toEqual([keep]);
+    const again = await capture(app, a, P, THERE);
+    expect([again.opportunityId, again.createdOpportunity]).toEqual([keep, false]);
+    expect((await entriesOf(app, keep, 'capture')).length).toBeGreaterThan(0);
+    expect((await resultsOf(app, a)).map((r) => r.opportunityId)).toEqual([keep]);
+  });
+
+  // A stage change takes no lock of the user's, so either order is one the user can have meant.
+  it.each(['closed', 'dismissed'] as const)(
+    'the role %s before: its own; after: it stays in it',
+    async (to) => {
+      const stage = (c: TestClient, id: string) =>
+        send(c, 'POST', `/opportunities/${id}/stage`, {
+          to,
+          ...(to === 'closed' ? { closedReason: 'withdrawn' } : {}),
+        });
+      const first = await role();
+      expect((await stage(first.a, first.id)).statusCode).toBe(200);
+      expect((await first.joins()).createdOpportunity).toBe(true);
+
+      const second = await role();
+      onSlowTransaction(() => undefined);
+      const pause = pauseAt('captureResolve.matched.locked');
+      const joining = second.joins();
+      const [moving] = await whileParked(pause, async () => {
+        const sent = stage(second.a, second.id);
+        await settledOrWaiting(second.app, sent);
+        return [sent] as const;
+      });
+      const [done, moved] = await Promise.all([joining, moving]);
+      expect(moved.statusCode, moved.body).toBe(200);
+      // On Postgres the move may be seen by the look that follows the point; then it has its own.
+      const results = (await resultsOf(second.app, second.a)).map((r) => r.opportunityId);
+      expect(results).toEqual([done.opportunityId]);
+      if (testDialect !== 'postgres') expect(done.opportunityId).toBe(second.id);
+      expect((await opportunitiesOf(second.app, second.a)).length).toBe(
+        done.createdOpportunity ? 2 : 1,
+      );
+    },
+  );
+
+  it.each(['the capture', 'New opportunity'] as const)(
+    'New opportunity of the same posting’s place, %s first: the user’s is theirs, and nothing is lost',
+    async (first) => {
+      const { app, a, id, joins } = await role();
+      const making = () =>
+        send(a, 'POST', '/opportunities', {
+          companyName: JOB.company,
+          title: JOB.title,
+          location: THERE,
+          sourceKind: 'manual',
+        });
+      const [done, made] =
+        first === 'the capture'
+          ? await heldApart(app, 'captureResolve.matched.locked', joins, making)
+          : await heldApart(app, 'opportunities.create.locked', making, joins).then(
+              ([m, c]) => [c, m] as const,
+            );
+      expect(made.statusCode, made.body).toBe(201);
+      // Its own key's first: the separate one the user made.
+      expect(done.opportunityId).toBe(
+        first === 'the capture' ? id : made.json<{ id: string }>().id,
+      );
+      expect(await opportunitiesOf(app, a)).toHaveLength(2);
+    },
+  );
+
+  it('an Unsuppress of the role’s own result changes nothing of it', async () => {
+    const { app, a } = await boot();
+    const id = await ORIGINS.accepted(app, a);
+    const [result] = await resultsOf(app, a);
+    const refused = await send(a, 'POST', `/discovery/results/${result!.id}/unsuppress`, {});
+    expect(refused.statusCode).toBe(409);
     expect((await capture(app, a, P, THERE)).opportunityId).toBe(id);
-    expect(await opportunitiesOf(app, a)).toHaveLength(1);
   });
 });
