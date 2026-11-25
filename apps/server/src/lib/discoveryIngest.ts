@@ -8,11 +8,12 @@ import {
   newId,
   NormalizedPostingSchema,
   sameTitle,
+  type Disposition,
   type NormalizedPosting,
   type OpportunityStage,
   type RankSkipReason,
 } from '@opportun/core';
-import { and, eq, inArray, ne } from 'drizzle-orm';
+import { and, asc, eq, inArray, ne } from 'drizzle-orm';
 import { isLockTimeout, lockScope, withTransaction, type Db } from '../db/client';
 import { jsonText } from '../db/dialect';
 import {
@@ -63,7 +64,45 @@ export interface RunStats {
   linked: number;
 }
 
-type DuplicateCheck = 'duplicate' | 'multi_posted' | 'new';
+/** Where the job of a duplicate is, for the answer to a capture (#1053). */
+export type DuplicatePlace =
+  { place: 'pipeline'; opportunityId: string } | { place: 'queue' | 'dismissed' | 'accepted' };
+
+type DuplicateCheck = DuplicatePlace | 'multi_posted' | 'new';
+
+/** A result that makes a posting a duplicate, or is another of its job. */
+interface SameJob {
+  disposition: Disposition;
+  /** Its opportunity and that one's stage; null where it has none, or it was deleted. */
+  opportunityId: string | null;
+  stage: OpportunityStage | null;
+}
+
+/**
+ * The liveliest place of these results, as the job can be in several: an opportunity, a card in the
+ * queue, an opportunity in Dismissed, and then Decided alone. `accepted` there is one whose opportunity
+ * was deleted.
+ */
+function placeOf(rows: readonly SameJob[]): DuplicatePlace {
+  const opportunity = (dismissed: boolean): DuplicatePlace[] =>
+    rows.flatMap(({ opportunityId, stage }) =>
+      opportunityId !== null && (stage === 'dismissed') === dismissed
+        ? [{ place: 'pipeline', opportunityId }]
+        : [],
+    );
+  const has = (d: Disposition): DuplicatePlace[] =>
+    rows.some(({ disposition }) => disposition === d)
+      ? [{ place: d === 'pending' ? 'queue' : d }]
+      : [];
+  const [place] = [
+    ...opportunity(false),
+    ...has('pending'),
+    ...opportunity(true),
+    ...has('dismissed'),
+    ...has('accepted'),
+  ];
+  return place!;
+}
 
 /**
  * A result ingest linked whose opportunity is closed, dismissed or gone (no stage). Nobody decided it,
@@ -99,7 +138,7 @@ async function checkDuplicate(
 ): Promise<DuplicateCheck> {
   const { externalId } = posting;
   const opp = await exec
-    .select({ title: opportunities.title })
+    .select({ id: opportunities.id, title: opportunities.title })
     .from(opportunities)
     .where(
       and(
@@ -109,7 +148,9 @@ async function checkDuplicate(
       ),
     )
     .get();
-  if (opp !== undefined && sameTitle(opp.title, posting.title)) return 'duplicate';
+  if (opp !== undefined && sameTitle(opp.title, posting.title)) {
+    return { place: 'pipeline', opportunityId: opp.id };
+  }
   // The indexed dedupe-key lookup first; the externalId scan (a JSON extract over this
   // source's results) runs only when the key alone did not settle it as a duplicate.
   const withKey = await exec
@@ -118,22 +159,34 @@ async function checkDuplicate(
       sourceId: discoveryRuns.sourceId,
       title: jsonText(discoveryResults.posting, 'title'),
       rankSkipReason: discoveryResults.rankSkipReason,
+      opportunityId: opportunities.id,
       stage: opportunities.stage,
     })
     .from(discoveryResults)
     .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
     .leftJoin(opportunities, eq(opportunities.id, discoveryResults.opportunityId))
     .where(and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.dedupeKey, key)))
+    .orderBy(asc(discoveryResults.createdAt), asc(discoveryResults.id))
     .all();
-  const rows = withKey.filter(({ title }) => title === null || sameTitle(title, posting.title));
-  if (rows.some((r) => r.disposition !== 'pending' && !isLinkedToNoneOpen(r))) return 'duplicate';
+  const rows = withKey.filter(
+    (r) =>
+      (r.title === null || sameTitle(r.title, posting.title)) &&
+      (r.disposition === 'pending' || !isLinkedToNoneOpen(r)),
+  );
   const pending = rows.filter((r) => r.disposition === 'pending');
-  if (pending.some((r) => r.sourceId === sourceId)) return 'duplicate';
+  if (pending.length < rows.length || pending.some((r) => r.sourceId === sourceId)) {
+    return placeOf(rows);
+  }
   if (externalId != null) {
     const same = await exec
-      .select({ id: discoveryResults.id })
+      .select({
+        disposition: discoveryResults.disposition,
+        opportunityId: opportunities.id,
+        stage: opportunities.stage,
+      })
       .from(discoveryResults)
       .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
+      .leftJoin(opportunities, eq(opportunities.id, discoveryResults.opportunityId))
       .where(
         and(
           eq(discoveryResults.userId, ctx.userId),
@@ -142,9 +195,10 @@ async function checkDuplicate(
         ),
       )
       .get();
-    if (same !== undefined) return 'duplicate';
+    if (same !== undefined) return placeOf([...rows, same]);
   }
-  if ((await capturedInto(exec, ctx, posting)) !== undefined) return 'duplicate';
+  const opportunityId = await capturedInto(exec, ctx, posting);
+  if (opportunityId !== undefined) return { place: 'pipeline', opportunityId };
   return pending.length > 0 ? 'multi_posted' : 'new';
 }
 
@@ -273,7 +327,7 @@ async function ingest(
   holdBelowCut: boolean,
   sourceCommunicationId?: string,
   lockTimeoutMs?: number,
-): Promise<DiscoveryResultView | 'duplicate'> {
+): Promise<DiscoveryResultView | DuplicatePlace> {
   const key = dedupeKey(posting.company, posting.title, posting.location);
   return await withTransaction(db, async (tx) => {
     // Two runs of a source can overlap: on Postgres this lock is all that keeps them from both
@@ -284,7 +338,7 @@ async function ingest(
       lockTimeoutMs === undefined ? {} : { timeoutMs: lockTimeoutMs },
     );
     const check = await checkDuplicate(tx, ctx, key, sourceId, posting);
-    if (check === 'duplicate') return 'duplicate';
+    if (typeof check === 'object') return check;
     await racePoint('discovery.ingest.locked');
     const partial = posting.descriptionMd == null || posting.descriptionMd === '';
     const resolution = partial ? 'needs_capture' : 'full';
@@ -403,7 +457,7 @@ export async function ingestRaw(
   holdBelowCut: boolean,
   sourceCommunicationId?: string,
   lockTimeoutMs?: number,
-): Promise<DiscoveryResultView | null> {
+): Promise<DiscoveryResultView | DuplicatePlace | null> {
   const parsed = NormalizedPostingSchema.safeParse(sanitizePosting(raw));
   if (!parsed.success) {
     stats.invalid += 1;
@@ -422,9 +476,9 @@ export async function ingestRaw(
     sourceCommunicationId,
     lockTimeoutMs,
   );
-  if (outcome === 'duplicate') {
+  if ('place' in outcome) {
     stats.duplicates += 1;
-    return null;
+    return outcome;
   }
   if (outcome.rankSkipReason === 'linked') {
     // Decided too, and not `inserted`: nothing ranks it, resolves it on a board or surfaces it.
@@ -476,6 +530,8 @@ export async function insertLeads(
   linked: DiscoveryResultView[];
   /** Those stored as dismissed, as their company is on the user's denied list (#199, #1044). */
   suppressed: DiscoveryResultView[];
+  /** Where those that are there already are (#1053). */
+  duplicates: DuplicatePlace[];
 }> {
   const run = await createRun(db, ctx, { sourceId });
   const source = await getSourceRow(db, ctx, sourceId);
@@ -491,6 +547,7 @@ export async function insertLeads(
   const inserted: DiscoveryResultView[] = [];
   const linked: DiscoveryResultView[] = [];
   const suppressed: DiscoveryResultView[] = [];
+  const duplicates: DuplicatePlace[] = [];
   try {
     for (const posting of postings) {
       stats.fetched += 1;
@@ -511,8 +568,10 @@ export async function insertLeads(
         sourceCommunicationId,
         opts.lockTimeoutMs,
       );
-      if (stored?.rankSkipReason === 'linked') linked.push(stored);
-      else if (stored?.disposition === 'dismissed') suppressed.push(stored);
+      if (stored === null) continue;
+      if ('place' in stored) duplicates.push(stored);
+      else if (stored.rankSkipReason === 'linked') linked.push(stored);
+      else if (stored.disposition === 'dismissed') suppressed.push(stored);
     }
   } catch (err) {
     // The run ends with why, or the source's history would show it running for good: a capture
@@ -529,7 +588,7 @@ export async function insertLeads(
     await finishRun(tx, ctx, run.id, { stats: { ...stats } });
     await setSourceStatus(tx, ctx, sourceId, 'ok', null);
   });
-  return { runId: run.id, stats, inserted, linked, suppressed };
+  return { runId: run.id, stats, inserted, linked, suppressed, duplicates };
 }
 
 export function errorText(err: unknown): string {
