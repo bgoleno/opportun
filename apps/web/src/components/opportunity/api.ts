@@ -237,12 +237,14 @@ export interface FindPostingResult {
   /** The one candidate came from a message's link, on a board the company does not own. */
   needsConfirmation?: boolean;
   hint?: string;
+  /** What was searched for, opaque: sent back with a row picked from it (#892). */
+  searchedFor?: string;
   /** A large Workday board was read only in part (FR-D10's lookup cap). */
   note?: string;
 }
 
 export type AttachPostingVars = (
-  { posting: NormalizedPosting } | { url: string } | { text: string }
+  { posting: NormalizedPosting; searchedFor?: string } | { url: string } | { text: string }
 ) & {
   replaceDescription?: string;
 };

@@ -4,12 +4,14 @@
 import { sha256Hex } from '@opportun/core';
 import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { qk, type OpportunityView } from '@/lib/opportunities';
 import { browserCloses, pressEscapeOn } from '@/test/dialog';
 import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import { useOpportunity } from './api';
 import { DetailsPanel } from './DetailsPanel';
+import { FindPostingDialog } from './FindPostingDialog';
 
 const NOW = Date.now();
 
@@ -234,6 +236,82 @@ describe('Find posting', () => {
     renderWithProviders(<Live />);
     await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/still checking this posting/i);
+  });
+
+  // #892: what was found for a company, title or link that is another now is not used, and is said.
+  describe('changed while it was looked up (#892)', () => {
+    const SAID =
+      'The company, title or posting link changed while the posting was being looked up, so nothing found for the old ones was used. Run Find posting again.';
+    const refused = {
+      status: 409,
+      body: { error: { code: 'opportunity_changed', message: SAID } },
+    };
+    const FOUND = {
+      outcome: 'candidates',
+      candidates: [CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003')],
+      board: [CANDIDATE('Staff Product Manager, SIEM', 'United States', '7663059003')],
+    };
+
+    it('Find posting says so', async () => {
+      setup({ 'POST /opportunities/opp-1/find-posting': () => refused });
+      renderWithProviders(<DetailsPanel opp={BARE} />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(SAID);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+
+    it.each([
+      ['what it was found for is sent back with a picked row', { searchedFor: 'abc' }],
+      ['nothing is, when the server said nothing', {}],
+    ])('%s', async (_what, said) => {
+      const api = setup({
+        'POST /opportunities/opp-1/find-posting': { ...FOUND, ...said },
+        'POST /opportunities/opp-1/posting': BARE,
+      });
+      renderWithProviders(<DetailsPanel opp={BARE} />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: /^attach$/i }));
+      const sent = () =>
+        api.calls.find((c: ApiCall) => c.path === '/opportunities/opp-1/posting')?.body;
+      await waitFor(() => expect(sent()).toBeDefined());
+      expect(sent()).toEqual({ posting: FOUND.candidates[0]!.posting, ...said });
+    });
+
+    it('a refused row says so where it was picked', async () => {
+      setup({
+        'POST /opportunities/opp-1/find-posting': { ...FOUND, searchedFor: 'abc' },
+        'POST /opportunities/opp-1/posting': () => refused,
+      });
+      renderWithProviders(<DetailsPanel opp={BARE} />);
+      await userEvent.click(await screen.findByRole('button', { name: /find posting/i }));
+      const dialog = await screen.findByRole('dialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: /^attach$/i }));
+      expect(await within(dialog).findByRole('alert')).toHaveTextContent(SAID);
+    });
+
+    it('a list that is open names the company that was searched, whatever it is now', async () => {
+      let change!: () => void;
+      function Open() {
+        const [companyName, setCompanyName] = useState(BARE.companyName);
+        change = () => setCompanyName('Other Corp');
+        return (
+          <FindPostingDialog
+            opp={{ ...BARE, companyName }}
+            result={FOUND as never}
+            onClose={() => undefined}
+          />
+        );
+      }
+      setup({});
+      renderWithProviders(<Open />);
+      const said = `One posting on the ${BARE.companyName} board may match`;
+      const part = { exact: false };
+      expect(await screen.findByText(said, part)).toBeInTheDocument();
+      act(() => change());
+      expect(screen.getByText(said, part)).toBeInTheDocument();
+      expect(screen.queryByText(/Other Corp/)).toBeNull();
+    });
   });
 
   // #936: the job is the user's already, as another opportunity.

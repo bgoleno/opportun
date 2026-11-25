@@ -121,6 +121,8 @@ export function FindPostingDialog({
   onClose: () => void;
 }) {
   const attach = useAttachPosting(opp.id);
+  /** The company that was searched, whatever it is changed to while this is open (#892). */
+  const [company] = useState(opp.companyName);
   const modeName = useId();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<Mode>('url');
@@ -203,7 +205,7 @@ export function FindPostingDialog({
         <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Add the posting</DialogTitle>
-            <DialogDescription>{headline(result, opp.companyName)}</DialogDescription>
+            <DialogDescription>{headline(result, company)}</DialogDescription>
           </DialogHeader>
 
           {failure !== null ? <FormError message={failure} /> : null}
@@ -247,6 +249,10 @@ export function FindPostingDialog({
                         void send(
                           {
                             posting: candidate.posting,
+                            // What it was found for: changed since, the server refuses it (#892).
+                            ...(result.searchedFor === undefined
+                              ? {}
+                              : { searchedFor: result.searchedFor }),
                             ...(replaces === undefined ? {} : { replaceDescription: replaces }),
                           },
                           candidate.posting.title,
