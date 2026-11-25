@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatDate, formatDateTime } from '@/lib/opportunities';
-import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
 import { fetchAllPendingResultIds, type DiscoveryResult } from './api';
 import { groupResults } from './groupResults';
 import { QueueGroupRow, QueueRow } from './QueueRow';
@@ -1247,6 +1247,90 @@ describe('ReviewQueue bulk triage (#184)', () => {
       expect(post?.body).toEqual({ ids: ['r-x'] });
     });
     expect(await screen.findByText('1 restored')).toBeInTheDocument();
+  });
+
+  // #1020: a result unsuppressed meanwhile, whose job is in the pipeline or the queue by then, stays
+  // dismissed, and the toast says where the job is, with a way there.
+  it.each([
+    [
+      'in the pipeline',
+      [{ id: 'r-x', outcome: 'duplicate', existingId: 'opp-7' }],
+      '1 not restored: this job is already in your pipeline',
+      'View opportunity',
+      '/opportunities/opp-7',
+    ],
+    [
+      'in the queue',
+      [{ id: 'r-x', outcome: 'duplicate' }],
+      '1 not restored: this job is already in the review queue',
+      'Review queue',
+      '/discovery',
+    ],
+    [
+      'of several, the first says where the link goes',
+      [
+        { id: 'r-a', outcome: 'restored' },
+        { id: 'r-x', outcome: 'duplicate' },
+        { id: 'r-y', outcome: 'duplicate', existingId: 'opp-8' },
+        { id: 'r-z', outcome: 'duplicate', existingId: 'opp-9' },
+      ],
+      '1 restored; 2 not restored: these jobs are already in your pipeline; 1 not restored: this job is already in the review queue',
+      'Review queue',
+      '/discovery',
+    ],
+    [
+      'and one decided elsewhere',
+      [
+        { id: 'r-x', outcome: 'duplicate', existingId: 'opp-7' },
+        { id: 'r-y', outcome: 'already_decided' },
+      ],
+      '0 restored; 1 already decided; 1 not restored: this job is already in your pipeline',
+      'View opportunity',
+      '/opportunities/opp-7',
+    ],
+  ])('an Undo of one that is there already says so: %s', async (_n, undone, said, label, to) => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /discovery/results': { items: [X], total: 1 },
+      'POST /discovery/results/bulk-dismiss': { results: [{ id: 'r-x', outcome: 'dismissed' }] },
+      'POST /discovery/results/bulk-undo-dismiss': { results: undone },
+    });
+    const { router } = renderWithProviders(<ReviewQueue />);
+    await screen.findByText('One');
+    await user.click(screen.getByRole('button', { name: 'Select all 1 loaded' }));
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Dismiss 1 results' });
+    await user.click(within(dialog).getByRole('button', { name: 'Dismiss 1' }));
+    await user.click(await toastRegion().findByRole('button', { name: 'Undo' }));
+    expect(await toastRegion().findByText(said)).toBeInTheDocument();
+    await user.click(toastRegion().getByRole('button', { name: label }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(to));
+  });
+
+  it('an Undo that restores all of them has no link', async () => {
+    const user = userEvent.setup();
+    mockApi({
+      'GET /discovery/results': { items: [X], total: 1 },
+      'POST /discovery/results/bulk-dismiss': { results: [{ id: 'r-x', outcome: 'dismissed' }] },
+      'POST /discovery/results/bulk-undo-dismiss': {
+        results: [
+          { id: 'r-x', outcome: 'restored' },
+          { id: 'r-y', outcome: 'restored' },
+          { id: 'r-z', outcome: 'restored' },
+        ],
+      },
+    });
+    renderWithProviders(<ReviewQueue />);
+    await screen.findByText('One');
+    await user.click(screen.getByRole('button', { name: 'Select all 1 loaded' }));
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Dismiss 1 results' });
+    await user.click(within(dialog).getByRole('button', { name: 'Dismiss 1' }));
+    await user.click(await toastRegion().findByRole('button', { name: 'Undo' }));
+    const said = await toastRegion().findByText('3 restored');
+    expect(
+      within(said.closest('li') as HTMLElement).queryByRole('button', { name: /view|queue/i }),
+    ).toBeNull();
   });
 
   it('a batch over MAX_BULK_SIZE is split into sequential requests', async () => {

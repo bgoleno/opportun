@@ -416,6 +416,10 @@ opportunity it became is dismissed or deleted; while that opportunity is still t
 should keep being treated as the same job. Deleting an opportunity does not bring its reposts back by
 itself: unsuppress its result too if you want them.
 
+Undoing a dismissal (the **Undo** of the notice after a bulk dismiss) puts the result back in the
+queue. If you unsuppressed it meanwhile and the job is in your pipeline or in the queue again by then,
+it stays dismissed, and the notice says where the job is, with a link.
+
 Once unsuppressed, a result shows an **Unsuppressed** badge in place of the button. Reversing
 a decision and never having made one are different states, and collapsing them into one
 undifferentiated row would leave no way to tell, at a glance, which ones were already

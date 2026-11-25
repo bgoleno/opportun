@@ -5,8 +5,10 @@ import { removeSchedule, setSchedule, userCronProblem } from '../lib/jobQueue';
 import {
   cardKey,
   dedupeGroupKey,
+  dedupeKey,
   newId,
   OPPORTUNITY_STAGES,
+  sameTitle,
   type Disposition,
   type NormalizedPosting,
   type RankSkipReason,
@@ -809,6 +811,103 @@ export async function unsuppressResult(
     }
     return now;
   });
+}
+
+/**
+ * Who holds a key, as Undo asks (the owner's job is "there already"): an opportunity with it that is
+ * not dismissed, or one a result with it was accepted into, or another pending result. The same whole
+ * title too (sameTitle), as at ingest: the key strips a level, and another level is another job
+ * (https://github.com/bgoleno/opportun/issues/967). Not another dismissed result, nor one whose
+ * opportunity is gone or dismissed: they hold the key, but the job is not there. Nor one ingest linked
+ * to a role since closed, which holds it only while its role is open
+ * (https://github.com/bgoleno/opportun/issues/990). `together`: results the same request has
+ * put back already, which do not count against the next.
+ */
+async function keyHolder(
+  tx: Exec,
+  ctx: UserCtx,
+  key: string,
+  title: string,
+  together: readonly string[],
+): Promise<{ opportunityId: string | null } | null> {
+  const own = await tx
+    .select({ id: opportunities.id, title: opportunities.title })
+    .from(opportunities)
+    .where(
+      and(
+        ownedBy(opportunities.userId, ctx),
+        eq(opportunities.dedupeKey, key),
+        ne(opportunities.stage, 'dismissed'),
+      ),
+    )
+    .get();
+  if (own !== undefined && sameTitle(own.title, title)) return { opportunityId: own.id };
+  const rows = (
+    await tx
+      .select({
+        id: discoveryResults.id,
+        disposition: discoveryResults.disposition,
+        rankSkipReason: discoveryResults.rankSkipReason,
+        title: jsonText(discoveryResults.posting, 'title'),
+        opportunityId: opportunities.id,
+        stage: opportunities.stage,
+      })
+      .from(discoveryResults)
+      .leftJoin(opportunities, eq(opportunities.id, discoveryResults.opportunityId))
+      .where(and(ownedBy(discoveryResults.userId, ctx), eq(discoveryResults.dedupeKey, key)))
+      .orderBy(asc(discoveryResults.createdAt), asc(discoveryResults.id))
+      .all()
+  ).filter((r) => r.title === null || sameTitle(r.title, title));
+  const accepted = rows.find(
+    (r) =>
+      r.disposition === 'accepted' &&
+      r.stage !== null &&
+      r.stage !== 'dismissed' &&
+      !(r.rankSkipReason === 'linked' && r.stage === 'closed'),
+  );
+  if (accepted !== undefined) return { opportunityId: accepted.opportunityId };
+  const pending = rows.some((r) => r.disposition === 'pending' && !together.includes(r.id));
+  return pending ? { opportunityId: null } : null;
+}
+
+/**
+ * Puts a dismissed result back in the queue, in the caller's transaction, which holds the user's lock
+ * and has read it since. One that was unsuppressed takes its key back, from its posting as ingest
+ * made it, so a repost's card groups with it; where the job is there by then (keyHolder) it stays
+ * dismissed, with its feedback. Never a pending result with no key
+ * (https://github.com/bgoleno/opportun/issues/1020). The ingest lock stays out of it (a run holds it,
+ * routes/discovery.ts decidePending): a run that has just found the key free may add a second row,
+ * which is the same card. After a purge of discovery content (jobs/purge.ts) the posting has no
+ * location left, so the key has none: a repost with one is a second row too, of the same card.
+ */
+export async function undoDismissal(
+  tx: Exec,
+  ctx: UserCtx,
+  result: DiscoveryResultView,
+  together: readonly string[],
+): Promise<{ restored: true } | { restored: false; opportunityId: string | null }> {
+  const { company, title, location } = result.posting;
+  // Written only where there was none: one that kept its key keeps what a writer without the user's
+  // lock (the dedupe-key repair) makes of it.
+  const key = result.dedupeKey === null ? dedupeKey(company, title, location) : undefined;
+  if (key !== undefined) {
+    const holder = await keyHolder(tx, ctx, key, title, together);
+    if (holder !== null) return { restored: false, ...holder };
+  }
+  await tx
+    .delete(dismissalFeedback)
+    .where(and(ownedBy(dismissalFeedback.userId, ctx), eq(dismissalFeedback.resultId, result.id)))
+    .run();
+  await tx
+    .update(discoveryResults)
+    .set({
+      disposition: 'pending',
+      ...(key === undefined ? {} : { dedupeKey: key }),
+      updatedAt: Date.now(),
+    })
+    .where(ownedResult(ctx, result.id))
+    .run();
+  return { restored: true };
 }
 
 /** The column as it is stored, on either engine: JSON text on SQLite, jsonb on Postgres. */
