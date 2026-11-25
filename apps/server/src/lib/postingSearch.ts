@@ -43,10 +43,16 @@ import type { AtsJobRefRecord } from '../db/schema.shared';
 import type { UserCtx } from '../repos/base';
 import { getCompany } from '../repos/companies';
 import { splitConfig } from '../repos/discovery';
-import { getOpportunity } from '../repos/opportunities';
+import {
+  getOpportunity,
+  searchBasisOf,
+  type OpportunityView,
+  type SearchBasis,
+} from '../repos/opportunities';
 import { atsJobRefOfUrl, extractAtsJobRefs, type AtsJobRef } from './atsJobRef';
 import { rankCandidates, type PostingCandidate } from './postingCandidates';
 import { sanitizePosting } from './postingSanitize';
+import { racePoint } from './racePoints';
 
 /** Reads one stored message body (the route hands over app.storage). */
 export type BodyReader = (bodyRef: string) => Promise<string>;
@@ -96,7 +102,8 @@ export interface ReadFrom {
   org: string;
 }
 
-export type FindOutcome = (
+/** What was found, without what it was found for. */
+type Found = (
   | {
       status: 'exact';
       candidate: PostingCandidate;
@@ -122,6 +129,8 @@ export type FindOutcome = (
   /** Said to the user beside the outcome (a large board read only in part). */
   note?: string;
 };
+/** `searchedFor`: what the search went by, as it read it (#892). */
+export type FindOutcome = Found & { searchedFor: SearchBasis };
 
 interface Board {
   kind: SourceKind;
@@ -523,10 +532,21 @@ export async function findPosting(
   sctx: SourceContext,
   opts: { readBody: BodyReader; board?: BoardLookup },
 ): Promise<FindOutcome> {
-  const lookup = opts.board ?? adapterBoardLookup;
+  await racePoint('posting.search');
   const opp = await getOpportunity(db, ctx, opportunityId);
+  return { ...(await search(db, ctx, opp, sctx, opts)), searchedFor: searchBasisOf(opp) };
+}
+
+async function search(
+  db: Db,
+  ctx: UserCtx,
+  opp: OpportunityView,
+  sctx: SourceContext,
+  opts: { readBody: BodyReader; board?: BoardLookup },
+): Promise<Found> {
+  const lookup = opts.board ?? adapterBoardLookup;
   const company = await getCompany(db, ctx, opp.companyId);
-  const refs = await refsFromMail(db, ctx, opportunityId, opts.readBody, sctx.log);
+  const refs = await refsFromMail(db, ctx, opp.id, opts.readBody, sctx.log);
   let owned = await companyBoards(db, ctx, company);
   /** Detection could not finish, so whether the company has a board is not known (#866). */
   let detectionFailed = false;
@@ -551,14 +571,14 @@ export async function findPosting(
     }
   }
   const foreign = referenceBoards(refs, owned);
-  const noBoard = (): FindOutcome =>
+  const noBoard = (): Found =>
     detectionFailed
       ? { status: 'unreachable' }
       : { status: 'no_board', needsCareersUrl: company.careersUrl == null };
   if (owned.length === 0 && foreign.length === 0) return noBoard();
 
   /** An undescribed posting cannot be attached: the user is shown it to pick or paste for. */
-  const unattachable = (candidate: PostingCandidate): FindOutcome => ({
+  const unattachable = (candidate: PostingCandidate): Found => ({
     status: 'candidates',
     candidates: [candidate],
     board: [candidate],

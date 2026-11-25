@@ -58,7 +58,7 @@ export async function reconcilePosting(
       ctx,
       opportunityId,
       'failed',
-      "Checking the company's board failed. This will be retried automatically.",
+      () => "Checking the company's board failed. This will be retried automatically.",
     );
   }
 }
@@ -92,7 +92,7 @@ async function reconcile(
       ctx,
       opportunityId,
       'edited',
-      "You have edited this opportunity's description, so the board search left it alone.",
+      () => "You have edited this opportunity's description, so the board search left it alone.",
     );
   }
 
@@ -101,17 +101,20 @@ async function reconcile(
     ...(opts.board === undefined ? {} : { board: opts.board }),
   });
 
+  const { searchedFor } = outcome;
   switch (outcome.status) {
     case 'exact':
     case 'single':
-      return await confirm(db, ctx, opp, outcome.candidate.posting, outcome.readFrom);
+      return await confirm(db, ctx, opp, outcome.candidate.posting, outcome.readFrom, searchedFor);
     case 'candidates':
       return await flag(
         db,
         ctx,
         opportunityId,
         'ambiguous',
-        `Found ${outcome.candidates.length} possible posting${outcome.candidates.length === 1 ? '' : 's'} for "${opp.title}" at ${opp.companyName}, none confident enough to pick automatically. Choose one from the banner.`,
+        (o) =>
+          `Found ${outcome.candidates.length} possible posting${outcome.candidates.length === 1 ? '' : 's'} for "${o.title}" at ${o.companyName}, none confident enough to pick automatically. Choose one from the banner.`,
+        searchedFor,
       );
     case 'none':
       return await flag(
@@ -119,7 +122,9 @@ async function reconcile(
         ctx,
         opportunityId,
         'none_found',
-        `Checked ${possessive(opp.companyName)} board and found no posting matching "${opp.title}".`,
+        (o) =>
+          `Checked ${possessive(o.companyName)} board and found no posting matching "${o.title}".`,
+        searchedFor,
       );
     case 'unreachable':
       // Its boards could not be read (#835), or the search for one could not finish (#866): the
@@ -130,7 +135,9 @@ async function reconcile(
         ctx,
         opportunityId,
         'failed',
-        `Couldn't read ${possessive(opp.companyName)} board just now, so nothing was checked. Try Find posting again.`,
+        (o) =>
+          `Couldn't read ${possessive(o.companyName)} board just now, so nothing was checked. Try Find posting again.`,
+        searchedFor,
       );
     default:
       return await flag(
@@ -138,7 +145,8 @@ async function reconcile(
         ctx,
         opportunityId,
         'no_board',
-        `No ATS board could be detected for ${opp.companyName}.`,
+        (o) => `No ATS board could be detected for ${o.companyName}.`,
+        searchedFor,
       );
   }
 }

@@ -601,7 +601,7 @@ describe('findPosting', () => {
       board: lookup,
     });
 
-    expect(out).toEqual({ status: 'no_board', needsCareersUrl: true });
+    expect(out).toMatchObject({ status: 'no_board', needsCareersUrl: true });
   });
 
   // #866: detection that could not finish is not "no board", which would say the company has none.
@@ -627,7 +627,7 @@ describe('findPosting', () => {
       board: lookup,
     });
 
-    expect(out).toEqual({ status: 'unreachable' });
+    expect(out).toMatchObject({ status: 'unreachable' });
     expect(asked).toEqual([]);
   });
 
@@ -654,7 +654,7 @@ describe('findPosting', () => {
     });
 
     expect(asked).toEqual([{ kind: 'ats_greenhouse', org: 'elsewhere' }]);
-    expect(out).toEqual({ status: 'unreachable' });
+    expect(out).toMatchObject({ status: 'unreachable' });
   });
 
   it('survives an unreachable board, and says it could not be read (#835)', async () => {

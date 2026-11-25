@@ -39,7 +39,13 @@
 // context to make up for data that was never kept. The deterministic extraction has no such
 // gap: it is already the accepted quality bar for a live capture with no AI key, so re-derive
 // holds itself to the same bar rather than inventing a second, approximate path.
-import { capturedPage, confirm, writeReconcileNote, type CapturedPage } from './postingReconcile';
+import {
+  capturedPage,
+  confirm,
+  opportunityChanged,
+  writeReconcileNote,
+  type CapturedPage,
+} from './postingReconcile';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { createActivity } from '../repos/activities';
@@ -165,7 +171,16 @@ export async function rederivePosting(
   });
 
   if (outcome.status === 'exact' || outcome.status === 'single') {
-    const confirmed = await confirm(db, ctx, opp, outcome.candidate.posting, outcome.readFrom);
+    const confirmed = await confirm(
+      db,
+      ctx,
+      opp,
+      outcome.candidate.posting,
+      outcome.readFrom,
+      outcome.searchedFor,
+    );
+    // The company, title or link is another by now (#892): the timeline says so, and so does this.
+    if (confirmed.stopped === true) throw opportunityChanged();
     // confirm() wrote nothing when the description changed under it (#851, qa on #855): said as
     // such, not as a merge.
     if (confirmed.status !== 'confirmed') {
