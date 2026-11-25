@@ -3,7 +3,7 @@ import { enqueue } from '../lib/jobQueue';
 import { keyedFetch } from '../lib/safeFetch';
 import {
   CLOSED_REASONS,
-  DISMISS_REASONS,
+  MANUAL_DISMISS_REASONS,
   OPPORTUNITY_STAGES,
   OpportunitySchema,
   SOURCE_KINDS,
@@ -111,7 +111,7 @@ const DismissDuplicateBody = z.object({ otherId: z.string().min(1).max(64) }).st
 const StageBody = z.object({
   to: z.enum(OPPORTUNITY_STAGES),
   closedReason: z.enum(CLOSED_REASONS).optional(),
-  dismissedReason: z.enum(DISMISS_REASONS).optional(),
+  dismissedReason: z.enum(MANUAL_DISMISS_REASONS).optional(),
   note: z.string().trim().min(1).max(2000).optional(),
   reopen: z.boolean().optional(),
 });

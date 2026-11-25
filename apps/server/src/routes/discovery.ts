@@ -6,7 +6,8 @@ import {
   cardKey,
   dedupeKey,
   DISCOVERY_SOURCE_KINDS,
-  DISMISS_REASONS,
+  MANUAL_DISMISS_REASONS,
+  type ManualDismissReason,
   DISPOSITIONS,
   newId,
   NormalizedPostingSchema,
@@ -124,7 +125,7 @@ const AcceptBody = z
 
 const DismissBody = z
   .object({
-    reason: z.enum(DISMISS_REASONS).optional(),
+    reason: z.enum(MANUAL_DISMISS_REASONS).optional(),
     note: z.string().trim().min(1).max(2000).optional(),
   })
   .strict();
@@ -155,7 +156,7 @@ const BulkIdsBody = z
 const BulkDismissBody = z
   .object({
     ids: z.array(z.string().min(1).max(64)).min(1).max(MAX_BULK_SIZE),
-    reason: z.enum(DISMISS_REASONS),
+    reason: z.enum(MANUAL_DISMISS_REASONS),
     note: z.string().trim().min(1).max(2000).optional(),
   })
   .strict();
@@ -471,7 +472,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
     tx: Exec,
     ctx: UserCtx,
     result: DiscoveryResultView,
-    reason: (typeof DISMISS_REASONS)[number] | null,
+    reason: ManualDismissReason | null,
     note: string | null,
   ): Promise<DiscoveryResultView> {
     await tx
@@ -548,7 +549,7 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
   async function dismissOne(
     ctx: UserCtx,
     id: string,
-    reason: (typeof DISMISS_REASONS)[number],
+    reason: ManualDismissReason,
     note: string | undefined,
   ): Promise<BulkItemResult> {
     const { item } = await decideItem(db, ctx, id, async (tx, result) => {
