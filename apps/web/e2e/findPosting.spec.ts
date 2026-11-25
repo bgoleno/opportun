@@ -411,7 +411,7 @@ test.describe("the user's description survives the posting checks (#851, #856, #
     await rederived;
     expect(await description(page, id)).toBe(TYPED);
     await expect(await timeline(page, id)).not.toContainText(
-      'merged with the captured page as usual',
+      'merged as usual with the page captured from',
     );
   });
 

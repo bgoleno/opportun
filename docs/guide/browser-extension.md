@@ -88,6 +88,9 @@ that carries the full description and stays correct when the company edits it.
 - Found: the company's copy becomes the description, and anything the captured page said that
   the company's posting does not cover is kept underneath it, under a heading naming where it
   came from. Nothing is rewritten; the employer's words stay the employer's words.
+  If pages of several postings of the role were captured, it is the newest page of the opportunity's
+  own posting that is read, here and by **Re-derive from capture**; if none is its own, the posting you
+  captured first.
 - Not settled: nothing is changed, and the opportunity is flagged. You will see a note in the
   **Description** card and a **Posting unconfirmed** mark on its card in the pipeline. The note
   says what happened (several postings on the board could be this one, the posting is not on

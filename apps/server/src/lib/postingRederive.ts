@@ -39,7 +39,7 @@
 // context to make up for data that was never kept. The deterministic extraction has no such
 // gap: it is already the accepted quality bar for a live capture with no AI key, so re-derive
 // holds itself to the same bar rather than inventing a second, approximate path.
-import { capturedPage, confirm, writeReconcileNote } from './postingReconcile';
+import { capturedPage, confirm, writeReconcileNote, type CapturedPage } from './postingReconcile';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { createActivity } from '../repos/activities';
@@ -92,14 +92,23 @@ function blockingReason(
   return null;
 }
 
-async function note(db: Db, ctx: UserCtx, opportunityId: string, bodyMd: string): Promise<void> {
+/** `before` and the page that was read; it says nothing of whose the page is. */
+async function note(
+  db: Db,
+  ctx: UserCtx,
+  opportunityId: string,
+  before: string,
+  page: CapturedPage,
+): Promise<void> {
+  const which =
+    page.siteName === null ? 'the captured page' : `the page captured from ${page.siteName}`;
   await createActivity(db, ctx, opportunityId, {
     kind: 'note',
     title: 'Description re-derived from capture',
-    bodyMd,
+    bodyMd: `${before} ${which}, already on this timeline.`,
     occurredAt: Date.now(),
     participants: [],
-    externalUrl: null,
+    externalUrl: page.url,
   });
 }
 
@@ -166,7 +175,8 @@ export async function rederivePosting(
       db,
       ctx,
       opportunityId,
-      "A confident match on the company's board took priority, merged with the captured page as usual.",
+      "A confident match on the company's board took priority, merged as usual with",
+      capture,
     );
     return { kind: 'merged', opportunity: await getOpportunity(db, ctx, opportunityId) };
   }
@@ -205,7 +215,8 @@ export async function rederivePosting(
     ctx,
     opportunityId,
     'No confident match was found on the company’s board, so the board was left out of ' +
-      'this change: the description came from the captured page already on this timeline.',
+      'this change: the description came from',
+    capture,
   );
   return { kind: 'capture_only', opportunity: updated };
 }

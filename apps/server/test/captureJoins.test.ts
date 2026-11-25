@@ -490,14 +490,16 @@ describe.each(SITES)('a capture on %s of another place of an open role', (site) 
 
   describe('where nothing says it is another posting: as an existing one is filled today', () => {
     it.each([
-      ['the role has no place', null, THERE],
-      ['the page has none', HERE, null],
-    ])('%s', async (_what, role, page) => {
+      ['the role has no place', null, THERE, undefined],
+      ['the page has none', HERE, null, true],
+    ])('%s', async (_what, role, page, said) => {
       const { app, a } = await boot();
       const id = await byHand(app, a, { location: role });
       const done = await capture(app, a, P, page, { compNote: '$200k' });
-      // Joined by its card, so it is said; not known to be another, so it fills.
-      expect(done).toMatchObject({ opportunityId: id, anotherPosting: true });
+      // Joined by its card, so it is said, but where there is nothing for it to be another than (#1064);
+      // not known to be another, so it fills.
+      expect(done.opportunityId).toBe(id);
+      expect(done.anotherPosting).toBe(said);
       expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
         location: role ?? page,
         postingUrl: urlOf(P),
@@ -622,6 +624,60 @@ describe.each(SITES)('a capture on %s of another place of an open role', (site) 
         );
       },
     );
+  });
+});
+
+// https://github.com/bgoleno/opportun/issues/1064, part B.
+describe.each(SITES)('the first page captured, on %s, into one that has nothing', (site) => {
+  const P: At = [site, 2];
+  const alsoPosted = async (app: FastifyInstance, id: string) =>
+    (await entriesOf(app, id, 'link')).filter((e) => e.title.startsWith('Also posted'));
+
+  it.each([
+    ['by hand', 'manual', null, null],
+    ['from mail', 'communication', null, null],
+    ['by hand, its place and link emptied', 'manual', '  ', ''],
+  ] as const)('%s: not called another posting, and fills it', async (_how, kind, place, link) => {
+    const { app, a } = await boot();
+    const id = await byHand(app, a, { location: null, descriptionMd: null, sourceKind: kind });
+    await set(app, id, { location: place, postingUrl: link });
+    const done = await capture(app, a, P, THERE, { compNote: '$1' });
+    expect(done).toMatchObject({ opportunityId: id, createdOpportunity: false });
+    expect(done.anotherPosting).toBeUndefined();
+    expect(await alsoPosted(app, id)).toEqual([]);
+    expect(await getOpportunity(app.db, ctxOf(a), id)).toMatchObject({
+      descriptionMd: PAGE,
+      compNote: '$1',
+      postingState: 'searching',
+    });
+    expect(await resultsOf(app, a)).toMatchObject([
+      { id: done.resultId, disposition: 'accepted', opportunityId: id },
+    ]);
+    // Nor when it is captured again; the next posting is another.
+    expect((await capture(app, a, P, THERE)).anotherPosting).toBeUndefined();
+    await set(app, id, { location: THERE });
+    const next = await capture(app, a, [site, 3], ELSEWHERE);
+    expect([next.opportunityId, next.anotherPosting]).toEqual([id, true]);
+    expect(await alsoPosted(app, id)).toHaveLength(1);
+  });
+
+  it.each([
+    ['a place', { location: HERE }],
+    ['a link', { postingUrl: 'https://example.com/mine' }],
+    ['a result behind it', { location: null }],
+  ])('with %s: another', async (what, patch) => {
+    for (const kind of ['manual', 'communication']) {
+      const { app, a } = await boot();
+      const id = await byHand(app, a, { location: null, sourceKind: kind });
+      if (what === 'a result behind it') {
+        await capture(app, a, [site, 1], HERE);
+        await set(app, id, { location: null, postingUrl: null });
+      }
+      await set(app, id, patch);
+      const done = await capture(app, a, P, THERE);
+      expect([done.opportunityId, done.anotherPosting]).toEqual([id, true]);
+      expect(await alsoPosted(app, id)).toHaveLength(1);
+    }
   });
 });
 
