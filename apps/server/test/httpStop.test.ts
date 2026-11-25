@@ -13,15 +13,25 @@ import type { FastifyInstance } from 'fastify';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HTTP_STOP_MS } from '../src/plugins/httpStop';
 import { testApp } from './helpers';
+import { PATIENCE_MS } from './patience';
 
-/** The bound of the tests' own servers. */
+/**
+ * The bound of the servers that are to end before it: longer than any test here waits, as are Fastify's
+ * keep-alive (72 s) and node's own limits. So that a server has ended at all is that the stop ended it.
+ */
+const FAR_MS = 600_000;
+/** The bound of those that are to end at it: its timer is moved by hand. */
 const BOUND_MS = 1_500;
-/** "Within about a second", on a loaded machine. */
-const SOON_MS = 1_000;
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Not the one a test fakes. */
+const realSetTimeout = globalThis.setTimeout;
+const wait = (ms: number) => new Promise((r) => realSetTimeout(r, ms));
+/** Until something that has to come has. */
+const until = (seen: () => void | Promise<void>) =>
+  vi.waitFor(seen, { timeout: PATIENCE_MS, interval: 10 });
 
 const cleanups: (() => Promise<unknown> | void)[] = [];
 afterEach(async () => {
+  vi.useRealTimers();
   for (const clean of cleanups.splice(0).reverse()) await clean();
 });
 
@@ -41,7 +51,7 @@ function ask(agent: http.Agent, url: string, opts: { slowMs?: number } = {}): Pr
           chunks.push(d);
           if (opts.slowMs === undefined) return;
           res.pause();
-          setTimeout(() => res.resume(), opts.slowMs);
+          realSetTimeout(() => res.resume(), opts.slowMs);
         });
         res.on('end', () =>
           resolve({
@@ -57,11 +67,10 @@ function ask(agent: http.Agent, url: string, opts: { slowMs?: number } = {}): Pr
   });
 }
 
-async function server(bound: number | undefined = BOUND_MS) {
+async function server(bound: number | undefined = FAR_MS) {
   let go: () => void = () => undefined;
   const gate = new Promise<void>((r) => (go = r));
-  let asked: () => void = () => undefined;
-  const inHand = new Promise<void>((r) => (asked = r));
+  const asked = new Set<string>();
   const { app } = await testApp(
     {},
     {
@@ -69,7 +78,7 @@ async function server(bound: number | undefined = BOUND_MS) {
       setup: (a: FastifyInstance) => {
         a.get('/test/quick', async () => ({ ok: true }));
         a.get('/test/held', async () => {
-          asked();
+          asked.add('held');
           await gate;
           return { whole: 'x'.repeat(100_000) };
         });
@@ -77,7 +86,7 @@ async function server(bound: number | undefined = BOUND_MS) {
           reply.hijack();
           reply.raw.writeHead(200, { 'content-type': 'text/event-stream' });
           reply.raw.write('data: one\n\n');
-          asked();
+          asked.add('stream');
           void gate.then(() => reply.raw.end('data: two\n\n'));
         });
         a.get('/test/later', async () => {
@@ -86,11 +95,17 @@ async function server(bound: number | undefined = BOUND_MS) {
           return { ok: true };
         });
         a.get('/test/heldbig', async () => {
+          asked.add('heldbig');
           await gate;
           return 'z'.repeat(30_000_000);
         });
-        a.get('/test/big', async () => {
-          setTimeout(() => asked(), 50);
+        a.get('/test/big', async (_req, reply) => {
+          // Once node has been handed all of it.
+          const handed = () => {
+            if (reply.raw.writableEnded) asked.add('big');
+            else setImmediate(handed);
+          };
+          handed();
           return 'y'.repeat(30_000_000);
         });
       },
@@ -105,14 +120,18 @@ async function server(bound: number | undefined = BOUND_MS) {
     await stop();
   });
   let stopping: Promise<void> | undefined;
-  let ended: number | undefined;
-  app.server.once('close', () => (ended = performance.now()));
+  let closed = false;
+  app.server.once('close', () => (closed = true));
   const stop = (): Promise<void> => (stopping ??= app.close());
-  /** The stop, begun; when it has ended its HTTP part, how long that took since `from`. */
-  const endedSince = async (from: number): Promise<number> => {
-    await vi.waitFor(() => expect(ended).toBeDefined(), { timeout: 6_000 });
-    return ended! - from;
+  /** The stop, begun as far as its HTTP part: nothing new is accepted, and its bound runs. */
+  const stopBegun = async (): Promise<void> => {
+    void stop();
+    await until(() => expect(app.server.listening).toBe(false));
   };
+  /** Its HTTP part has ended. */
+  const ended = () => until(() => expect(closed).toBe(true));
+  const sockets: net.Socket[] = [];
+  app.server.on('connection', (socket: net.Socket) => sockets.push(socket));
   const { port } = app.server.address() as net.AddressInfo;
   return {
     app,
@@ -120,10 +139,12 @@ async function server(bound: number | undefined = BOUND_MS) {
     agent,
     port,
     go: () => go(),
-    inHand,
+    inHand: (what = 'held') => until(() => expect(asked).toContain(what)),
+    sockets,
     stop,
-    endedSince,
-    isEnded: () => ended !== undefined,
+    stopBegun,
+    ended,
+    isEnded: () => closed,
   };
 }
 type Server = Awaited<ReturnType<typeof server>>;
@@ -132,100 +153,115 @@ async function raw(s: Server, text?: string): Promise<net.Socket> {
   const socket = net.connect(s.port, '127.0.0.1');
   socket.on('error', () => undefined);
   await once(socket, 'connect');
-  if (text !== undefined) socket.write(text);
   cleanups.push(() => void socket.destroy());
-  await wait(100);
+  const its = () => s.sockets.find((other) => other.remotePort === socket.localPort);
+  await until(() => expect(its()).toBeDefined());
+  if (text !== undefined) await say(s, socket, text);
   return socket;
+}
+/** Says it on the connection, and the server has read it. */
+async function say(s: Server, socket: net.Socket, text: string): Promise<void> {
+  const its = s.sockets.find((other) => other.remotePort === socket.localPort)!;
+  const read = its.bytesRead + text.length;
+  socket.write(text);
+  await until(() => expect(its.bytesRead).toBeGreaterThanOrEqual(read));
+}
+/** A new connection is refused. */
+async function refused(port: number): Promise<void> {
+  const late = net.connect(port, '127.0.0.1');
+  const answer = await new Promise<string | undefined>((resolve) => {
+    late.once('error', (err: NodeJS.ErrnoException) => resolve(err.code));
+    late.once('connect', () => resolve('connected'));
+  });
+  late.destroy();
+  expect(answer).toBe('ECONNREFUSED');
 }
 
 describe('the stop ends soon after the last answer', () => {
   it('a request in hand on a kept connection: answered whole, and told it is the last', async () => {
     const s = await server();
     const answer = ask(s.agent, `${s.at}/test/held`);
-    await s.inHand;
-    void s.stop();
+    await s.inHand();
+    await s.stopBegun();
     await wait(200);
     expect(s.isEnded()).toBe(false);
     s.go();
     const got = await answer;
     expect([got.status, got.headers.connection]).toEqual([200, 'close']);
     expect(JSON.parse(got.body)).toEqual({ whole: 'x'.repeat(100_000) });
-    expect(await s.endedSince(got.at)).toBeLessThan(SOON_MS);
+    await s.ended();
   });
 
   it('an answer whose headers were sent before the stop, as a chat’s stream', async () => {
     const s = await server();
     const answer = ask(s.agent, `${s.at}/test/stream`);
-    await s.inHand;
-    void s.stop();
+    await s.inHand('stream');
+    await s.stopBegun();
     await wait(200);
     expect(s.isEnded()).toBe(false);
     s.go();
     const got = await answer;
     expect(got.body).toBe('data: one\n\ndata: two\n\n');
-    expect(await s.endedSince(got.at)).toBeLessThan(SOON_MS);
+    await s.ended();
   });
 
   it('an answer that its client is still reading: whole, for longer than another takes', async () => {
-    const s = await server(10_000);
+    const s = await server();
     const big = ask(s.agent, `${s.at}/test/big`, { slowMs: 5 });
-    await s.inHand;
+    await s.inHand('big');
     const other = new http.Agent({ keepAlive: true });
     cleanups.push(() => other.destroy());
     const held = ask(other, `${s.at}/test/held`);
-    await wait(100);
-    void s.stop();
-    await wait(100);
+    await s.inHand();
+    await s.stopBegun();
     s.go();
-    expect((await held).status).toBe(200);
+    const first = await held;
+    expect(first.status).toBe(200);
     const got = await big;
+    expect(got.at).toBeGreaterThan(first.at);
     expect(got.body.length).toBe(30_000_000);
-    expect(await s.endedSince(got.at)).toBeLessThan(SOON_MS);
-  }, 20_000);
+    await s.ended();
+  }, 120_000);
 
   // tl on https://github.com/bgoleno/opportun/pull/1012: one step later than the one above.
   it('an answer that is ended while another is still being read: both whole', async () => {
-    const s = await server(20_000);
+    const s = await server();
     const big = ask(s.agent, `${s.at}/test/big`, { slowMs: 3 });
-    await s.inHand;
+    await s.inHand('big');
     const other = new http.Agent({ keepAlive: true });
     cleanups.push(() => other.destroy());
     const later = ask(other, `${s.at}/test/heldbig`, { slowMs: 10 });
     later.catch(() => undefined);
-    await wait(100);
-    void s.stop();
-    await wait(100);
+    await s.inHand('heldbig');
+    await s.stopBegun();
     s.go();
     expect((await big).body.length).toBe(30_000_000);
     const got = await later;
     expect(got.body.length).toBe(30_000_000);
-    expect(await s.endedSince(got.at)).toBeLessThan(SOON_MS);
-  }, 30_000);
+    await s.ended();
+  }, 120_000);
 
   // Over the 10 s that Fastify gives a hook, and under the bound.
   it('an answer that takes its client 11 s: whole, and a new connection is refused meanwhile', async () => {
-    const s = await server(30_000);
+    const s = await server();
     const big = ask(s.agent, `${s.at}/test/big`, { slowMs: 25 });
-    await s.inHand;
+    await s.inHand('big');
     const from = performance.now();
     const stopped = s.stop();
-    await wait(1_000);
-    const late = net.connect(s.port, '127.0.0.1');
-    const [err] = (await once(late, 'error')) as [NodeJS.ErrnoException];
-    expect(err.code).toBe('ECONNREFUSED');
+    await s.stopBegun();
+    await refused(s.port);
     const got = await big;
     expect(got.body.length).toBe(30_000_000);
     expect(got.at - from).toBeGreaterThan(10_500);
-    expect(await s.endedSince(got.at)).toBeLessThan(SOON_MS);
+    await s.ended();
     await stopped;
-  }, 60_000);
+  }, 120_000);
 
   it('a kept connection with nothing in flight, as today', async () => {
     const s = await server();
     expect((await ask(s.agent, `${s.at}/test/quick`)).status).toBe(200);
-    const from = performance.now();
-    void s.stop();
-    expect(await s.endedSince(from)).toBeLessThan(SOON_MS);
+    await s.stopBegun();
+    await s.ended();
   });
 
   // sec on https://github.com/bgoleno/opportun/pull/1012: each of the two is answered, whichever is
@@ -240,14 +276,13 @@ describe('the stop ends soon after the last answer', () => {
       );
       let heard = '';
       socket.setEncoding('utf8').on('data', (d: string) => (heard += d));
-      await s.inHand;
-      void s.stop();
+      await s.inHand();
+      await s.stopBegun();
       await wait(200);
       expect(s.isEnded()).toBe(false);
       s.go();
       await once(socket, 'end');
-      const from = performance.now();
-      expect(await s.endedSince(from)).toBeLessThan(SOON_MS);
+      await s.ended();
       const [first, last] = heard.split(/(?=HTTP\/1\.1 200)/);
       expect(first).toContain(`{"whole":"${'x'.repeat(100_000)}"}`);
       // The one that is not the last does not say it is.
@@ -261,11 +296,9 @@ describe('the stop ends soon after the last answer', () => {
     const socket = await raw(s, 'GET /test/held HTTP/1.1\r\nhost: x\r\n\r\n');
     let heard = '';
     socket.setEncoding('utf8').on('data', (d: string) => (heard += d));
-    await s.inHand;
-    void s.stop();
-    await wait(100);
-    socket.write('GET /test/quick HTTP/1.1\r\nhost: x\r\n\r\n');
-    await wait(100);
+    await s.inHand();
+    await s.stopBegun();
+    await say(s, socket, 'GET /test/quick HTTP/1.1\r\nhost: x\r\n\r\n');
     s.go();
     await once(socket, 'end');
     expect(heard).toContain(`{"whole":"${'x'.repeat(100_000)}"}`);
@@ -275,55 +308,66 @@ describe('the stop ends soon after the last answer', () => {
   it('a connection that never asked for anything, as a browser opens ahead', async () => {
     const s = await server();
     await raw(s);
-    const from = performance.now();
-    void s.stop();
-    expect(await s.endedSince(from)).toBeLessThan(SOON_MS);
+    await s.stopBegun();
+    await s.ended();
   });
 });
 
 describe('the bound', () => {
+  /** The stop begins, and its timer is the test's to move. */
+  async function stopByHand(s: Server): Promise<{ stopped: Promise<void> }> {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const stopped = s.stop();
+    stopped.catch(() => undefined); // the test awaits it later
+    for (const until = performance.now() + PATIENCE_MS; s.app.server.listening; await wait(10)) {
+      expect(performance.now(), 'the stop begins').toBeLessThan(until);
+    }
+    return { stopped };
+  }
+  /** Nothing is cut a millisecond before, and it is then. */
+  async function cutAt(s: Server, ms: number): Promise<void> {
+    vi.advanceTimersByTime(ms - 1);
+    await wait(100);
+    expect(s.isEnded()).toBe(false);
+    vi.advanceTimersByTime(1);
+  }
+
   it('a request that takes longer is not cut before it, and is at it', async () => {
-    const s = await server();
+    const s = await server(BOUND_MS);
     const answer = ask(s.agent, `${s.at}/test/held`).then(
       () => 'answered',
       (e: NodeJS.ErrnoException) => e.code,
     );
-    await s.inHand;
-    const from = performance.now();
-    void s.stop();
-    await wait(BOUND_MS - 300);
-    expect(s.isEnded()).toBe(false);
+    await s.inHand();
+    await stopByHand(s);
+    await cutAt(s, BOUND_MS);
     expect(await answer).toBe('ECONNRESET');
-    const took = await s.endedSince(from);
-    expect(took).toBeGreaterThan(BOUND_MS - 100);
-    expect(took).toBeLessThan(BOUND_MS + SOON_MS);
+    await s.ended();
   });
 
   it('so is a request never sent whole', async () => {
-    const s = await server();
+    const s = await server(BOUND_MS);
     await raw(
       s,
       'POST /api/v1/auth/login HTTP/1.1\r\nhost: x\r\ncontent-type: application/json\r\ncontent-length: 10\r\n\r\n{',
     );
-    const from = performance.now();
-    void s.stop();
-    const took = await s.endedSince(from);
-    expect(took).toBeGreaterThan(BOUND_MS - 100);
-    expect(took).toBeLessThan(BOUND_MS + SOON_MS);
+    await stopByHand(s);
+    await cutAt(s, BOUND_MS);
+    await s.ended();
   });
 
   // Over the 10 s that Fastify gives a hook: nothing of the stop may wait in one.
   it('an answer that is never read: cut at the bound, and the stop itself does not fail', async () => {
     const s = await server(11_000);
-    const socket = await raw(s, 'GET /test/big HTTP/1.1\r\nhost: x\r\n\r\n');
+    const socket = await raw(s);
     socket.pause();
-    await s.inHand;
-    const from = performance.now();
-    await s.stop();
-    const took = performance.now() - from;
-    expect(took).toBeGreaterThan(10_900);
-    expect(took).toBeLessThan(11_000 + 2 * SOON_MS);
-  }, 30_000);
+    await say(s, socket, 'GET /test/big HTTP/1.1\r\nhost: x\r\n\r\n');
+    await s.inHand('big');
+    const { stopped } = await stopByHand(s);
+    await cutAt(s, 11_000); // and past Fastify's own 10 s
+    await s.ended();
+    await stopped;
+  });
 
   it('is longer than a statement can wait for a database that vanished', () => {
     expect(HTTP_STOP_MS).toBeGreaterThan(60_000);
@@ -346,12 +390,9 @@ describe('what stays as it was', () => {
   it('a new connection is refused while a request in hand is waited for, as before', async () => {
     const s = await server();
     const held = ask(s.agent, `${s.at}/test/held`);
-    await s.inHand;
-    void s.stop();
-    await wait(200);
-    const late = net.connect(s.port, '127.0.0.1');
-    const [err] = (await once(late, 'error')) as [NodeJS.ErrnoException];
-    expect(err.code).toBe('ECONNREFUSED');
+    await s.inHand();
+    await s.stopBegun();
+    await refused(s.port);
     s.go();
     expect((await held).status).toBe(200);
   });
@@ -359,15 +400,16 @@ describe('what stays as it was', () => {
   it('a request that comes during the stop is refused with a 503, as before', async () => {
     const s = await server();
     const held = ask(s.agent, `${s.at}/test/held`);
-    await s.inHand;
-    const socket = await raw(s, 'GET /test/quick HTTP/1.1\r\nhost: x\r\n\r\nGET ');
+    await s.inHand();
+    const socket = await raw(s);
     let heard = '';
     socket.setEncoding('utf8').on('data', (d: string) => (heard += d));
-    void s.stop();
-    await wait(100);
+    await say(s, socket, 'GET /test/quick HTTP/1.1\r\nhost: x\r\n\r\nGET ');
+    await until(() => expect(heard).toContain('{"ok":true}'));
+    await s.stopBegun();
     heard = '';
     socket.write('/test/quick HTTP/1.1\r\nhost: x\r\n\r\n');
-    await vi.waitFor(() => expect(heard).toMatch(/^HTTP\/1\.1 503 [\s\S]*connection: close/i));
+    await until(() => expect(heard).toMatch(/^HTTP\/1\.1 503 [\s\S]*connection: close/i));
     s.go();
     expect((await held).status).toBe(200);
   });
@@ -403,15 +445,20 @@ describe.each(['SIGTERM', 'SIGINT'] as const)('the server itself, on %s', (signa
     let out = '';
     proc.stdout.setEncoding('utf8').on('data', (c: string) => (out += c));
     proc.stderr.resume();
-    let exited: { code: number | null; at: number } | undefined;
-    proc.on('exit', (code) => (exited = { code, at: performance.now() }));
+    let exited: { code: number | null } | undefined;
+    proc.on('exit', (code) => (exited = { code }));
     cleanups.push(() => void proc.kill('SIGKILL'));
     await vi.waitFor(() => expect(out).toContain('server listening'), { timeout: 30_000 });
-    return { proc, port, exit: () => exited };
+    // Its bound and a connection's keep-alive are over a minute: so this ends by what the stop does.
+    const ended = async () => {
+      await until(() => expect(exited).toBeDefined());
+      expect(exited!.code).toBe(0);
+    };
+    return { proc, port, exit: () => exited, ended };
   }
 
   it('a request in hand is answered, and the process ends soon after', async () => {
-    const { proc, port, exit } = await child();
+    const { proc, port, exit, ended } = await child();
     const agent = new http.Agent({ keepAlive: true });
     cleanups.push(() => agent.destroy());
     const body = JSON.stringify({ email: 'jane@example.com', password: 'no such password' });
@@ -421,33 +468,34 @@ describe.each(['SIGTERM', 'SIGINT'] as const)('the server itself, on %s', (signa
       host: '127.0.0.1',
       method: 'POST',
       path: '/api/v1/auth/login',
-      headers: { 'content-type': 'application/json', 'content-length': body.length },
+      headers: {
+        'content-type': 'application/json',
+        'content-length': body.length,
+        expect: '100-continue',
+      },
     });
-    req.write(body.slice(0, 10)); // in hand from here: the rest of it comes during the stop
-    await wait(500);
+    req.flushHeaders();
+    await once(req, 'continue');
+    req.write(body.slice(0, 10)); // in hand: the rest of it comes during the stop
     proc.kill(signal);
-    await wait(500);
+    // Begun: a new connection is refused.
+    await until(() => refused(port));
+    await wait(200);
     expect(exit()).toBeUndefined();
     req.end(body.slice(10));
     const [res] = (await once(req, 'response')) as [http.IncomingMessage];
     res.resume();
     await once(res, 'end');
-    const at = performance.now();
     expect([res.statusCode, res.headers.connection]).toEqual([401, 'close']);
-    await vi.waitFor(() => expect(exit()).toBeDefined(), { timeout: 5_000 });
-    expect(exit()!.code).toBe(0);
-    expect(exit()!.at - at).toBeLessThan(SOON_MS + 500);
+    await ended();
   }, 60_000);
 
   it('nothing in flight, with a connection kept: at once', async () => {
-    const { proc, port, exit } = await child();
+    const { proc, port, ended } = await child();
     const agent = new http.Agent({ keepAlive: true });
     cleanups.push(() => agent.destroy());
     expect((await ask(agent, `http://127.0.0.1:${port}/healthz`)).status).toBe(200);
-    const at = performance.now();
     proc.kill(signal);
-    await vi.waitFor(() => expect(exit()).toBeDefined(), { timeout: 5_000 });
-    expect(exit()!.code).toBe(0);
-    expect(exit()!.at - at).toBeLessThan(SOON_MS + 500);
+    await ended();
   }, 60_000);
 });
