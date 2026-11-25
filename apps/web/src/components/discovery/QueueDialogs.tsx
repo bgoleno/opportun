@@ -1,7 +1,7 @@
 // Dialogs for the review queue: dismiss with a reason, the duplicate-accept choice, and the
 // full posting. Posting fields are rendered as text only (third-party data).
 import { zodResolver } from '@hookform/resolvers/zod';
-import { DISMISS_REASONS, type DismissReason } from '@opportun/core';
+import { MANUAL_DISMISS_REASONS, type ManualDismissReason } from '@opportun/core';
 import { Link } from '@tanstack/react-router';
 import { ExternalLink } from 'lucide-react';
 import { useEffect } from 'react';
@@ -31,14 +31,8 @@ function busyLabel(verb: string, progress: BulkProgress | null): string {
 }
 import { ResolutionChip, resultLabel, ScoreBadge } from './QueueRow';
 
-/** Reasons a person reviewing one posting can pick for themselves. `denied_company` (#199) is
- *  assigned only by the system, when a posting's company matched the user's own denylist at
- *  ingest time -- a posting that reached this dialog was never such a match, so offering it
- *  here would be a choice with no situation it could ever correctly describe. */
-const MANUAL_DISMISS_REASONS = DISMISS_REASONS.filter((r) => r !== 'denied_company');
-
 const DismissSchema = z.object({
-  reason: z.enum(DISMISS_REASONS, { error: 'Choose a reason' }),
+  reason: z.enum(MANUAL_DISMISS_REASONS, { error: 'Choose a reason' }),
   note: z.string().trim().max(2000, 'Use at most 2000 characters'),
 });
 type DismissInput = z.input<typeof DismissSchema>;
@@ -53,11 +47,11 @@ export function DismissResultDialog(props: {
   result: DiscoveryResult | null;
   otherLocations?: number;
   onCancel: () => void;
-  onConfirm: (v: { reason: DismissReason; note?: string }) => void;
+  onConfirm: (v: { reason: ManualDismissReason; note?: string }) => void;
 }) {
   const form = useForm<DismissInput, unknown, DismissOutput>({
     resolver: zodResolver(DismissSchema),
-    defaultValues: { reason: '' as DismissReason, note: '' },
+    defaultValues: { reason: '' as ManualDismissReason, note: '' },
   });
   const { errors } = form.formState;
 
@@ -122,7 +116,7 @@ export function DismissResultDialog(props: {
 }
 
 const BulkDismissSchema = z.object({
-  reason: z.enum(DISMISS_REASONS, { error: 'Choose a reason' }),
+  reason: z.enum(MANUAL_DISMISS_REASONS, { error: 'Choose a reason' }),
   note: z.string().trim().max(2000, 'Use at most 2000 characters'),
 });
 type BulkDismissInput = z.input<typeof BulkDismissSchema>;
@@ -140,7 +134,7 @@ export function BulkDismissDialog(props: {
   busy: boolean;
   progress: BulkProgress | null;
   onCancel: () => void;
-  onConfirm: (v: { reason: DismissReason; note?: string }) => void;
+  onConfirm: (v: { reason: ManualDismissReason; note?: string }) => void;
 }) {
   const form = useForm<BulkDismissInput, unknown, BulkDismissOutput>({
     resolver: zodResolver(BulkDismissSchema),
@@ -183,7 +177,7 @@ export function BulkDismissDialog(props: {
           <FormField label="Reason" error={errors.reason?.message}>
             {(control) => (
               <Select {...control} {...form.register('reason')}>
-                {DISMISS_REASONS.map((r) => (
+                {MANUAL_DISMISS_REASONS.map((r) => (
                   <option key={r} value={r}>
                     {dismissReasonLabel(r)}
                   </option>

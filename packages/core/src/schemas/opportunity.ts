@@ -33,7 +33,8 @@ export const ACTIVE_PIPELINE_STAGES = [
 export const CLOSED_REASONS = ['accepted', 'rejected', 'withdrawn', 'ghosted'] as const;
 export type ClosedReason = (typeof CLOSED_REASONS)[number];
 
-export const DISMISS_REASONS = [
+/** The reasons a person can dismiss with, as every dialog offers them and every route takes them. */
+export const MANUAL_DISMISS_REASONS = [
   'seniority',
   'compensation',
   'location',
@@ -65,19 +66,24 @@ export const DISMISS_REASONS = [
    */
   'duplicate',
   'other',
-  /**
-   * Issue #199: the system auto-suppressed a posting because its company is on the user's own
-   * denylist, not a one-off human judgment about this particular posting -- never offered as a
-   * choice in the per-item dismiss dialog (that dialog only reaches a posting that was never
-   * denylist-matched in the first place). Distinct from `company` (a human decided, reviewing
-   * one posting, that something about the company was wrong for them, which IS informative
-   * about role fit): this carries no new information once the denylist itself exists, the same
-   * way `duplicate` is a misleading signal about a different subsystem rather than an absence
-   * of one. See REASONS_EXCLUDED_FROM_REFINEMENT in refineDiscoveryPrompt.ts.
-   */
-  'denied_company',
 ] as const;
+
+/**
+ * Every reason a dismissal is stored with: a person's, and the system's own.
+ *
+ * `denied_company` (#199): ingest auto-suppressed a posting because its company is on the user's own
+ * denylist, not a one-off human judgment about this particular posting. Only discoveryIngest.ts writes
+ * it, with the denied company's name as its note: a person's route takes MANUAL_DISMISS_REASONS
+ * (https://github.com/bgoleno/opportun/issues/1048), as theirs would read as a company's name and drop
+ * out of the learning. Distinct from `company` (a human decided, reviewing one posting, that something
+ * about the company was wrong for them, which IS informative about role fit): this carries no new
+ * information once the denylist itself exists, the same way `duplicate` is a misleading signal about a
+ * different subsystem rather than an absence of one. See REASONS_EXCLUDED_FROM_REFINEMENT in
+ * refineDiscoveryPrompt.ts.
+ */
+export const DISMISS_REASONS = [...MANUAL_DISMISS_REASONS, 'denied_company'] as const;
 export type DismissReason = (typeof DISMISS_REASONS)[number];
+export type ManualDismissReason = (typeof MANUAL_DISMISS_REASONS)[number];
 
 export const SOURCE_KINDS = ['manual', 'import', 'discovery', 'communication'] as const;
 export type SourceKind = (typeof SOURCE_KINDS)[number];

@@ -1,3 +1,4 @@
+import { MANUAL_DISMISS_REASONS } from '@opportun/core';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1221,6 +1222,27 @@ describe('ReviewQueue bulk triage (#184)', () => {
       expect(post?.body).toEqual({ ids: ['r-x', 'r-y'], reason: 'duplicate' });
     });
     expect(await screen.findByText('2 dismissed')).toBeInTheDocument();
+  });
+
+  // Denied company is the system's alone (#1048): the same list as the single dialog's.
+  it('bulk dismiss offers the reasons the single one does, in its order', async () => {
+    const user = userEvent.setup();
+    mockApi({ 'GET /discovery/results': { items: [X, Y], total: 2 } });
+    renderWithProviders(<ReviewQueue />);
+    await screen.findByText('One');
+    const offered = (dialog: HTMLElement) =>
+      within(within(dialog).getByLabelText('Reason'))
+        .getAllByRole('option')
+        .map((o) => (o as HTMLOptionElement).value)
+        .filter((v) => v !== '');
+    await user.click(screen.getByRole('button', { name: 'Dismiss One at Initech' }));
+    const single = offered(await screen.findByRole('dialog', { name: 'Dismiss result' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Select all 2 loaded' }));
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    const bulk = offered(await screen.findByRole('dialog', { name: 'Dismiss 2 results' }));
+    expect(bulk).toEqual([...MANUAL_DISMISS_REASONS]);
+    expect(single).toEqual(bulk);
   });
 
   it('bulk dismiss offers Undo, which posts the dismissed ids to bulk-undo-dismiss', async () => {
