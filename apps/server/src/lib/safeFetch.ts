@@ -174,8 +174,6 @@ const SITE_FETCH_HOSTS: readonly string[] = SITES.flatMap((site) =>
 );
 export const ATS_ALLOW_HOSTS: readonly string[] = [
   ...SITE_FETCH_HOSTS,
-  'api.lever.co',
-  'api.ashbyhq.com',
   'api.smartrecruiters.com',
   'apply.workable.com',
 ];

@@ -7,7 +7,6 @@ import {
   WORKDAY_SITE,
   WorkdayConfig,
 } from '../adapters/discoverySource';
-import { ASHBY_HOST } from '../adapters/sources/ashby';
 import { ATS_SITES } from '@opportun/core';
 
 export const SLUG = /^[a-z0-9-]{1,100}$/;
@@ -106,23 +105,10 @@ export function boardFromUrl(raw: string): AtsBoard | null {
   const segments = url.pathname.split('/').filter((s) => s.length > 0);
   if (host.endsWith('.myworkdayjobs.com')) return workdayBoardFromPath(host, segments);
   if (host.endsWith('.myworkdaysite.com')) return workdayBoardFromSiteDomain(host, segments);
-  // The sites moved to the registry read their own links (#769); the rest are written out below
-  // until they move.
-  // A link on such a site's host with no board it reads falls through to the branches below,
-  // which name other hosts: still null.
+  // The other boards read their own links (#769).
   for (const site of ATS_SITES) {
     const board = site.board!.fromUrl(url);
     if (board !== null) return { kind: site.sourceKind as AtsKind, slug: board.slug };
   }
-  let found: { kind: AtsKind; slug: string | undefined } | null = null;
-  if (host === 'jobs.lever.co') {
-    found = { kind: 'ats_lever', slug: segments[0] };
-  } else if (host === 'jobs.ashbyhq.com') {
-    found = { kind: 'ats_ashby', slug: segments[0] };
-  } else if (host === ASHBY_HOST && segments[0] === 'posting-api' && segments[1] === 'job-board') {
-    found = { kind: 'ats_ashby', slug: segments[2] };
-  }
-  const slug = found?.slug?.toLowerCase();
-  if (found === null || slug === undefined || !SLUG.test(slug)) return null;
-  return { kind: found.kind, slug };
+  return null;
 }

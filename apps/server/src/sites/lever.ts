@@ -1,17 +1,26 @@
-// Lever postings adapter (FR-D1). The postings API pages with skip/limit; pages are read until
+// Lever's network half (https://github.com/bgoleno/opportun/issues/769), moved unchanged from
+// adapters/sources/lever.ts (FR-D1). The postings API pages with skip/limit; pages are read until
 // one comes back short. Each posting's description is its intro plus its titled lists plus the
-// closing section, as Lever renders them on the hosted page.
-import type { NormalizedPosting } from '@opportun/core';
-import { registerBuiltinSource, type DiscoverySource } from '../discoverySource';
-import { arr, atsOrg, fetchBoardJson, obj, str, timeMs } from './atsCommon';
+// closing section, as Lever renders them on the hosted page. Its identity is
+// packages/core/src/sites/lever.ts.
+import { lever, LEVER_API_HOST, type BoardRef, type NormalizedPosting } from '@opportun/core';
+import { arr, atsOrg, fetchBoardJson, obj, str, timeMs } from '../adapters/sources/atsCommon';
+import { askBoard, linksOf, slugOf } from './boardApi';
+import type { SiteModule } from './types';
 
-export const LEVER_HOST = 'api.lever.co';
 export const LEVER_PAGE_SIZE = 100;
 /** A runaway board (or a server ignoring skip) stops here. */
 const MAX_PAGES = 50;
 
-export const leverPostingsUrl = (org: string, skip: number): string =>
-  `https://${LEVER_HOST}/v0/postings/${org}?mode=json&skip=${skip}&limit=${LEVER_PAGE_SIZE}`;
+const postingsUrl = (board: BoardRef): string =>
+  `https://${LEVER_API_HOST}/v0/postings/${slugOf(board, 'Lever')}?mode=json`;
+
+const urls = {
+  board: postingsUrl,
+  page: (board: BoardRef, page: number): string =>
+    `${postingsUrl(board)}&skip=${page * LEVER_PAGE_SIZE}&limit=${LEVER_PAGE_SIZE}`,
+  probe: (board: BoardRef): string => `${postingsUrl(board)}&limit=1`,
+};
 
 function description(p: Record<string, unknown>): string | null {
   const parts: string[] = [];
@@ -62,19 +71,24 @@ export function mapLeverPosting(raw: unknown, org: string): NormalizedPosting {
   };
 }
 
-export const leverSource: DiscoverySource = {
-  kind: 'ats_lever',
-  async *fetchPostings(sctx, config) {
-    const org = atsOrg(config);
-    for (let page = 0; page < MAX_PAGES; page++) {
-      const skip = page * LEVER_PAGE_SIZE;
-      const items = arr(
-        await fetchBoardJson(sctx, leverPostingsUrl(org, skip), LEVER_HOST, 'Lever', org),
-      );
-      for (const item of items) yield { posting: mapLeverPosting(item, org), nextCursor: null };
-      if (items.length < LEVER_PAGE_SIZE) return;
-    }
+export const leverModule: SiteModule = {
+  identity: lever,
+  api: {
+    urls,
+    mapPosting: mapLeverPosting,
+    slugAddressed: true,
+    probe: (sctx, board) =>
+      askBoard(sctx, lever, board, urls.probe, (body) => arr(body).length > 0),
+    boardLinks: (body) => linksOf(body, (job) => ({ text: job.text, url: job.hostedUrl })),
+    async *listBoard(sctx, config) {
+      const org = atsOrg(config);
+      const board = { site: lever.id, slug: org };
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const url = urls.page(board, page);
+        const items = arr(await fetchBoardJson(sctx, url, lever.fetchHosts[0]!, 'Lever', org));
+        for (const item of items) yield { posting: mapLeverPosting(item, org), nextCursor: null };
+        if (items.length < LEVER_PAGE_SIZE) return;
+      }
+    },
   },
 };
-
-registerBuiltinSource(leverSource);

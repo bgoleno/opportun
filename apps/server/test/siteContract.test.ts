@@ -17,7 +17,7 @@ import {
   type RawResponse,
 } from '../src/lib/safeFetch';
 import type { SourceContext } from '../src/adapters/discoverySource';
-import { SITE_MODULES, type SiteModule } from '../src/sites';
+import { SITE_MODULES, SLUG_SITES, siteOfKind, type SiteModule } from '../src/sites';
 import { INDEED_JOB } from './fixtures/capture/indeedPages';
 import { JOB as LINKEDIN_JOB, type CapturedPage } from './fixtures/capture/pages';
 import { cpuMs } from './scaling';
@@ -28,6 +28,8 @@ const fixture = (name: string): unknown =>
 /** Each site's recorded API answer, as the jobs its listing maps. A site with `api` needs one. */
 const API_FIXTURES: Record<string, () => unknown[]> = {
   greenhouse: () => (fixture('greenhouse.json') as { jobs: unknown[] }).jobs,
+  lever: () => fixture('lever.json') as unknown[],
+  ashby: () => (fixture('ashby.json') as { jobs: unknown[] }).jobs,
 };
 
 /** Each site's job page as the extension sends it. A site with `capture` needs one. */
@@ -80,6 +82,65 @@ describe('the site registry (#769)', () => {
     expect(CAPTURE_SITES.map((s) => s.id)).toEqual(['linkedin', 'indeed']);
     expect([...CAPTURE_SITES]).toEqual(SITES.filter((s) => s.routes.capture !== undefined));
   });
+
+  // Probing order is behaviour: the first board with a posting wins (lib/atsDetect.ts).
+  it('tries a name on the slug-addressed boards only, in this order', () => {
+    expect(SLUG_SITES.map((m) => m.identity.sourceKind)).toEqual([
+      'ats_greenhouse',
+      'ats_lever',
+      'ats_ashby',
+    ]);
+  });
+
+  it('builds the requests the boards have always been sent', () => {
+    const built = (kind: string) => {
+      const { identity, api } = siteOfKind(kind)!;
+      const board = { site: identity.id, slug: 'initech' };
+      return [
+        api!.urls.board(board),
+        api!.urls.board(board, { content: true }),
+        api!.urls.page?.(board, 2),
+        api!.urls.probe?.(board),
+      ];
+    };
+    expect(built('ats_greenhouse')).toEqual([
+      'https://boards-api.greenhouse.io/v1/boards/initech/jobs',
+      'https://boards-api.greenhouse.io/v1/boards/initech/jobs?content=true',
+      undefined,
+      'https://boards-api.greenhouse.io/v1/boards/initech/jobs',
+    ]);
+    expect(built('ats_lever')).toEqual([
+      'https://api.lever.co/v0/postings/initech?mode=json',
+      'https://api.lever.co/v0/postings/initech?mode=json',
+      'https://api.lever.co/v0/postings/initech?mode=json&skip=200&limit=100',
+      'https://api.lever.co/v0/postings/initech?mode=json&limit=1',
+    ]);
+    expect(built('ats_ashby')).toEqual([
+      'https://api.ashbyhq.com/posting-api/job-board/initech',
+      'https://api.ashbyhq.com/posting-api/job-board/initech?includeCompensation=true',
+      undefined,
+      'https://api.ashbyhq.com/posting-api/job-board/initech',
+    ]);
+  });
+
+  it.each(['ats_greenhouse', 'ats_lever', 'ats_ashby'])(
+    '%s: a slug no board has is no board, and nothing is requested',
+    async (kind) => {
+      const { identity, api } = siteOfKind(kind)!;
+      const asked: unknown[] = [];
+      const sctx = {
+        fetch: async (url: unknown) => {
+          asked.push(url);
+          throw new Error('not asked');
+        },
+        log: { warn: () => undefined },
+      } as unknown as SourceContext;
+      for (const slug of HOSTILE) {
+        expect(await api!.probe!(sctx, { site: identity.id, slug }), slug).toBe('no');
+      }
+      expect(asked).toEqual([]);
+    },
+  );
 
   it('normalizes a host (case, spaces, trailing dots) in one pass, however long', () => {
     const rule = { exact: 'boards-api.greenhouse.io' };
@@ -159,6 +220,8 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
         const page = new URL(site.board.pageUrl(board!));
         expect(matchesAny(page.hostname, site.pageHosts), page.href).toBe(true);
         expect(site.board.fromUrl(page)).toEqual(board);
+        // It names a board and no job.
+        expect(site.jobFromUrl(new URL(link)), link).toBeNull();
       }
     });
 
@@ -170,8 +233,10 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
       }
       const board = site.board!.fromUrl(new URL(site.samples.boardUrls[0]!))!;
       const job = site.jobFromUrl(new URL(site.samples.jobUrls[0]!))!;
-      const built = [urls.board(board.slug), urls.board(board.slug, { content: true })];
-      if (urls.job !== undefined) built.push(urls.job(board.slug, job.id));
+      const built = [urls.board(board), urls.board(board, { content: true })];
+      if (urls.page !== undefined) built.push(urls.page(board, 0), urls.page(board, 1));
+      if (urls.probe !== undefined) built.push(urls.probe(board));
+      if (urls.job !== undefined) built.push(urls.job(board, job.id));
       const hosts = built.map((u) => new URL(u).hostname);
       for (const h of hosts) expect(matchesAny(h, site.fetchHosts), h).toBe(true);
       for (const rule of site.fetchHosts) {
@@ -187,8 +252,11 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
       if (urls === undefined) return;
       const board = site.board!.fromUrl(new URL(site.samples.boardUrls[0]!))!;
       for (const bad of HOSTILE) {
-        expect(() => urls.board(bad), JSON.stringify(bad)).toThrow();
-        if (urls.job !== undefined) expect(() => urls.job!(board.slug, bad), bad).toThrow();
+        const named = { ...board, slug: bad };
+        expect(() => urls.board(named), JSON.stringify(bad)).toThrow();
+        if (urls.page !== undefined) expect(() => urls.page!(named, 0), bad).toThrow();
+        if (urls.probe !== undefined) expect(() => urls.probe!(named), bad).toThrow();
+        if (urls.job !== undefined) expect(() => urls.job!(board, bad), bad).toThrow();
       }
       for (const bad of HOSTILE) {
         expect(site.board!.configSchema.safeParse({ org: bad }).success, bad).toBe(false);
@@ -284,6 +352,9 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
         };
         await expect(run()).rejects.toThrow();
       }
+      if (network.probe !== undefined) {
+        expect(await network.probe(sctx, board)).toBe('unknown');
+      }
       if (network.holdsJob !== undefined) {
         expect(await network.holdsJob(sctx, board.slug, job.id, undefined)).toBe('unknown');
       }
@@ -325,6 +396,39 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
       // No other site's mail is read as this site's.
       for (const [other, file] of Object.entries(ALERT_FIXTURES)) {
         if (other !== site.id) expect(mod.alertEmail.parse(alertText(file)), other).toEqual([]);
+      }
+    });
+
+    it('asks a board whether it is serving a posting, and says when it has no answer', async () => {
+      const network = mod.api;
+      if (network?.probe === undefined) return;
+      const board = site.board!.fromUrl(new URL(site.samples.boardUrls[0]!))!;
+      const answer = (status: number, body: string) =>
+        ({
+          fetch: async () => ({ status, headers: new Headers(), body: Buffer.from(body) }),
+          log: { warn: () => undefined },
+        }) as unknown as SourceContext;
+      const listed = JSON.stringify(fixture(`${site.id}.json`));
+      for (const status of [429, 500, 503]) {
+        expect(await network.probe(answer(status, listed), board), `${status}`).toBe('unknown');
+      }
+      for (const status of [301, 400, 403, 404]) {
+        expect(await network.probe(answer(status, listed), board), `${status}`).toBe('no');
+      }
+      expect(await network.probe(answer(200, listed), board)).toBe('yes');
+      for (const body of ['[]', '{}', '{"jobs":[]}', '{"jobs":{}}', 'null', 'not json', '']) {
+        expect(await network.probe(answer(200, body), board), body).toBe('no');
+      }
+    });
+
+    it('reads the links of its recorded API answer', () => {
+      const links = mod.api?.boardLinks;
+      if (links === undefined) return;
+      const read = links(fixture(`${site.id}.json`));
+      expect(read.length).toBe(API_FIXTURES[site.id]!().length);
+      for (const link of read) {
+        expect(link.text.trim()).not.toBe('');
+        expect(matchesAny(new URL(link.url).hostname, site.pageHosts), link.url).toBe(true);
       }
     });
 

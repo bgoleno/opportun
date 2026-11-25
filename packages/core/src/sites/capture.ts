@@ -1,5 +1,5 @@
 // The job sites the browser extension captures from (https://github.com/bgoleno/opportun/issues/769),
-// the first part of SITES (./index): a site here is listed once, here.
+// part of SITES (./index), after the ATS sites: a site here is listed once, here.
 //
 // Deliberately has no dependency outside this folder's dependency-free files. This file is bundled
 // into the extension through its own subpath export (@opportun/core/captureSites), so that the rest
