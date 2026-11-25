@@ -17,6 +17,7 @@ import { z } from 'zod';
 import { JOB_STATUSES, REJECTION_REASONS } from '../db/schema.shared';
 import { rejectCommunication } from '../repos/reject';
 import { requireUser } from '../repos/base';
+import { countUnclassified } from '../repos/classifyWait';
 import {
   acceptProposal,
   bulkTriage,
@@ -132,6 +133,20 @@ const RejectResponseSchema = z.object({
   blockFailureReason: z.enum(['unparseable_sender']).optional(),
 });
 
+const Count = z.number().int().nonnegative();
+const UnclassifiedSchema = z.object({
+  budget_exceeded: Count,
+  provider_error: Count,
+  failed: Count,
+  /** A later try of it is under way, or ended with its process today. */
+  trying: Count,
+  key_rejected: Count,
+  no_key: Count,
+  invalid_output: Count,
+  /** Would be tried again but for its age. */
+  no_longer_tried: Count,
+});
+
 export async function communicationRoutes(app: FastifyInstance): Promise<void> {
   const api = app.withTypeProvider<ZodTypeProvider>();
   const db = app.db;
@@ -158,6 +173,13 @@ export async function communicationRoutes(app: FastifyInstance): Promise<void> {
       },
     },
     async (req) => await bulkTriage(db, requireUser(req), req.body),
+  );
+
+  // Of the caller's messages that have no classification, how many say what (#1050). Numbers alone.
+  api.get(
+    '/communications/unclassified',
+    { schema: { response: { 200: UnclassifiedSchema } } },
+    async (req) => await countUnclassified(db, requireUser(req)),
   );
 
   api.get(

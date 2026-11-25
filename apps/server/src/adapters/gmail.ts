@@ -247,16 +247,24 @@ export function createGmailProvider(google: GoogleApi, conn: GoogleConn): MailPr
     /**
      * Reads one message again, by the id the row already holds. This is what replaces the stored
      * body for a classification that happens after the sync: Gmail is the one channel that can be
-     * asked, which is why `fetchBody` is optional on the provider rather than assumed.
+     * asked, which is why `readAgain` is optional on the provider rather than assumed.
      *
      * A message deleted in the mailbox answers 404, which is null here: there is nothing to read
      * and nothing to retry.
      */
-    async fetchBody(db, ctx, externalId) {
+    async readAgain(db, ctx, externalId) {
       const client = await conn.getClient(db, ctx, GMAIL_SCOPES);
       try {
         const msg = await withRateLimitRetry(() => google.gmailGetMessage(client, externalId));
-        return (await toInbound(msg, attachmentFetcherFor(client, msg.id))).bodyText;
+        const read = await toInbound(msg, attachmentFetcherFor(client, msg.id));
+        // Neither with what stands in for it: the sender or none, and Gmail's own time or none (the
+        // Date header is the sender's). Two messages that lack one are not the same by that.
+        const own = Number(msg.internalDate);
+        return {
+          ...read,
+          from: header(msg.payload, 'From'),
+          sentAt: Number.isFinite(own) && own > 0 ? own : 0,
+        };
       } catch (err) {
         if (googleErrorStatus(err) === 404) return null;
         throw err;

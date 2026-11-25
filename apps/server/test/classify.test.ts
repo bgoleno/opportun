@@ -242,8 +242,9 @@ describe('comms.classify job', () => {
       title: 'Staff Platform Engineer at Initech',
     });
 
+    // It is classified: nothing is sent, nothing made (#1050).
     await classify(app, a.userId, id);
-    expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runStructured)).toHaveBeenCalledTimes(1);
     expect(await oppsOf(app, a.userId)).toHaveLength(1);
     expect(
       await app.db
@@ -255,6 +256,7 @@ describe('comms.classify job', () => {
 
     // A second message about the same role (another thread) links instead of creating.
     const again = await insertMessage(app, a.userId, { subject: 'Following up' });
+    vi.mocked(runStructured).mockReset();
     classifierReturns({
       ...output,
       opportunityMatch: { company: 'Initech Inc.', title: 'Platform Engineer' },
@@ -840,6 +842,9 @@ describe('classifying without a stored body', () => {
     gmailFake = fakeGoogle();
   });
 
+  /** When every message here was sent, as Gmail says it and as its row does. */
+  const SENT_AT = 1_790_000_000_000;
+
   /** A row as ingest leaves it now: snippet, no body file, nothing in a payload. */
   async function stored(
     app: FastifyInstance,
@@ -860,7 +865,7 @@ describe('classifying without a stored body', () => {
           subject: 'Next steps',
           snippet: 'A short snippet and nothing more.',
           bodyText: '',
-          sentAt: Date.now(),
+          sentAt: SENT_AT,
         },
         { decision: 'passed', rule: 'vocabulary' },
       )
@@ -882,7 +887,7 @@ describe('classifying without a stored body', () => {
       to: ['me@example.com'],
       subject: 'Next steps',
       text: 'The whole message, which only Gmail still has.',
-      sentAt: Date.now(),
+      sentAt: SENT_AT,
     });
     const id = await stored(app, a.userId, 'gmail', 'refetch-1');
     classifierReturns({ classification: 'solicitation' });
@@ -910,9 +915,9 @@ describe('classifying without a stored body', () => {
       threadId: 'thread-refetch-large',
       from: 'Riley Recruiter <riley@acme.example>',
       to: ['me@example.com'],
-      subject: 'Full role description attached below',
+      subject: 'Next steps',
       largeText: 'The complete job description, too long for Gmail to inline as data.',
-      sentAt: Date.now(),
+      sentAt: SENT_AT,
     });
     const id = await stored(app, a.userId, 'gmail', 'refetch-large');
     classifierReturns({ classification: 'solicitation' });

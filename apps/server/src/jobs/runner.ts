@@ -29,6 +29,7 @@ import { contextFromTraceparent, isCollecting, obs } from '../obs';
 import { OTHER } from '../obs/catalog';
 import { errorType } from '../obs/outbound';
 import { RANK_BATCH_CLEANUP_KIND, RANK_WAITING_KIND } from '../lib/jobKinds';
+import { CLASSIFY_WAITING_KIND } from '../lib/mailClassifyQueue';
 import { finishInterruptedRuns } from './interruptedRuns';
 import { getJobHandler, type JobContext, type JobHandler, type JobServices } from './registry';
 import { jobWorkersSetting } from '../config';
@@ -91,6 +92,9 @@ export const DEFAULT_KIND_LIMITS: Readonly<Record<string, number>> = {
   // after another and a vendor's 429 cancels the rest before any of them starts.
   'company.network_probe': 1,
   [RANK_WAITING_KIND]: 2,
+  // A user's drain of waiting mail holds its worker, as rank_waiting's does (#1050): one, so that
+  // beside two of those the default pool of 4 has a worker left.
+  [CLASSIFY_WAITING_KIND]: 1,
   // A batch's provider cleanup (#686, tl): one at a time on the instance, so a provider that hangs
   // ties up one worker, not all of them.
   [RANK_BATCH_CLEANUP_KIND]: 1,

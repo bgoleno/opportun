@@ -45,6 +45,7 @@ import {
 import {
   ACTIVITY_KINDS,
   BODY_SOURCES,
+  CLASSIFY_WAITS,
   CLOSED_REASONS,
   COMM_CHANNELS,
   COMM_CLASSIFICATIONS,
@@ -1010,6 +1011,11 @@ export const communications = pgTable(
      * exists on disk, and unlike re-fetching it works for Apple Mail and LinkedIn too.
      */
     atsJobRefs: json<AtsJobRefRecord[]>('ats_job_refs'),
+    /** Why it has no classification, once its first job is over (#1050); core's CLASSIFY_WAITS. A
+     *  reason from that list and nothing of the message. */
+    classifyWait: text('classify_wait', { enum: CLASSIFY_WAITS }),
+    /** When a later try of it last began. */
+    classifyTriedAt: int('classify_tried_at'),
     /** Set when the user rejected this message as out of scope (spec D4). */
     rejectedAt: int('rejected_at'),
     rejectionReason: text('rejection_reason', { enum: REJECTION_REASONS }),
@@ -1021,6 +1027,10 @@ export const communications = pgTable(
     uniqueIndex('communications_user_channel_external_uq').on(t.userId, t.channel, t.externalId),
     index('communications_user_thread_idx').on(t.userId, t.threadKey),
     index('communications_opportunity_idx').on(t.opportunityId),
+    // The hourly sweep's question, and the Inbox's counts: few rows have one.
+    index('communications_classify_wait_idx')
+      .on(t.userId, t.classifyWait)
+      .where(sql`${t.classifyWait} IS NOT NULL`),
   ],
 );
 

@@ -15,6 +15,7 @@ import { z } from 'zod';
 import type { Db } from '../../db/client';
 import { communications } from '../../db/schema';
 import { senderAddress } from '../../lib/mailAddress';
+import { racePoint } from '../../lib/racePoints';
 import type { Storage } from '../../lib/storage';
 import type { UserCtx } from '../../repos/base';
 import { markAlertDigest } from '../../repos/communications';
@@ -91,6 +92,7 @@ export async function processAlertDigest(
         : (await buffer(await storage.openAttachment(row.bodyRef))).toString('utf8');
   const source = await alertSource(db, ctx);
   const { runId, stats } = await insertLeads(db, ctx, parseAlertDigest(text), source.id, row.id);
+  await racePoint('alertDigest.mark');
   await markAlertDigest(db, ctx, row.id);
   return { status: 'processed', runId, stats };
 }

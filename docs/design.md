@@ -273,12 +273,25 @@ either opportunity cannot re-propose a pair the user already rejected.
   before the body stopped being stored anywhere; no code path writes it), sent_at,
   classification, outreach_kind (`targeted` | `broadcast_spam` |
   `irrelevant`, nullable for non-outreach), mismatch_reason, confidence,
-  opportunity_id (nullable), contact_id (nullable), needs_review. The body is
+  opportunity_id (nullable), contact_id (nullable), needs_review, classify_wait (why a message that
+  passed the filter has no classification, once its first job is over: `budget_exceeded` |
+  `provider_error` | `failed` | `trying` | `key_rejected` | `no_key` | `invalid_output` | `blocked`;
+  null otherwise), classify_tried_at (when a later try last began). The body is
   never written to the database or to an attachment: it travels from ingestion to
   the comms.classify task in that job's own payload, which is cleared once the job
   finishes, so no copy of a message's text outlives classification. Outreach
   filtering acts only on these ingested copies; the user's mailbox is never
   modified (FR-M8).
+  A message that says `budget_exceeded`, `provider_error` or `failed` (or `trying` from an earlier UTC
+  day: that try ended with its process) is classified later, for 30 days from when it was received
+  ([#1050](https://github.com/bgoleno/opportun/issues/1050)): `comms.classify_waiting_sweep`, hourly,
+  queues one `comms.classify_waiting` a user, which takes them newest first, one call at a time, and
+  begins a call only while today's spend on comms.classify is under half of its budget. Gmail is asked
+  for the message again, and what it answers is used only if its sender, subject and date are the row's;
+  Apple Mail and LinkedIn have the snippet. A sender or a kind of message the user has blocked since is
+  not sent (`blocked`). After a 401 nothing of that user's is sent (`key_rejected`) until a key is added,
+  removed or found good, or the model policy for comms.classify is saved or reset. A result for a message
+  that was classified or rejected meanwhile is not applied.
 - **sync_state**: user_id, integration, cursor (JSON: Gmail historyId etc.),
   last_sync_at, status.
 

@@ -77,7 +77,9 @@ const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
  * opposite orders. A decision on a discovery result (accept, attach, create anyway, dismiss, undo:
  * routes/discovery.ts decidePending, #968) takes it first too, before it reads the result. The rows
  * after it: the opportunity's, its activities', the cascade, and the search rows last (#917). Nothing
- * outside the database runs under it.
+ * outside the database runs under it. The end of mail's stop at a refused key
+ * (jobs/classifyWaiting.ts, #1050) takes the key's lock (`discovery.key:<userId>`, always the first of
+ * its transaction) and then the user's, as it writes several messages.
  * Discovery's two locks join the order: the user's discovery lock (`discovery.ingest:<userId>`,
  * repos/discovery.ts ingestScope: a run storing a posting, and a capture, which then takes
  * `user:<id>` straight after it, before any row) comes before `user:<id>`, and the company's

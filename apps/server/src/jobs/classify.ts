@@ -15,17 +15,34 @@ import { seniorityRangeText, type BodySource } from '@opportun/core';
 import { and, desc, eq, notInArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { isAlertDigest, processAlertDigest } from '../adapters/sources/alertEmail';
-import type { Db } from '../db/client';
+import type { ReadAgain } from '../adapters/mailProvider';
+import { withTransaction, type Db } from '../db/client';
 import { decryptSecret } from '../lib/secretBox';
 import { communications, companies, opportunities, roleTargets } from '../db/schema';
 import { buildAiDeps } from '../lib/ai';
+import { senderAddress } from '../lib/mailAddress';
+import { triageMessage, triageSender, type TriageRule } from '../lib/mailTriage';
 import { line } from '../lib/promptText';
+import { racePoint } from '../lib/racePoints';
 import type { Storage } from '../lib/storage';
+import { triageContext } from '../lib/triageContext';
 import type { UserCtx } from '../repos/base';
-import { applyClassification, type ApplyOutcome } from '../repos/communications';
+import {
+  classifyKeyRejected,
+  readClassifyKeyChangedAt,
+  setClassifyFailedIfUnsaid,
+  setClassifyWait,
+} from '../repos/classifyWait';
+import {
+  applyClassification,
+  isSameMessage,
+  threadLinked,
+  type ApplyOutcome,
+} from '../repos/communications';
+import { keyChangeScope } from '../repos/discoveryBudget';
 import { getActivePrompt } from '../repos/prompts';
 import { enqueueEnrich } from './opportunityEnrich';
-import { requireService, type JobHandler } from './registry';
+import { requireService, type JobHandler, type JobServices } from './registry';
 
 /**
  * The classifier's structured output (Task 33 contract): classification, outreachKind (null
@@ -109,12 +126,38 @@ export async function openOpportunitiesText(db: Db, ctx: UserCtx): Promise<strin
   return rows.map((r) => `- ${line(r.company)} | ${line(r.title)} | ${r.stage}`).join('\n');
 }
 
+type Message = typeof communications.$inferSelect;
+
 /**
- * Reads one message's body again from its provider, for a row that has none stored
- * (Plan 3 Task 2). Null when it cannot be had: the channel cannot be asked, the message is gone,
- * or the attempt failed.
+ * Reads one message again from its provider, for a row that has no body stored (Plan 3 Task 2). Null
+ * when it cannot be had: the channel cannot be asked, the message is gone, or the attempt failed. What
+ * it answers is checked against the row before it is used (messageText).
  */
-export type BodyRefetch = (row: typeof communications.$inferSelect) => Promise<string | null>;
+export type BodyRefetch = (row: Message) => Promise<ReadAgain | null>;
+
+/** How a job reads a message again: Gmail alone can be asked. Nothing it answers is stored. */
+export function bodyRefetchFor(
+  db: Db,
+  ctx: UserCtx,
+  services: Partial<Pick<JobServices, 'mailProvider' | 'log'>>,
+): BodyRefetch {
+  const provider = services.mailProvider;
+  return async (row) => {
+    // The injected provider is Gmail's, so another channel's id would only buy a token refresh and a
+    // 404 for every message of a backfill.
+    if (row.channel !== 'gmail' || provider?.readAgain === undefined) return null;
+    try {
+      return await provider.readAgain(db, ctx, row.externalId);
+    } catch (err) {
+      // A worse classification, never a lost message.
+      services.log?.warn(
+        { 'opportun.communication.id': row.id, 'opportun.mail.channel': row.channel, err },
+        'could not read the message again; classifying on the snippet',
+      );
+      return null;
+    }
+  };
+}
 
 /**
  * What the classifier is shown, in order of how much it is worth: the body from the job payload
@@ -127,11 +170,12 @@ export type BodyRefetch = (row: typeof communications.$inferSelect) => Promise<s
  */
 async function messageText(
   storage: Storage,
-  row: typeof communications.$inferSelect,
+  row: Message,
   handed?: string,
   refetch?: BodyRefetch,
-): Promise<{ text: string; source: BodySource }> {
+): Promise<{ text: string; body: string; cc?: string[]; source: BodySource }> {
   let body = row.snippet ?? '';
+  let cc: string[] | undefined;
   let source: BodySource = 'snippet';
   if (handed !== undefined && handed.length > 0) {
     body = handed;
@@ -140,30 +184,112 @@ async function messageText(
     body = (await buffer(await storage.openAttachment(row.bodyRef))).toString('utf8');
     source = 'stored';
   } else if (refetch !== undefined) {
-    const fetched = await refetch(row);
-    if (fetched !== null && fetched.length > 0) {
-      body = fetched;
+    const read = await refetch(row);
+    // The mailbox connected now may not be the one this message came from, and an id may be another
+    // message's there: what is read is used only when it says that it is this one (#1050).
+    if (read !== null && read.bodyText.length > 0 && isSameMessage(row, read)) {
+      body = read.bodyText;
+      cc = read.cc;
       source = 'refetched';
     }
   }
-  if (body.length > MAX_BODY_CHARS) body = `${body.slice(0, MAX_BODY_CHARS)}\n[truncated]`;
+  const shown =
+    body.length > MAX_BODY_CHARS ? `${body.slice(0, MAX_BODY_CHARS)}\n[truncated]` : body;
   const text = [
     `From: ${row.from}`,
     `To: ${row.to.join(', ')}`,
     `Subject: ${row.subject ?? ''}`,
     `Date: ${new Date(row.sentAt).toISOString()}`,
     '',
-    body,
+    shown,
   ].join('\n');
-  return { text, source };
+  return { text, body, ...(cc === undefined ? {} : { cc }), source };
+}
+
+/**
+ * What of the local check of the text (lib/mailTriage) is a block. Not `no_signal`, which is a
+ * snippet's too; a denied or a consumer sender has been one by the sender alone, with the same rules.
+ */
+const TEXT_VETOES: ReadonlySet<TriageRule> = new Set(['private_content', 'auto_unsubscribe']);
+
+/**
+ * The local check again, for a classification that has no text of its own job: it can be a month after
+ * the message came, and the user may have blocked its sender, or what it is, since (#1050, sec). With
+ * the rules as they are now, by the sender alone before anything is read again, and then with the text
+ * in hand, before the call. Nothing of what is stored changes by it (spec D7).
+ */
+async function blockedSince(
+  db: Db,
+  ctx: UserCtx,
+  row: Message,
+): Promise<{ sender: boolean; text: (body: string, cc?: string[]) => boolean }> {
+  const address = senderAddress(row.from);
+  const [rules, consumerVeto, selfAddress] = await triageContext(db, ctx);
+  const linked = await threadLinked(db, ctx, row.threadKey ?? '');
+  const sender = triageSender(address, rules, consumerVeto && !linked, selfAddress);
+  return {
+    sender: sender.decision === 'drop',
+    text: (body, cc) => {
+      const verdict = triageMessage({
+        address,
+        subject: row.subject ?? '',
+        body,
+        rules,
+        consumerVeto,
+        selfAddress,
+        threadLinked: linked,
+        digestSender: false,
+        recipients: row.to,
+        ...(cc === undefined ? {} : { cc }),
+      });
+      return verdict.decision === 'drop' && TEXT_VETOES.has(verdict.matchedRule);
+    },
+  };
+}
+
+/**
+ * Whether the user's calls are stopped (repos/classifyWait classifyKeyRejected), the message then
+ * saying so. Decided under the lock that ends a stop: one that had just ended would begin again by a
+ * message that read it a moment before, with nothing left to end it.
+ */
+async function stopsAtKey(db: Db, ctx: UserCtx, id: string): Promise<boolean> {
+  if (!(await classifyKeyRejected(db, ctx))) return false;
+  await racePoint('classify.stopped');
+  return await withTransaction(
+    db,
+    async (tx) => {
+      if (!(await classifyKeyRejected(tx, ctx))) return false;
+      await setClassifyWait(tx, ctx, id, 'key_rejected');
+      return true;
+    },
+    { scope: keyChangeScope(ctx) },
+  );
 }
 
 export type ClassifyRun =
   | { status: 'classified'; outcome: ApplyOutcome; bodySource: BodySource }
   | { status: 'alert_digest'; leads: number }
-  | { status: 'skipped'; reason: 'missing' | 'no_key' | 'no_prompt' | 'filtered' | 'rejected' };
+  | {
+      status: 'skipped';
+      reason:
+        | 'missing'
+        | 'no_key'
+        | 'no_prompt'
+        | 'filtered'
+        | 'rejected'
+        | 'classified'
+        | 'blocked'
+        | 'no_text'
+        | 'budget_exceeded'
+        | 'key_rejected'
+        | 'key_changed';
+    };
 
-/** Classifies one of the user's messages and applies the result. */
+/**
+ * Classifies one of the user's messages and applies the result. Where it cannot be for a reason that
+ * is not this message's, the row says which (repos/classifyWait): the budget, the key, or that the user
+ * has blocked it since. An outage or an unusable answer throws, as the caller's tries are its own.
+ */
 export async function classifyCommunication(
   db: Db,
   ctx: UserCtx,
@@ -186,8 +312,28 @@ export async function classifyCommunication(
   if (row.triageDecision === 'filtered') return { status: 'skipped', reason: 'filtered' };
   // The user rejected it: nothing more is made of it.
   if (row.rejectedAt !== null) return { status: 'skipped', reason: 'rejected' };
+  // The user's own correction, or another try's: nothing is sent.
+  if (row.classification !== null) return { status: 'skipped', reason: 'classified' };
+  const ownText = body !== undefined && body.length > 0;
+  const blocked = ownText ? null : await blockedSince(db, ctx, row);
+  const isBlocked = async (): Promise<ClassifyRun> => {
+    await setClassifyWait(db, ctx, row.id, 'blocked');
+    return { status: 'skipped', reason: 'blocked' };
+  };
+  if (blocked?.sender === true) return await isBlocked();
   if (await isAlertDigest(db, ctx, row.from)) {
-    const digest = await processAlertDigest(db, ctx, storage, row.id, body);
+    let text = body;
+    if (!ownText) {
+      const read = await messageText(storage, row, undefined, refetch);
+      // Its leads are in the whole of it, and marked as read it would not be read again: so nothing is
+      // made of a snippet (#1050).
+      if (read.source === 'snippet') {
+        await setClassifyWait(db, ctx, row.id, 'failed');
+        return { status: 'skipped', reason: 'no_text' };
+      }
+      text = read.body;
+    }
+    const digest = await processAlertDigest(db, ctx, storage, row.id, text);
     return {
       status: 'alert_digest',
       leads: digest.status === 'processed' ? digest.stats.inserted : 0,
@@ -195,7 +341,16 @@ export async function classifyCommunication(
   }
   const prompt = await getActivePrompt(db, ctx, 'comms.classify');
   if (prompt === undefined) return { status: 'skipped', reason: 'no_prompt' };
-  const { text: message, source: bodySource } = await messageText(storage, row, body, refetch);
+  // The provider has refused this user's key: each further call would only send it a message more
+  // (#261). It ends with the key, or with another policy for this task (resumeClassifyAfterKeyChange).
+  if (await stopsAtKey(db, ctx, row.id)) return { status: 'skipped', reason: 'key_rejected' };
+  const {
+    text: message,
+    body: read,
+    cc,
+    source: bodySource,
+  } = await messageText(storage, row, body, refetch);
+  if (blocked?.text(read, cc) === true) return await isBlocked();
   // The cacheable prefix ends before the message (#380): the instructions, the role targets and
   // the open opportunities repeat for every message of a sync batch; the router marks it for the
   // provider's cache when the provider and the prefix's size allow.
@@ -209,6 +364,9 @@ export async function classifyCommunication(
     'comms.classify',
   );
   let output: ClassifyOutput;
+  // Before the key is read for this call.
+  const callBegan = Date.now();
+  await racePoint('classify.call');
   try {
     output = await runStructured(await buildAiDeps(db, ctx), 'comms.classify', {
       system,
@@ -218,15 +376,37 @@ export async function classifyCommunication(
       promptId: prompt.id,
     });
   } catch (err) {
-    // Without a key nothing can succeed; the message stays unclassified until a re-run.
-    if (err instanceof AiUnavailableError && err.reason === 'no_key') {
-      return { status: 'skipped', reason: 'no_key' };
+    if (!(err instanceof AiUnavailableError)) throw err;
+    // Not back in the minutes the runner's tries take.
+    if (err.reason === 'budget_exceeded') {
+      await setClassifyWait(db, ctx, row.id, err.reason);
+      return { status: 'skipped', reason: err.reason };
     }
-    throw err;
+    if (err.reason !== 'no_key' && !err.keyRejected) throw err;
+    const reason = err.reason === 'no_key' ? 'no_key' : 'key_rejected';
+    // A call that began before the latest change says nothing about what there is now: it marks
+    // nothing, and is tried again with that. (A key's backfill may have passed this message by then.)
+    const stale = await withTransaction(
+      db,
+      async (tx) => {
+        if ((await readClassifyKeyChangedAt(tx, ctx)) > callBegan) return true;
+        await setClassifyWait(tx, ctx, row.id, reason);
+        return false;
+      },
+      { scope: keyChangeScope(ctx) },
+    );
+    return { status: 'skipped', reason: stale ? 'key_changed' : reason };
   }
   const outcome = await applyClassification(db, ctx, row.id, output, bodySource);
-  // Rejected meanwhile.
-  if (outcome === null) return { status: 'skipped', reason: 'rejected' };
+  if (outcome === null) {
+    // Rejected meanwhile, or classified: by the user, or by another try.
+    const now = await db
+      .select({ rejectedAt: communications.rejectedAt })
+      .from(communications)
+      .where(and(eq(communications.userId, ctx.userId), eq(communications.id, row.id)))
+      .get();
+    return { status: 'skipped', reason: now?.rejectedAt === null ? 'classified' : 'rejected' };
+  }
   // A just-created outreach opportunity enters the pipeline bare; enrichment goes and finds
   // the posting on the company's careers page or ATS board and fills the record (issue #16).
   if (outcome.createdOpportunityId !== null) {
@@ -280,32 +460,32 @@ export const classifyJob: JobHandler<z.infer<typeof PayloadSchema>> = {
   async run(db, payload, ctx) {
     if (ctx.userId === null) throw new Error('comms.classify needs a user');
     const user: UserCtx = { userId: ctx.userId, isAdmin: false };
-    // Only Gmail can be asked for a message again, and only this job needs to ask: the sync
-    // hands the body over directly. A failure here is a worse classification, never a lost
-    // message, so it is logged and the snippet is used.
-    const provider = ctx.services.mailProvider;
-    const refetch: BodyRefetch = async (row) => {
-      // The injected provider is Gmail's, so another channel's id would only buy a token
-      // refresh and a 404 for every message of a backfill.
-      if (row.channel !== 'gmail' || provider?.fetchBody === undefined) return null;
-      try {
-        return await provider.fetchBody(db, user, row.externalId);
-      } catch (err) {
-        ctx.services.log?.warn(
-          { 'opportun.communication.id': row.id, 'opportun.mail.channel': row.channel, err },
-          'could not read the message again; classifying on the snippet',
-        );
-        return null;
+    // Only Gmail can be asked for a message again, and only a run without the sync's own text asks.
+    let run: ClassifyRun | { status: 'skipped'; reason: 'provider_error' | 'invalid_output' };
+    try {
+      run = await classifyCommunication(
+        db,
+        user,
+        requireService(ctx, 'storage'),
+        payload.communicationId,
+        payloadBody(db, payload),
+        bodyRefetchFor(db, user, ctx.services),
+      );
+      // Tried again with the key there is now, by the runner: the text is in this job.
+      if (run.status === 'skipped' && run.reason === 'key_changed') {
+        throw new AiUnavailableError('provider_error', 'the key changed during the call');
       }
-    };
-    const run = await classifyCommunication(
-      db,
-      user,
-      requireService(ctx, 'storage'),
-      payload.communicationId,
-      payloadBody(db, payload),
-      refetch,
-    );
+      if (run.status === 'skipped' && run.reason === 'no_prompt') {
+        await setClassifyFailedIfUnsaid(db, user, payload.communicationId);
+      }
+    } catch (err) {
+      // The runner's tries are over: it is not dead but waits, and a later try takes it
+      // (jobs/classifyWaiting), or, for an answer nothing can be made of, none does.
+      if (!(err instanceof AiUnavailableError) || ctx.attempt < ctx.maxAttempts) throw err;
+      const reason = err.reason === 'invalid_output' ? 'invalid_output' : 'provider_error';
+      await setClassifyWait(db, user, payload.communicationId, reason);
+      run = { status: 'skipped', reason };
+    }
     // Condition 2 (issue #69): a classification run on the ~200-character snippet must be
     // distinguishable from one run on the full message, not just correct. The exception-path log
     // above covers why a refetch failed; this covers every way the chain can still land on the
@@ -326,6 +506,15 @@ export const classifyJob: JobHandler<z.infer<typeof PayloadSchema>> = {
             bodySource: run.bodySource,
           }
         : run,
+    );
+  },
+  // Whatever ended it, its text is cleared and nothing would say why the message is unclassified.
+  async onDead(db, payload, ctx) {
+    if (ctx.userId === null) return;
+    await setClassifyFailedIfUnsaid(
+      db,
+      { userId: ctx.userId, isAdmin: false },
+      payload.communicationId,
     );
   },
 };

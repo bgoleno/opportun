@@ -19,6 +19,12 @@ export interface InboundMessage {
   sentAt: number;
 }
 
+/** A message read again from its provider: its text, and what says that it is the one asked for. */
+export type ReadAgain = Pick<
+  InboundMessage,
+  'from' | 'to' | 'cc' | 'subject' | 'sentAt' | 'bodyText'
+>;
+
 export interface SyncItem {
   message: InboundMessage;
   nextCursor: unknown;
@@ -32,7 +38,8 @@ export interface MailProvider {
    */
   sync(db: Db, ctx: UserCtx, cursor: unknown | null): AsyncIterable<SyncItem>;
   /**
-   * One message's body, read again from the provider (Plan 3 Task 2).
+   * One message, read again from the provider (Plan 3 Task 2). The caller checks that it is the one it
+   * has a row of (repos/communications isSameMessage): the account may be another by then (#1050).
    *
    * Bodies are not stored, so a classification that happens later than the sync (the backfill
    * after an API key is added, a replay, the user asking for a re-classification) has nothing
@@ -41,7 +48,7 @@ export interface MailProvider {
    * server never reaches the Mac) and for a LinkedIn export (a file that is gone). Null means
    * the message itself is no longer there.
    */
-  fetchBody?(db: Db, ctx: UserCtx, externalId: string): Promise<string | null>;
+  readAgain?(db: Db, ctx: UserCtx, externalId: string): Promise<ReadAgain | null>;
 }
 
 /**

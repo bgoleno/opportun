@@ -49,7 +49,9 @@ import { rankBudgetHasRoom } from '../jobs/rankBudget';
 import { rankBudgetSkips, usageRollup } from '../repos/taskRuns';
 import { IdParams } from './common';
 import { DISCOVERY_RANK_KIND } from '../lib/jobKinds';
+import { resumeClassifyAfterKeyChange } from '../jobs/classifyWaiting';
 import { resumeAfterKeyChange } from '../jobs/discoveryRankWaiting';
+import { resumeAllAfterKeyChange } from '../jobs/keyChange';
 
 const TaskKeySchema = z.enum(TASK_KEYS);
 
@@ -314,6 +316,8 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       });
       // Ranking may now use another provider, whose key works.
       if (taskKey === DISCOVERY_RANK_KIND) await resumeAfterKeyChange(db, ctx);
+      // And mail; each task ends the stop of its own.
+      if (taskKey === 'comms.classify') await resumeClassifyAfterKeyChange(db, ctx);
       return {
         taskKey,
         // eslint-disable-next-line security/detect-object-injection -- taskKey is a TaskKey
@@ -332,6 +336,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
       const ctx = requireUser(req);
       await deletePolicyOverride(db, ctx, req.params.taskKey);
       if (req.params.taskKey === DISCOVERY_RANK_KIND) await resumeAfterKeyChange(db, ctx);
+      if (req.params.taskKey === 'comms.classify') await resumeClassifyAfterKeyChange(db, ctx);
       return reply.code(204).send(null);
     },
   );
@@ -371,7 +376,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
         detail: { id: req.params.secretId, provider: result.provider, ok: result.ok },
       });
       // The way back for a key the provider rejected and has since restored: the card says so.
-      if (result.ok) await resumeAfterKeyChange(db, ctx);
+      if (result.ok) await resumeAllAfterKeyChange(db, ctx);
       return result;
     },
   );
