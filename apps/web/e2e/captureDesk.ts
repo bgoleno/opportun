@@ -129,7 +129,8 @@ export class Desk {
           (await this.results()).filter(
             (r) => wanted.includes(r.posting.externalId ?? '') && (!ranked || r.aiScore !== null),
           ).length,
-        { timeout: 45_000 },
+        // Ranked a tenth of a second to a second after the mail is in: looked at that often (#1031).
+        { timeout: 45_000, intervals: [50] },
       )
       .toBe(wanted.length);
   }

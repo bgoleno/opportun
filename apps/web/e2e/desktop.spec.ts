@@ -24,6 +24,7 @@ import {
   type Locator,
   type Page,
 } from '@playwright/test';
+import { frames } from './boardDrag';
 import { adminStorageState, PASSWORD } from './helpers';
 import { ADMIN_ROUTES, USER_ROUTES } from './routes';
 import { KNOWN } from './widthKnown';
@@ -152,19 +153,36 @@ async function findings(page: Page): Promise<Finding[]> {
 async function expectStandard(page: Page, title: string, width: number): Promise<void> {
   const entry = KNOWN.get(title);
   const { unexcused, stale } = judge(entry?.excuses ?? [], width, await findings(page));
-  expect(unexcused, `${title} at ${width}px:\n  ${unexcused.join('\n  ')}`).toEqual([]);
-  expect(
-    stale,
-    `${title} at ${width}px no longer has these findings; if ${entry?.issue ?? 'its issue'} fixed them, remove their excuses from KNOWN`,
-  ).toEqual([]);
+  expect.soft(unexcused, `${title} at ${width}px:\n  ${unexcused.join('\n  ')}`).toEqual([]);
+  expect
+    .soft(
+      stale,
+      `${title} at ${width}px no longer has these findings; if ${entry?.issue ?? 'its issue'} fixed them, remove their excuses from KNOWN`,
+    )
+    .toEqual([]);
 }
 
-/** Opens `path` at this test's width and expects it to meet the standard. */
-async function expectRoute(page: Page, path: string, width: number): Promise<void> {
+/**
+ * Expects the view on screen to meet the standard at every width, opened once and resized: what it is
+ * laid out by is the window's width, read by CSS. Soft, so one run names every width that fails (#1031).
+ */
+async function expectAtEveryWidth(page: Page, title: string): Promise<void> {
+  for (const width of WIDTHS) {
+    await test.step(`${width}px wide`, async () => {
+      await page.setViewportSize({ width, height: HEIGHT });
+      await page.waitForFunction((w) => window.innerWidth === w, width, { polling: 'raf' });
+      await frames(page);
+      await expectStandard(page, title, width);
+    });
+  }
+}
+
+/** Opens `path` and expects it to meet the standard at every width. */
+async function expectRoute(page: Page, path: string): Promise<void> {
   await page.goto(path);
   await page.waitForLoadState('networkidle');
   await expect(page.locator('#main [data-layout]')).toBeVisible();
-  await expectStandard(page, path, width);
+  await expectAtEveryWidth(page, path);
 }
 
 // ---------------------------------------------------------------------------
@@ -381,78 +399,76 @@ async function seededWorkspace(page: Page, tag: string): Promise<string> {
 
 // ---------------------------------------------------------------------------
 
-for (const width of WIDTHS) {
-  test.describe(`${width}px wide`, () => {
-    for (const path of USER_ROUTES) {
-      test(path, async ({ browser }) => {
-        const { page, close } = await pageAt(browser, width, accounts.user);
-        try {
-          await expectRoute(page, path, width);
-        } finally {
-          await close();
-        }
-      });
+test.describe('at every desktop width', () => {
+  for (const path of USER_ROUTES) {
+    test(path, async ({ browser }) => {
+      const { page, close } = await pageAt(browser, WIDTHS[0], accounts.user);
+      try {
+        await expectRoute(page, path);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  for (const path of ADMIN_ROUTES) {
+    test(path, async ({ browser }) => {
+      const { page, close } = await pageAt(browser, WIDTHS[0], accounts.admin);
+      try {
+        await expectRoute(page, path);
+      } finally {
+        await close();
+      }
+    });
+  }
+
+  test('/opportunities/:id timeline with a long note', async ({ browser }) => {
+    const title = '/opportunities/:id timeline with a long note';
+    const { page, close } = await pageAt(browser, WIDTHS[0], accounts.seed);
+    try {
+      const id = await seededOpportunity(page, 'timeline');
+      await page.goto(`/opportunities/${id}`);
+      await expect(page.getByText('Call with the hiring manager.').first()).toBeVisible();
+      await expectAtEveryWidth(page, title);
+    } finally {
+      await close();
     }
-
-    for (const path of ADMIN_ROUTES) {
-      test(path, async ({ browser }) => {
-        const { page, close } = await pageAt(browser, width, accounts.admin);
-        try {
-          await expectRoute(page, path, width);
-        } finally {
-          await close();
-        }
-      });
-    }
-
-    test('/opportunities/:id timeline with a long note', async ({ browser }) => {
-      const title = '/opportunities/:id timeline with a long note';
-      const { page, close } = await pageAt(browser, width, accounts.seed);
-      try {
-        const id = await seededOpportunity(page, `timeline ${width}`);
-        await page.goto(`/opportunities/${id}`);
-        await expect(page.getByText('Call with the hiring manager.').first()).toBeVisible();
-        await expectStandard(page, title, width);
-      } finally {
-        await close();
-      }
-    });
-
-    test('/opportunities/:id details with a long job description', async ({ browser }) => {
-      const title = '/opportunities/:id details with a long job description';
-      const { page, close } = await pageAt(browser, width, accounts.seed);
-      try {
-        const id = await seededOpportunity(page, `details ${width}`);
-        await page.goto(`/opportunities/${id}`);
-        await page.getByRole('tab', { name: 'Details' }).click();
-        await expect(page.getByText('What we are looking for')).toBeVisible();
-        await expectStandard(page, title, width);
-      } finally {
-        await close();
-      }
-    });
-
-    test('/resumes/:id with text, a conversation and a match report', async ({ browser }) => {
-      const title = '/resumes/:id with text, a conversation and a match report';
-      const { page, close } = await pageAt(browser, width, accounts.seed);
-      try {
-        const id = await seededWorkspace(page, `workspace ${width}`);
-        await page.goto(`/resumes/${id}`);
-        await expect(page.getByRole('list', { name: 'Conversation' })).toContainText(
-          'Your platform work maps well to this role.',
-        );
-        // Both panels open expanded; the text being measured is inside them.
-        await expect(page.getByRole('button', { name: 'Hide document' })).toBeVisible();
-        await expect(page.getByRole('button', { name: 'Hide details' })).toBeVisible();
-        await expect(page.getByText('Infrastructure as code')).toBeVisible();
-        await expect(page.getByText(/Summary: You will own/)).toBeVisible();
-        await expectStandard(page, title, width);
-      } finally {
-        await close();
-      }
-    });
   });
-}
+
+  test('/opportunities/:id details with a long job description', async ({ browser }) => {
+    const title = '/opportunities/:id details with a long job description';
+    const { page, close } = await pageAt(browser, WIDTHS[0], accounts.seed);
+    try {
+      const id = await seededOpportunity(page, 'details');
+      await page.goto(`/opportunities/${id}`);
+      await page.getByRole('tab', { name: 'Details' }).click();
+      await expect(page.getByText('What we are looking for')).toBeVisible();
+      await expectAtEveryWidth(page, title);
+    } finally {
+      await close();
+    }
+  });
+
+  test('/resumes/:id with text, a conversation and a match report', async ({ browser }) => {
+    const title = '/resumes/:id with text, a conversation and a match report';
+    const { page, close } = await pageAt(browser, WIDTHS[0], accounts.seed);
+    try {
+      const id = await seededWorkspace(page, 'workspace');
+      await page.goto(`/resumes/${id}`);
+      await expect(page.getByRole('list', { name: 'Conversation' })).toContainText(
+        'Your platform work maps well to this role.',
+      );
+      // Both panels open expanded; the text being measured is inside them.
+      await expect(page.getByRole('button', { name: 'Hide document' })).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Hide details' })).toBeVisible();
+      await expect(page.getByText('Infrastructure as code')).toBeVisible();
+      await expect(page.getByText(/Summary: You will own/)).toBeVisible();
+      await expectAtEveryWidth(page, title);
+    } finally {
+      await close();
+    }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // The resume workspace's tailoring chat (issue https://github.com/bgoleno/opportun/issues/35):
