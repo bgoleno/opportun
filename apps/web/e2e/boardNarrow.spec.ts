@@ -5,7 +5,7 @@
 // drawn, in a real browser, with the mouse and with the keyboard.
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { announced, dialogIs, frames, withoutGlide } from './boardDrag';
-import { card, createOpportunity, registerUser } from './helpers';
+import { card, registerUser } from './helpers';
 
 const COLUMNS = [
   'New',
@@ -34,13 +34,20 @@ async function resize(page: Page, width: number, { settled = false } = {}) {
   await page.setViewportSize({ width, height: 900 });
   await page.waitForFunction((w) => window.innerWidth === w, width, { polling: 'raf' });
   await frames(page);
-  if (settled) await page.waitForTimeout(200);
+  if (settled) await page.waitForTimeout(100);
 }
 
 async function board(page: Page, expanded: readonly string[] = ['Dismissed', 'Closed']) {
   await page.setViewportSize({ width: 1920, height: 900 });
   await registerUser(page);
-  await createOpportunity(page, OPP);
+  const csrf = (await page.context().cookies()).find((c) => c.name === 'opportun_csrf')?.value;
+  const made = await page.request.post('/api/v1/opportunities', {
+    headers: { 'x-csrf-token': csrf ?? '' },
+    data: { companyName: OPP.company, title: OPP.title, sourceKind: 'manual' },
+  });
+  expect(made.status(), await made.text()).toBe(201);
+  await page.goto('/pipeline');
+  await expect(card(page, OPP.company, OPP.title)).toBeVisible();
   for (const name of expanded) await expand(page, name).click();
 }
 
@@ -561,6 +568,7 @@ for (const end of ENDS) {
       await resize(page, width, { settled: true });
       await unscroll();
       await drag(page, dragged, await pointIn(page, 'New'));
+      await announced(page, `${NAME} is over the New column.`);
       await expect(liveRegion(page), `${width} px`).toHaveText(`${NAME} is over the New column.`);
       await page.mouse.up();
       // The stage rules' answer, for the column it was over.

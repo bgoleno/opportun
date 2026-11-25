@@ -565,21 +565,24 @@ async function openWorkspace(
   look: Look = {},
 ) {
   const opened = await pageAt(browser, width, accounts.seed, look);
-  const id = await seededWorkspace(opened.page, tag);
-  await opened.page.goto(`/resumes/${id}`);
-  await expect(opened.page.getByRole('list', { name: 'Conversation' })).toContainText(
+  await loadWorkspace(opened.page, await seededWorkspace(opened.page, tag));
+  return opened;
+}
+
+async function loadWorkspace(page: Page, id: string) {
+  await page.goto(`/resumes/${id}`);
+  await expect(page.getByRole('list', { name: 'Conversation' })).toContainText(
     'Your platform work maps well to this role.',
   );
-  await expect(opened.page.getByText(/Summary: You will own/)).toBeVisible();
+  await expect(page.getByText(/Summary: You will own/)).toBeVisible();
   // The flow strip above the document grows by its steps once the resume's flow has loaded (the
   // resume list, its sends and the opportunity's submissions answer after the two lines above):
   // measured before that, the document moves down by the strip's growth after the page has been
   // scrolled, and a scroll check compares against a layout that is gone (#724). Its next-step
   // heading is that last change, so the geometry is read once it shows.
   await expect(
-    opened.page.getByRole('region', { name: 'Next step for this resume' }).getByRole('heading'),
+    page.getByRole('region', { name: 'Next step for this resume' }).getByRole('heading'),
   ).toBeVisible();
-  return opened;
 }
 
 test.describe('resume workspace chat column', () => {
@@ -907,68 +910,116 @@ const FOCUS_LOOKS: [string, Look][] = [
   ['forced colors', { forcedColors: 'active' }],
 ];
 
+/**
+ * `view` in each look, in one page: opened anew in each, so the focus starts where a view just opened
+ * has it, in the look it is opened in (#1031).
+ */
+async function inEachLook(
+  page: Page,
+  view: string,
+  open: () => Promise<unknown>,
+  check: (where: string) => Promise<void>,
+) {
+  for (const [lookName, look] of FOCUS_LOOKS) {
+    await test.step(`${view}, ${lookName}`, async () => {
+      await page.emulateMedia({
+        colorScheme: look.colorScheme ?? 'light',
+        forcedColors: look.forcedColors ?? 'none',
+      });
+      await open();
+      expect(
+        await page.evaluate(() => matchMedia('(forced-colors: active)').matches),
+        lookName,
+      ).toBe(look.forcedColors === 'active');
+      expect(await page.evaluate(() => document.documentElement.dataset.theme), lookName).toBe(
+        look.colorScheme ?? 'light',
+      );
+      await check(lookName);
+    });
+  }
+}
+
 test.describe('focus indicators are not cut off by scroll containers', () => {
   for (const width of [375, 1280, 1920]) {
-    for (const [lookName, look] of FOCUS_LOOKS) {
-      test(`${width}px, ${lookName}: pipeline row, Settings navigation, suggestion Apply`, async ({
-        browser,
-      }) => {
-        const tag = `focus clip ${lookName} ${width}`;
-        const { page, close } = await pageAt(browser, width, accounts.seed, look);
-        try {
-          const id = await seededOpportunity(page, tag);
-          await page.goto('/pipeline?view=table');
-          const row = page.locator(`tr[data-opportunity-id="${id}"]`);
-          await expect(row).toBeVisible();
-          await expectIndicatorWhole(page, 'the pipeline table row', row);
-        } finally {
-          await close();
-        }
+    test(`${width}px, light, dark and forced colors: pipeline row, Settings navigation, suggestion Apply`, async ({
+      browser,
+    }) => {
+      const tag = `focus clip ${width}`;
+      const { page, close } = await pageAt(browser, width, accounts.seed);
+      try {
+        const id = await seededOpportunity(page, tag);
+        const row = page.locator(`tr[data-opportunity-id="${id}"]`);
+        await inEachLook(
+          page,
+          'pipeline row',
+          async () => {
+            await page.goto('/pipeline?view=table');
+            await expect(row).toBeVisible();
+          },
+          (look) => expectIndicatorWhole(page, `${look}: the pipeline table row`, row),
+        );
+      } finally {
+        await close();
+      }
 
-        // The Settings navigation, as the admin, whose list is longest (Users and Jobs are
-        // admin-only), so it scrolls furthest on a phone. And its layout guard: padding the nav
-        // list's scroller (#70) must not move a link or add page scroll. So the first link still
-        // starts exactly where the navigation does, as it does without that padding, and the page
-        // is no wider than the window.
-        const admin = await pageAt(browser, width, accounts.admin, look);
-        try {
-          const page = admin.page;
-          await page.goto('/settings/account');
-          const nav = page.getByRole('navigation', { name: 'Settings sections' });
-          const links = nav.getByRole('link');
-          await expect(links.first()).toBeVisible();
-          const navBox = await nav.boundingBox();
-          const firstBox = await links.first().boundingBox();
-          const where = 'the first Settings link starts where the navigation does';
-          expect(firstBox?.x, where).toBeCloseTo(navBox?.x ?? Number.NaN, 1);
-          expect(firstBox?.y, where).toBeCloseTo(navBox?.y ?? Number.NaN, 1);
-          expect(
-            await page.evaluate(() => document.documentElement.scrollWidth),
-            'the page does not scroll sideways',
-          ).toBeLessThanOrEqual(width);
-          await expectIndicatorWhole(page, 'the first Settings link', links.first());
-          await expectIndicatorWhole(page, 'the last Settings link', links.last());
-          // Back again: on a phone the list is scrolled to its end by now.
-          await expectIndicatorWhole(
-            page,
-            'the first Settings link, reached with Shift+Tab',
-            links.first(),
-            true,
-          );
-        } finally {
-          await admin.close();
-        }
+      // The Settings navigation, as the admin, whose list is longest (Users and Jobs are
+      // admin-only), so it scrolls furthest on a phone. And its layout guard: padding the nav
+      // list's scroller (#70) must not move a link or add page scroll. So the first link still
+      // starts exactly where the navigation does, as it does without that padding, and the page
+      // is no wider than the window.
+      const admin = await pageAt(browser, width, accounts.admin);
+      try {
+        const page = admin.page;
+        const nav = page.getByRole('navigation', { name: 'Settings sections' });
+        const links = nav.getByRole('link');
+        await inEachLook(
+          page,
+          'Settings navigation',
+          async () => {
+            await page.goto('/settings/account');
+            await expect(links.first()).toBeVisible();
+          },
+          async (look) => {
+            const navBox = await nav.boundingBox();
+            const firstBox = await links.first().boundingBox();
+            const where = `${look}: the first Settings link starts where the navigation does`;
+            expect(firstBox?.x, where).toBeCloseTo(navBox?.x ?? Number.NaN, 1);
+            expect(firstBox?.y, where).toBeCloseTo(navBox?.y ?? Number.NaN, 1);
+            expect(
+              await page.evaluate(() => document.documentElement.scrollWidth),
+              `${look}: the page does not scroll sideways`,
+            ).toBeLessThanOrEqual(width);
+            await expectIndicatorWhole(page, `${look}: the first Settings link`, links.first());
+            await expectIndicatorWhole(page, `${look}: the last Settings link`, links.last());
+            // Back again: on a phone the list is scrolled to its end by now.
+            await expectIndicatorWhole(
+              page,
+              `${look}: the first Settings link, reached with Shift+Tab`,
+              links.first(),
+              true,
+            );
+          },
+        );
+      } finally {
+        await admin.close();
+      }
 
-        // A button inside the conversation's own scroll container (overflow-y: auto). Its own tag:
-        // the server refuses a second opportunity with the same company and title.
-        const workspace = await openWorkspace(browser, width, `${tag} workspace`, look);
-        try {
-          const apply = workspace.page.getByRole('button', { name: 'Apply' }).first();
-          await expectIndicatorWhole(workspace.page, 'the suggestion Apply button', apply);
-        } finally {
-          await workspace.close();
-        }
-      });
-    }
+      // A button inside the conversation's own scroll container (overflow-y: auto). Its own tag:
+      // the server refuses a second opportunity with the same company and title.
+      const workspace = await pageAt(browser, width, accounts.seed);
+      try {
+        const page = workspace.page;
+        const id = await seededWorkspace(page, `${tag} workspace`);
+        const apply = page.getByRole('button', { name: 'Apply' }).first();
+        await inEachLook(
+          page,
+          'suggestion Apply',
+          () => loadWorkspace(page, id),
+          (look) => expectIndicatorWhole(page, `${look}: the suggestion Apply button`, apply),
+        );
+      } finally {
+        await workspace.close();
+      }
+    });
   }
 });
