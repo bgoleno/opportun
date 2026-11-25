@@ -33,6 +33,16 @@ merged after it.
   unchanged
   ([#960](https://github.com/bgoleno/opportun/issues/960); PR
   [#965](https://github.com/bgoleno/opportun/pull/965)).
+- **Pipeline board: with both end columns expanded on a narrow screen, the other columns keep a whole
+  column, and on a phone the page never scrolls sideways.** The other columns keep one whole column
+  (288 px), or on a phone what two rails would leave of it. The end columns scroll sideways in an
+  area of their own beside them, each at least 160 px wide, and an expanded end column comes into
+  view, so at 768 px with both expanded a chain column is on screen again. At 1280 px and wider, or with either end column a rail, nothing changes. With exactly one end
+  column expanded on a phone, the other columns keep up to 112 px, the expanded one gives way from
+  288 px down to 160 px and the other one's rail stays whole, where the page scrolled sideways by up
+  to 64 px. A card's company and title now break anywhere, so a long unbroken word no longer makes
+  the page scroll sideways
+  ([#902](https://github.com/bgoleno/opportun/issues/902), [#997](https://github.com/bgoleno/opportun/issues/997); PRs [#991](https://github.com/bgoleno/opportun/pull/991), [#1009](https://github.com/bgoleno/opportun/pull/1009)).
 
 ### Opportunities and posting links
 
@@ -124,6 +134,30 @@ merged after it.
   before
   ([#936](https://github.com/bgoleno/opportun/issues/936); PR
   [#964](https://github.com/bgoleno/opportun/pull/964)).
+- **Posting: your own description is replaced only with your agreement, and a Re-derive never
+  overwrites one saved meanwhile.** At a posting you have edited, Review board copy, Find posting and
+  a paste in "Add the posting" ask "Replace your description?", saying that the edit can't be
+  recovered. The server refuses the replacement without that agreement (409 `already_described`);
+  the Apply panel never asks and says the description was kept. A Re-derive from a capture that
+  finds a description saved after it started writes nothing and the timeline note says the
+  description was kept ("Posting check: description kept"). A refused write does not undo a
+  confirmation
+  ([#858](https://github.com/bgoleno/opportun/issues/858), [#863](https://github.com/bgoleno/opportun/issues/863); PR [#1006](https://github.com/bgoleno/opportun/pull/1006)).
+- **Re-derive replaces only the description its page asked about.** If another description is
+  stored by then, whoever wrote it, nothing is replaced and the page says so (409
+  `description_changed`) and reads the opportunity again. `force` alone no longer replaces a
+  description of yours
+  ([#1010](https://github.com/bgoleno/opportun/issues/1010); PR [#1018](https://github.com/bgoleno/opportun/pull/1018)).
+- **Resumes: a tailored copy that was made is never refused after the copy.** When the opportunity
+  or base resume is deleted while the copy is made, the copy is kept as a resume that is not
+  attached to it, and the page says "The opportunity was deleted while the copy was made, so the
+  resume is not attached to one." A failure of the database says where the copy is, in Resumes or in
+  Google Docs, instead of leaving an unseen copy
+  ([#962](https://github.com/bgoleno/opportun/issues/962); PR [#1005](https://github.com/bgoleno/opportun/pull/1005)).
+- **Import: a row whose opportunity was deleted meanwhile says so, and the rest is imported.** The
+  report says "the opportunity was deleted while the import ran" at its line. Before, the whole
+  import failed and the job was tried again, up to three times
+  ([#934](https://github.com/bgoleno/opportun/issues/934); PR [#1032](https://github.com/bgoleno/opportun/pull/1032)).
 
 ### Sign-in and settings
 
@@ -163,6 +197,19 @@ merged after it.
   characters as the server does. No message shows the AI key or any part of it
   ([#896](https://github.com/bgoleno/opportun/issues/896); PR
   [#933](https://github.com/bgoleno/opportun/pull/933)).
+- **Sign-in: the reason is said once, and the page asked for survives a provider's round trip.** The
+  sign-in page takes the reason it was sent with out of its address, so a reload or Back says
+  nothing. The page you asked for is kept in your browser, never by the server, and only one of the
+  app's own pages is opened after the sign-in
+  ([#942](https://github.com/bgoleno/opportun/issues/942); PR [#1019](https://github.com/bgoleno/opportun/pull/1019)).
+- **Settings > Security says the result of linking an account once, not again on a reload.** The
+  provider's confirmation for setting a password stays until it is used or has run out, five minutes
+  ([#1021](https://github.com/bgoleno/opportun/issues/1021); PR [#1025](https://github.com/bgoleno/opportun/pull/1025)).
+- **Errors: more refusals say what happened and what to do, instead of a code.** Unsuppress on a
+  result that is back in the review queue, finishing a tailoring session twice, setting a password
+  for a provider that is not linked and setting one when the account has one each have a sentence,
+  and what they were about is read again
+  ([#927](https://github.com/bgoleno/opportun/issues/927), [#1016](https://github.com/bgoleno/opportun/issues/1016); PR [#1013](https://github.com/bgoleno/opportun/pull/1013)).
 
 ### Inbox
 
@@ -237,8 +284,23 @@ merged after it.
   ([#971](https://github.com/bgoleno/opportun/issues/971),
   [#967](https://github.com/bgoleno/opportun/issues/967); PR
   [#985](https://github.com/bgoleno/opportun/pull/985)).
+- **Discovery: a place linked while a role was open makes a card again once the role is over.**
+  A posting of another place that was linked into an opportunity makes a card, once, when it is
+  posted anew after the role is closed, dismissed or deleted. The very posting that was linked, or
+  captured, stays a duplicate. A capture of such a posting makes its own opportunity
+  ([#990](https://github.com/bgoleno/opportun/issues/990); PR [#995](https://github.com/bgoleno/opportun/pull/995)).
+- **Discovery: Unsuppress works on a result whose opportunity was deleted.** The result stays
+  recorded as accepted and its key is let go, so the next repost is judged fresh. Deleting an
+  opportunity lets no key go by itself: its repost is skipped as a duplicate until you unsuppress
+  its result. An opportunity that is still there, closed included, still refuses it
+  ([#1008](https://github.com/bgoleno/opportun/issues/1008); PR [#1023](https://github.com/bgoleno/opportun/pull/1023)).
+- **Discovery: Undo after Unsuppress takes the key back, or says the job is there already.** Where
+  the job is in your pipeline or in the review queue by then, the result stays dismissed and the page
+  says "1 not restored: this job is already in your pipeline" (or "in the review queue"), with
+  **View opportunity** or **Review queue**
+  ([#1020](https://github.com/bgoleno/opportun/issues/1020); PR [#1030](https://github.com/bgoleno/opportun/pull/1030)).
 
-### Dialogs
+### Dialogs, forms and toasts
 
 - **Dialogs: a button pressed just as a dialog closes opens its own dialog, which no longer closes
   at once, and Escape asks like the X does.** Before, the late close of the first dialog closed the
@@ -247,6 +309,17 @@ merged after it.
   on the button that opened it. Escape asks the dialog's parent, as the X and the backdrop do
   ([#975](https://github.com/bgoleno/opportun/issues/975); PR
   [#986](https://github.com/bgoleno/opportun/pull/986)).
+- **Dialogs: a long unbroken word from a job site or a message stays inside its dialog.** In
+  Discovery's posting, Capture, Find posting, Link, Merge, Dismiss result and "Already in your
+  pipeline?", and on the Inbox page, a long word no longer runs past the dialog and takes its
+  buttons with it
+  ([#954](https://github.com/bgoleno/opportun/issues/954); PR [#999](https://github.com/bgoleno/opportun/pull/999)).
+- **Forms: fields side by side line up, whichever has a hint or an error.** A field with no hint
+  started lower than the one beside it that had one
+  ([#951](https://github.com/bgoleno/opportun/issues/951); PR [#1001](https://github.com/bgoleno/opportun/pull/1001)).
+- **Toast: a click on a toast just drawn is the toast's.** Before, the click could go through to
+  the page under it for a moment after the toast appeared
+  ([#1014](https://github.com/bgoleno/opportun/issues/1014); PR [#1015](https://github.com/bgoleno/opportun/pull/1015)).
 
 ### Server and database
 
@@ -268,6 +341,10 @@ merged after it.
   `running` until the next start and was not run again until then
   ([#963](https://github.com/bgoleno/opportun/issues/963); PR
   [#972](https://github.com/bgoleno/opportun/pull/972)).
+- **MCP: no child an MCP server started is left running.** When the server exits, what it left is
+  asked to end, and what is still there after 2 seconds is killed. A process the server puts in a
+  session or group of its own is not reached
+  ([#1024](https://github.com/bgoleno/opportun/issues/1024); PR [#1027](https://github.com/bgoleno/opportun/pull/1027)).
 
 ### Docs
 
