@@ -317,6 +317,22 @@ describe('undo of a dismissal whose result was unsuppressed (#1020)', () => {
     expect(await s.pending()).toHaveLength(2);
   });
 
+  // sec on #1030: one of the request that it did not put there counts, as any card does.
+  it('beside one of its own request that was pending before it: there already', async () => {
+    const s = await setup();
+    const id = await s.keyless();
+    const there = await s.result();
+    expect(await s.undo(id, there)).toEqual([
+      { id, outcome: 'duplicate' },
+      { id: there, outcome: 'already_decided' },
+    ]);
+    await stillDismissed(s, id);
+    expect(await s.undo(there, id)).toEqual([
+      { id: there, outcome: 'already_decided' },
+      { id, outcome: 'duplicate' },
+    ]);
+  });
+
   it('two of one card in two requests: the second is there already', async () => {
     const s = await setup();
     const [x, y] = [await s.result(), await s.result()];
@@ -329,6 +345,31 @@ describe('undo of a dismissal whose result was unsuppressed (#1020)', () => {
   });
 
   describe('against what comes at the same moment', () => {
+    // tl on #1030: a writer without the user's lock (the dedupe-key repair) is not written over. Only
+    // on Postgres can it write there; SQLite's gate keeps it out.
+    it.runIf(testDialect === 'postgres')(
+      'one that kept its key keeps what a repair makes of it meanwhile',
+      async () => {
+        const s = await setup();
+        const id = await s.result();
+        await s.dismiss(id);
+        onSlowTransaction(() => undefined);
+        const pause = pauseAt('discovery.undo.locked');
+        const undoing = s.undo(id);
+        await whileParked(
+          pause,
+          async () =>
+            await s.app.db
+              .update(discoveryResults)
+              .set({ dedupeKey: 'repaired' })
+              .where(eq(discoveryResults.id, id))
+              .run(),
+        );
+        expect(await undoing).toEqual([{ id, outcome: 'restored' }]);
+        expect(await s.read(id)).toMatchObject({ disposition: 'pending', dedupeKey: 'repaired' });
+      },
+    );
+
     it("an Accept of the repost's card first: held by its opportunity", async () => {
       const s = await setup();
       const id = await s.keyless();

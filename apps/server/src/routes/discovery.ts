@@ -734,7 +734,8 @@ export async function discoveryRoutes(app: FastifyInstance): Promise<void> {
             if (result.disposition !== 'dismissed')
               return { id, outcome: 'already_decided' as const };
             await racePoint('discovery.undo.locked');
-            const undone = await undoDismissal(tx, ctx, result, req.body.ids);
+            const together = results.filter((r) => r.outcome === 'restored').map((r) => r.id);
+            const undone = await undoDismissal(tx, ctx, result, together);
             if (undone.restored) return { id, outcome: 'restored' as const };
             return {
               id,

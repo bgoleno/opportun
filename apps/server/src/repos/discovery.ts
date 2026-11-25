@@ -820,8 +820,8 @@ export async function unsuppressResult(
  * (https://github.com/bgoleno/opportun/issues/967). Not another dismissed result, nor one whose
  * opportunity is gone or dismissed: they hold the key, but the job is not there. Nor one ingest linked
  * to a role since closed, which holds it only while its role is open
- * (https://github.com/bgoleno/opportun/issues/990). `together`: results undone by the same request,
- * which do not count against each other.
+ * (https://github.com/bgoleno/opportun/issues/990). `together`: results the same request has
+ * put back already, which do not count against the next.
  */
 async function keyHolder(
   tx: Exec,
@@ -877,7 +877,8 @@ async function keyHolder(
  * dismissed, with its feedback. Never a pending result with no key
  * (https://github.com/bgoleno/opportun/issues/1020). The ingest lock stays out of it (a run holds it,
  * routes/discovery.ts decidePending): a run that has just found the key free may add a second row,
- * which is the same card.
+ * which is the same card. After a purge of discovery content (jobs/purge.ts) the posting has no
+ * location left, so the key has none: a repost with one is a second row too, of the same card.
  */
 export async function undoDismissal(
   tx: Exec,
@@ -886,8 +887,10 @@ export async function undoDismissal(
   together: readonly string[],
 ): Promise<{ restored: true } | { restored: false; opportunityId: string | null }> {
   const { company, title, location } = result.posting;
-  const key = result.dedupeKey ?? dedupeKey(company, title, location);
-  if (result.dedupeKey === null) {
+  // Written only where there was none: one that kept its key keeps what a writer without the user's
+  // lock (the dedupe-key repair) makes of it.
+  const key = result.dedupeKey === null ? dedupeKey(company, title, location) : undefined;
+  if (key !== undefined) {
     const holder = await keyHolder(tx, ctx, key, title, together);
     if (holder !== null) return { restored: false, ...holder };
   }
@@ -897,7 +900,11 @@ export async function undoDismissal(
     .run();
   await tx
     .update(discoveryResults)
-    .set({ disposition: 'pending', dedupeKey: key, updatedAt: Date.now() })
+    .set({
+      disposition: 'pending',
+      ...(key === undefined ? {} : { dedupeKey: key }),
+      updatedAt: Date.now(),
+    })
     .where(ownedResult(ctx, result.id))
     .run();
   return { restored: true };
