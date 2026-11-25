@@ -1446,14 +1446,20 @@ describe('first password for an account created by OAuth sign-in (rulings R3, M-
     // Only providers this account has linked can be used, and only by passwordless accounts.
     const google = await c.request('POST', '/api/v1/auth/oauth/google/setpw', {});
     expect(google.statusCode).toBe(409);
-    expect(google.json().error.code).toBe('not_linked');
+    expect(google.json().error).toEqual({
+      code: 'not_linked',
+      message: 'This provider is not linked to your account. Confirm with one that is.',
+    });
     const withPassword = await a.request({
       method: 'POST',
       url: '/api/v1/auth/oauth/github/setpw',
       payload: {},
     });
     expect(withPassword.statusCode).toBe(409);
-    expect(withPassword.json().error.code).toBe('has_password');
+    expect(withPassword.json().error).toEqual({
+      code: 'has_password',
+      message: 'Your account already has a password. To change it, enter the current one.',
+    });
   });
 
   it("another session's grant is refused; the state is bound to its session", async () => {

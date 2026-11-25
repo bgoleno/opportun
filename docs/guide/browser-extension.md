@@ -87,8 +87,8 @@ that carries the full description and stays correct when the company edits it.
 
 If you edit the description yourself before the board check finishes, your text is kept and the
 check is flagged for you to decide about: the note then offers **Review board copy**, which
-looks the posting up so you can take the company's version if you want it. Nothing replaces
-your own writing unless you ask for it.
+asks first, then looks the posting up and takes the company's version. Nothing replaces
+your own writing unless you agree to it.
 
 Feeds, search result lists, company pages and the signed-out page are refused, and the popup
 says why. On Indeed, a search or the home page with no job opened and a company page are refused in the popup

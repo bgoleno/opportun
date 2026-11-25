@@ -161,6 +161,36 @@ describe('findPosting', () => {
     expect(asked).toEqual([{ kind: 'ats_greenhouse', org: 'brightforge' }]);
   });
 
+  it('does not read the reference of a rejected message', async () => {
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    await createCompany(app.db, ctx, {
+      name: 'Lumen Analytics',
+      atsKind: 'ats_greenhouse',
+      atsRef: 'brightforge',
+      atsVerifiedAt: Date.now(),
+    });
+    const opp = await createOpportunity(app.db, ctx, {
+      companyName: 'Lumen Analytics',
+      title: 'Staff Product Manager',
+      sourceKind: 'import',
+    });
+    await linkedMail(app, a, opp.id, 'https://boards.greenhouse.io/brightforge/jobs/5550002002', {
+      bodyRef: null,
+    });
+    await app.db
+      .update(communications)
+      .set({ rejectedAt: Date.now(), rejectionReason: 'spam' })
+      .where(eq(communications.opportunityId, opp.id));
+    const { lookup } = board([posting('Senior Product Manager, Lumen Models', '5550002002')]);
+    const out = await findPosting(app.db, ctx, opp.id, sctx(), {
+      readBody: async () => 'https://boards.greenhouse.io/brightforge/jobs/5550002002',
+      board: lookup,
+    });
+    expect(out).not.toMatchObject({ via: 'email_link' });
+    expect(out).not.toMatchObject({ status: 'exact' });
+  });
+
   it('asks for confirmation when the reference is on a board the company does not own', async () => {
     const { app, a } = await boot();
     const ctx = ctxOf(a);

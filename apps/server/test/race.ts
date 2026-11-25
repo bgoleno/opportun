@@ -9,8 +9,10 @@ import { onSlowTransaction } from '../src/db/gate';
 import { setRaceHook } from '../src/lib/racePoints';
 import type { Exec } from '../src/repos/base';
 import { queryOne, type HasDb } from './db';
+import { PATIENCE_MS } from './patience';
 
-const ARRIVAL_TIMEOUT_MS = 3000;
+/** As OBSERVE_DEADLINE_MS: it ends a test in which a caller never arrives, however loaded the host. */
+const ARRIVAL_TIMEOUT_MS = PATIENCE_MS;
 
 export interface Barrier {
   /** How many callers reached the point (the test asserts it saw the interleaving). */
@@ -22,7 +24,7 @@ afterEach(() => {
 });
 
 /** Holds the first `parties` callers of `point` until all have arrived. */
-export function holdAt(point: string, parties = 2): Barrier {
+export function holdAt(point: string, parties = 2, arrivalMs = ARRIVAL_TIMEOUT_MS): Barrier {
   let count = 0;
   let open!: () => void;
   let fail!: (err: Error) => void;
@@ -37,7 +39,7 @@ export function holdAt(point: string, parties = 2): Barrier {
     if (count === 1) {
       timer = setTimeout(
         () => fail(new Error(`only ${count} of ${parties} callers reached race point ${point}`)),
-        ARRIVAL_TIMEOUT_MS,
+        arrivalMs,
       );
     }
     if (count === parties) {
@@ -89,6 +91,19 @@ export function pauseAt(point: string): Pause {
   return { reached, release: () => go(), arrived: () => count };
 }
 
+/**
+ * Runs `act` while a caller is parked at `pause`, and lets it go however that ends: a failure in
+ * `act` must not leave it parked, or the app's close waits for it instead of naming the failure.
+ */
+export async function whileParked<T>(pause: Pause, act: () => Promise<T>): Promise<T> {
+  try {
+    await pause.reached;
+    return await act();
+  } finally {
+    pause.release();
+  }
+}
+
 /** How often the held-apart oracle looks at the second caller. */
 const POLL_MS = 10;
 
@@ -99,7 +114,7 @@ const POLL_MS = 10;
  * nothing is ever seen (a harness bug, or a caller held somewhere other than a lock), and it
  * stays well inside the 30 s test timeout so that failure names its cause.
  */
-const OBSERVE_DEADLINE_MS = 10_000;
+const OBSERVE_DEADLINE_MS = PATIENCE_MS;
 
 /** What the oracle saw the second caller do while the first was parked. */
 export type Seen = 'waiting' | 'arrived' | 'settled';
@@ -197,12 +212,12 @@ export async function heldApart<A, B>(
 }
 
 /**
- * Whether somebody came to be blocked within 5 s: on any lock on Postgres (a row's too, unlike
+ * Whether somebody came to be blocked within PATIENCE_MS: on any lock on Postgres (a row's too, unlike
  * settledOrWaiting), at the gate on SQLite. Look before letting the parked one go and assert after,
  * so a failure leaves nothing parked.
  */
 export async function someoneBlocked(app: HasDb): Promise<boolean> {
-  const deadline = performance.now() + 5_000;
+  const deadline = performance.now() + PATIENCE_MS;
   for (;;) {
     const gate = writeGateOf(app.db);
     const n =

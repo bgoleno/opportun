@@ -9,6 +9,8 @@ import {
   NormalizedPostingSchema,
   sameTitle,
   type NormalizedPosting,
+  type OpportunityStage,
+  type RankSkipReason,
 } from '@opportun/core';
 import { and, eq, inArray, ne } from 'drizzle-orm';
 import { isLockTimeout, lockScope, withTransaction, type Db } from '../db/client';
@@ -64,16 +66,29 @@ export interface RunStats {
 type DuplicateCheck = 'duplicate' | 'multi_posted' | 'new';
 
 /**
+ * A result ingest linked whose opportunity is closed, dismissed or gone (no stage). Nobody decided it,
+ * so it holds its key only while its role is open: after that a posting of its place is a new opening
+ * (the owner; https://github.com/bgoleno/opportun/issues/990).
+ */
+const isLinkedToNoneOpen = (r: {
+  rankSkipReason: RankSkipReason | null;
+  stage: OpportunityStage | null;
+}): boolean =>
+  r.rankSkipReason === 'linked' &&
+  (r.stage === null || r.stage === 'closed' || r.stage === 'dismissed');
+
+/**
  * By the key, and by the whole title with it (sameTitle): the key strips a level, and another level at
  * the same place is another job (the owner, on https://github.com/bgoleno/opportun/issues/967). A
  * stored posting without a title is compared by its key alone.
  *
  * Duplicates: a live (non-dismissed) opportunity with the key; any result with the key the user
- * already decided on (accepted or dismissed), so an attached, force-accepted or merged-away
- * posting is not re-suggested on the next poll; a pending result with the key from this same
- * source; or any earlier result from this same source with the posting's externalId (a repost
- * whose title or location drifted); or the very posting, by its id on its site, of an opportunity it
- * was captured into (#971). A pending result from another source makes it multi-posted.
+ * already decided on (accepted or dismissed; not one ingest linked to a role since over,
+ * isLinkedToNoneOpen), so an attached, force-accepted or merged-away posting is not re-suggested on
+ * the next poll; a pending result with the key from this same source; or any earlier result from this
+ * same source with the posting's externalId (a repost whose title or location drifted); or the very
+ * posting, by its id on its site, of an opportunity it was captured into (#971). A pending result from
+ * another source makes it multi-posted.
  */
 async function checkDuplicate(
   exec: Exec,
@@ -102,13 +117,16 @@ async function checkDuplicate(
       disposition: discoveryResults.disposition,
       sourceId: discoveryRuns.sourceId,
       title: jsonText(discoveryResults.posting, 'title'),
+      rankSkipReason: discoveryResults.rankSkipReason,
+      stage: opportunities.stage,
     })
     .from(discoveryResults)
     .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
+    .leftJoin(opportunities, eq(opportunities.id, discoveryResults.opportunityId))
     .where(and(eq(discoveryResults.userId, ctx.userId), eq(discoveryResults.dedupeKey, key)))
     .all();
   const rows = withKey.filter(({ title }) => title === null || sameTitle(title, posting.title));
-  if (rows.some((r) => r.disposition !== 'pending')) return 'duplicate';
+  if (rows.some((r) => r.disposition !== 'pending' && !isLinkedToNoneOpen(r))) return 'duplicate';
   const pending = rows.filter((r) => r.disposition === 'pending');
   if (pending.some((r) => r.sourceId === sourceId)) return 'duplicate';
   if (externalId != null) {

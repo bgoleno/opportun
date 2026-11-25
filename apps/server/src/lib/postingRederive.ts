@@ -39,12 +39,17 @@
 // context to make up for data that was never kept. The deterministic extraction has no such
 // gap: it is already the accepted quality bar for a live capture with no AI key, so re-derive
 // holds itself to the same bar rather than inventing a second, approximate path.
-import { capturedPage, confirm } from './postingReconcile';
+import { capturedPage, confirm, writeReconcileNote } from './postingReconcile';
 import type { SourceContext } from '../adapters/discoverySource';
 import type { Db } from '../db/client';
 import { createActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
-import { getOpportunity, updateOpportunity, type OpportunityView } from '../repos/opportunities';
+import {
+  DescriptionChanged,
+  getOpportunity,
+  updateOpportunity,
+  type OpportunityView,
+} from '../repos/opportunities';
 import { HttpError } from './errors';
 import { storedDescriptionOf } from './captureRecognizers';
 import { descriptionFingerprint, isSystemWritten } from './postingFingerprint';
@@ -58,7 +63,7 @@ export type RederiveOutcome =
   | { kind: 'capture_only'; opportunity: OpportunityView }
   /** The capture's site found no description in it (or has no recognizer); nothing was changed. */
   | { kind: 'no_description_found' }
-  /** The description changed while the board was read, so nothing was written (#851). */
+  /** The description changed while the board was read, so it was left as it is (#851, #858). */
   | { kind: 'left_alone'; opportunity: OpportunityView };
 
 /**
@@ -69,12 +74,21 @@ export type RederiveOutcome =
  * protects that same decision from an automatic background run, and a manual re-derive deserves
  * no less care, even though it is a person pressing a button rather than a job running on its
  * own schedule.
+ *
+ * For their own description, `force` is not enough (#1010): `agreed`, its fingerprint, says that
+ * this is the text they were asked about. A page can ask with another one on it, or with none.
  */
-function blockingReason(opp: OpportunityView): 'already_described' | 'user_confirmed' | null {
-  if (opp.postingState === 'confirmed' && opp.postingStateDetail === 'user_confirmed') {
+function blockingReason(
+  opp: OpportunityView,
+  force: boolean,
+  agreed: boolean,
+): 'already_described' | 'user_confirmed' | null {
+  if (!force && opp.postingState === 'confirmed' && opp.postingStateDetail === 'user_confirmed') {
     return 'user_confirmed';
   }
-  if (!isSystemWritten(opp.descriptionMd, opp.descriptionFingerprint)) return 'already_described';
+  if (!(force && agreed) && !isSystemWritten(opp.descriptionMd, opp.descriptionFingerprint)) {
+    return 'already_described';
+  }
   return null;
 }
 
@@ -94,11 +108,30 @@ export async function rederivePosting(
   ctx: UserCtx,
   opportunityId: string,
   sctx: SourceContext,
-  opts: { force?: boolean; board?: BoardLookup } = {},
+  opts: {
+    force?: boolean;
+    /** The fingerprint of the description the user was asked about ('' for none): see above. */
+    replaceAgreed?: string;
+    board?: BoardLookup;
+  } = {},
 ): Promise<RederiveOutcome> {
   const opp = await getOpportunity(db, ctx, opportunityId);
-  const reason = blockingReason(opp);
-  if (reason !== null && opts.force !== true) {
+  // Whoever wrote what is there now: it is not what was asked about, and the page shows something
+  // else. No fingerprint is an older page, or no question: a description of the user's is kept below.
+  if (
+    opts.replaceAgreed !== undefined &&
+    opts.replaceAgreed !== descriptionFingerprint(opp.descriptionMd ?? '')
+  ) {
+    throw new HttpError(
+      409,
+      'description_changed',
+      "This opportunity's description changed since this page showed it, so nothing was changed. Check the description, then try again.",
+      undefined,
+      { userFacing: true },
+    );
+  }
+  const reason = blockingReason(opp, opts.force === true, opts.replaceAgreed !== undefined);
+  if (reason !== null) {
     const message =
       reason === 'user_confirmed'
         ? 'You confirmed this posting yourself. Re-deriving would replace that decision.'
@@ -144,10 +177,29 @@ export async function rederivePosting(
   const derived = storedDescriptionOf(capture.siteId, capture.text);
   if (derived === null) return { kind: 'no_description_found' };
 
-  const updated = await updateOpportunity(db, ctx, opportunityId, {
-    descriptionMd: derived,
-    descriptionFingerprint: descriptionFingerprint(derived),
-  });
+  // Only over the description this started from (#858): the search above can take seconds, and what
+  // the user saved meanwhile is theirs, forced or not. The posting's state is no part of this path.
+  let updated: OpportunityView;
+  try {
+    updated = await updateOpportunity(
+      db,
+      ctx,
+      opportunityId,
+      { descriptionMd: derived, descriptionFingerprint: descriptionFingerprint(derived) },
+      { ifDescription: opp },
+    );
+  } catch (err) {
+    if (!(err instanceof DescriptionChanged)) throw err;
+    const opportunity = await getOpportunity(db, ctx, opportunityId);
+    await writeReconcileNote(
+      db,
+      ctx,
+      opportunityId,
+      'edited',
+      'The description changed while it was being re-derived from the capture, so it was left as it is.',
+    );
+    return { kind: 'left_alone', opportunity };
+  }
   await note(
     db,
     ctx,

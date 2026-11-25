@@ -65,10 +65,20 @@ const CandidateView = z.object({
 });
 
 /**
+ * The description the user agreed to lose, named by its fingerprint: text saved since is not covered
+ * by that, so it is kept. At `edited` (#858), and to a re-derive (#1010); without it, a description
+ * of the user's is always kept.
+ */
+const DescriptionAgreed = z.string().regex(/^[0-9a-f]{64}$/);
+
+/**
  * The posting state the page saw when Find posting was clicked ('none' for no state yet), so a
  * click landing after a background check confirmed the posting does not refetch it (#852).
  */
-const FindQuery = z.object({ seen: z.enum([...POSTING_STATES, 'none']).optional() });
+const FindQuery = z.object({
+  seen: z.enum([...POSTING_STATES, 'none']).optional(),
+  replaceDescription: DescriptionAgreed.optional(),
+});
 
 const FindResponse = z.object({
   /** 'identified' (#398): the opportunity's own careers link got its Greenhouse identity from
@@ -86,7 +96,8 @@ const FindResponse = z.object({
   unchanged: z.literal(true).optional(),
   /** What a Refetch changed (#866): absent on a first attach, and when `unchanged`. */
   changed: z.array(z.enum(POSTING_CHANGES)).optional(),
-  /** 'attached' with the user's own description left as it was, not compared with the board's. */
+  /** The posting was confirmed, with the user's own description left as it was, not compared with
+   *  the board's. */
   keptDescription: z.literal(true).optional(),
   /** Present when the outcome is 'attached' or 'identified'. */
   opportunity: OpportunityView.optional(),
@@ -110,13 +121,21 @@ const AttachBody = z
     posting: NormalizedPostingSchema.optional(),
     url: HttpsUrl.optional(),
     text: z.string().trim().min(1).max(200_000).optional(),
+    replaceDescription: DescriptionAgreed.optional(),
   })
   .strict()
   .refine((b) => [b.posting, b.url, b.text].filter((v) => v !== undefined).length === 1, {
     message: 'send exactly one of posting, url or text',
   });
 
-const RederiveBody = z.object({ force: z.boolean().optional() }).strict();
+const RederiveBody = z
+  .object({
+    /** The user was asked, and said yes: the description (or their confirmation) may be lost. */
+    force: z.boolean().optional(),
+    /** The description they were asked about: no other is replaced (#1010). */
+    replaceDescription: DescriptionAgreed.optional(),
+  })
+  .strict();
 
 const RederiveResponse = z.object({
   outcome: z.enum(['merged', 'capture_only', 'no_description_found', 'left_alone']),
@@ -125,13 +144,14 @@ const RederiveResponse = z.object({
 });
 
 /**
- * True when the description is the user's own writing, which outranks any board (design D11).
+ * True when the description is the user's own writing, which outranks any board (design D11), and
+ * they have not agreed to lose it (#858).
  * A description the system wrote (a capture, an earlier attach) may be looked up again, which
  * is what the needs-review banner's button does: before this, any description at all refused
  * the search, and a capture makes that permanently true.
  */
-function userWritten(opp: OpportunityRowView): boolean {
-  if (replaceAllowedByFlag(opp)) return false;
+function userWritten(opp: OpportunityRowView, agreed: string | undefined): boolean {
+  if (replaceAllowedByFlag(opp, agreed)) return false;
   return !isSystemWritten(opp.descriptionMd, opp.descriptionFingerprint);
 }
 
@@ -232,7 +252,9 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       // confirmed, has nothing to find. An embedded Greenhouse link still gets its identity, from
       // Greenhouse's API, with the description left as it is (#398, tl on #414). Not confirmed
       // yet, the board is read and a match confirms it, the description kept (#756).
-      if (userWritten(current)) {
+      const agreed = req.query.replaceDescription;
+      const usersOwn = userWritten(current, agreed);
+      if (usersOwn) {
         const identified = await identifyOwnLink(ctx, current, sctx);
         if (current.postingState === 'confirmed' && identified !== null) {
           // On the timeline, as every other way a posting is found (#813).
@@ -253,7 +275,11 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           await recordIdentified(db, ctx, id, identified.atsJobRef?.url ?? current.postingUrl!, {
             kept: true,
           });
-          return { outcome: 'identified' as const, opportunity: confirmed };
+          return {
+            outcome: 'identified' as const,
+            opportunity: confirmed,
+            keptDescription: true as const,
+          };
         }
         // Otherwise the board is read, and a match confirms it, the description kept. Confirmed
         // already (a Refetch, #812, tl): only its own job refreshes it, below.
@@ -263,7 +289,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       // (ownJobRef, found on the board): a title match, or another job a message names, never
       // replaces a confirmed identity by itself. It is offered instead (#812, tl).
       const ownJobOnly =
-        userWritten(current) &&
+        usersOwn &&
         current.postingState === 'confirmed' &&
         !(outcome.status === 'exact' && outcome.via === 'posting_link');
       if (ownJobOnly && (outcome.status === 'exact' || outcome.status === 'single')) {
@@ -302,7 +328,11 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
                 },
               }
             : { readFrom: outcome.readFrom },
-          { keepDescription: true, byFindPosting: true },
+          {
+            keepDescription: true,
+            byFindPosting: true,
+            ...(agreed === undefined ? {} : { replaceAgreed: agreed }),
+          },
         );
         const note = outcome.note === undefined ? {} : { note: outcome.note };
         // A Refetch says what it changed, or that it changed nothing (#835, #866, qa on #830 and
@@ -361,7 +391,9 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
       return workflow('capture', { userId: ctx.userId }, async () => {
         const { id } = req.params;
         const opp = await getOpportunity(db, ctx, id);
-        const { posting, text, url } = req.body;
+        const { posting, text, url, replaceDescription } = req.body;
+        const agreed =
+          replaceDescription === undefined ? {} : { replaceAgreed: replaceDescription };
         // Anything handed over here, a picked board row included, comes from the client: an
         // embedded Greenhouse link in it is checked on Greenhouse's API, never taken on trust (#398).
         const identity = {
@@ -377,6 +409,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           // description kept, as Find posting's own match does (#756).
           return attach(db, ctx, id, described, 'board', undefined, identity, {
             keepDescription: true,
+            ...agreed,
           });
         }
         if (text !== undefined) {
@@ -388,6 +421,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
             'paste',
             undefined,
             identity,
+            agreed,
           );
         }
         const page = await fetchPageText(
@@ -412,6 +446,7 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
           'paste',
           undefined,
           identity,
+          agreed,
         );
       });
     },
@@ -436,13 +471,16 @@ export async function opportunityPostingRoutes(app: FastifyInstance): Promise<vo
     { schema: { params: IdParams, response: { 200: RederiveResponse } } },
     async (req) => {
       const ctx = app.requireUser(req);
-      const { force } = RederiveBody.parse(req.body ?? {});
+      const { force, replaceDescription } = RederiveBody.parse(req.body ?? {});
       const outcome = await rederivePosting(
         db,
         ctx,
         req.params.id,
         { fetch: keyedFetch(app.jobs.services.sourceFetch, ctx.userId), log: req.log },
-        { force },
+        {
+          force,
+          ...(replaceDescription === undefined ? {} : { replaceAgreed: replaceDescription }),
+        },
       );
       return outcome.kind === 'no_description_found'
         ? { outcome: outcome.kind }

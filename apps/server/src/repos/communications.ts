@@ -10,7 +10,19 @@ import {
   type OpportunityStage,
   type OutreachKind,
 } from '@opportun/core';
-import { and, asc, desc, eq, isNotNull, isNull, ne, notInArray, or, type SQL } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  isNotNull,
+  isNull,
+  ne,
+  notInArray,
+  or,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import type { InboundMessage } from '../adapters/mailProvider';
 import {
   activities,
@@ -30,7 +42,13 @@ import type { Db, Exec, UserCtx } from './base';
 import { ownedBy } from './base';
 import { countWhere, likeContains, type Page } from './list';
 import { rejectCommunication } from './reject';
-import { createOpportunity, transitionOpportunity, type OpportunityView } from './opportunities';
+import {
+  afterStageChange,
+  createOpportunity,
+  transitionOpportunityIn,
+  type OpportunityView,
+} from './opportunities';
+import { sourceRefOf } from './rejectedContent';
 import { indexActivity, indexCommunication, removeFromIndex } from './search';
 import { lockScope, withTransaction } from '../db/client';
 
@@ -40,11 +58,6 @@ const MAX_SUBJECT = 998;
 const MAX_SNIPPET = 500;
 const MAX_ADDRESS = 998;
 
-/**
- * Inserts the message, or refreshes the descriptive fields of the row already stored for it.
- * Classification, links and review state are never touched here. `inserted` is true only for
- * a new row.
- */
 /** The references worth storing, or null when the message carries none. */
 function atsJobRefsOf(msg: InboundMessage): AtsJobRefRecord[] | null {
   const refs = extractAtsJobRefs(`${msg.subject}\n${msg.bodyText}`);
@@ -57,6 +70,12 @@ export interface TriageFields {
 }
 
 /**
+ * Inserts the message. One already stored stays as it was stored: only when it was delivered last
+ * is written, and, if it came with no text the first time, the text of the same message (the same
+ * sender, subject and date) and the references read with it. A rejected or filtered one keeps
+ * nothing of a delivery at all. `inserted` is true only for a new row, and `closed` for a message
+ * that is rejected or filtered, as the row says and not this delivery: it is not routed.
+ *
  * No parameter carries a stored body any more (issue #53). Plan 3 Task 1 stopped the mail ingest
  * path writing one, and the LinkedIn importer went on writing them for another day, because the
  * rule lived in the callers rather than in the writer they share. A parameter that still accepts
@@ -69,7 +88,7 @@ export async function upsertInbound(
   channel: CommChannel,
   msg: InboundMessage,
   triage?: TriageFields,
-): Promise<{ id: string; inserted: boolean }> {
+): Promise<{ id: string; inserted: boolean; closed: boolean }> {
   // A filtered message keeps its sender, date and identifiers (enough for the blocked view and
   // its deep link back to the original) and nothing that says what it was about. The incident
   // this guards against had its private content in the subject line, so blanking the subject
@@ -95,7 +114,14 @@ export async function upsertInbound(
   };
   const now = Date.now();
   const proposed = newId();
-  // One statement: insert, or refresh the row the unique (user_id, channel, external_id)
+  // On the row already there, in the statement itself: a reject can land between a read and it.
+  const sameMessageNoText = sql`${communications.rejectedAt} IS NULL
+    AND ${communications.triageDecision} IS DISTINCT FROM ${BLOCKED}
+    AND coalesce(${communications.snippet}, '') = ''
+    AND ${communications.from} IS NOT DISTINCT FROM excluded."from"
+    AND ${communications.subject} IS NOT DISTINCT FROM excluded.subject
+    AND ${communications.sentAt} IS NOT DISTINCT FROM excluded.sent_at`;
+  // One statement: insert, or meet the row the unique (user_id, channel, external_id)
   // index already holds. The row is new exactly when it carries the id proposed here.
   const row = await exec
     .insert(communications)
@@ -112,30 +138,38 @@ export async function upsertInbound(
       target: [communications.userId, communications.channel, communications.externalId],
       // Triage is insert-only. A message already stored was judged under the rules in force
       // when it arrived, and spec D7 is explicit that editing the lists affects future syncs
-      // and never stored history. Re-running the filter on an update would let one Gmail
-      // history-id expiry (which falls back to a full re-listing) blank the subject and
-      // snippet of every already-stored message a new rule now covers, orphan its body file,
-      // and leave its text in the search index with no row pointing at it.
-      set: filtered ? { updatedAt: now } : { ...fields, updatedAt: now },
+      // and never stored history: a full re-listing of the mailbox must change no stored row.
+      set: filtered
+        ? { updatedAt: now }
+        : {
+            snippet: sql`CASE WHEN ${sameMessageNoText}
+              THEN excluded.snippet ELSE ${communications.snippet} END`,
+            atsJobRefs: sql`CASE WHEN ${sameMessageNoText} AND ${communications.atsJobRefs} IS NULL
+              THEN excluded.ats_job_refs ELSE ${communications.atsJobRefs} END`,
+            updatedAt: now,
+          },
     })
-    .returning({ id: communications.id })
+    .returning({
+      id: communications.id,
+      rejectedAt: communications.rejectedAt,
+      triageDecision: communications.triageDecision,
+      subject: communications.subject,
+      snippet: communications.snippet,
+    })
     .get();
   if (row === undefined) throw new Error('upsertInbound: no row returned');
-  // A filtered row has no subject or snippet to index, and indexing it anyway would leave a
-  // fully searchable second copy of exactly the text this feature refuses to store. The
-  // removal is belt and braces: triage is insert-only, so a filtered row should never already
-  // carry an index entry, but an index row that outlived its text is the failure that is
-  // invisible until someone searches for it.
-  if (filtered) {
+  // As the row is now, whatever this delivery says: what it holds is what may be found.
+  const closed = row.rejectedAt !== null || row.triageDecision === BLOCKED;
+  // A filtered or rejected row has no subject or snippet to index, and indexing it anyway would
+  // leave a fully searchable second copy of exactly the text this feature refuses to store. The
+  // removal is belt and braces: such a row should never already carry an index entry, but an index
+  // row that outlived its text is the failure that is invisible until someone searches for it.
+  if (closed) {
     await removeFromIndex(exec, ctx, 'communication', row.id);
   } else {
-    await indexCommunication(exec, ctx, {
-      id: row.id,
-      subject: fields.subject,
-      snippet: fields.snippet,
-    });
+    await indexCommunication(exec, ctx, row);
   }
-  return { id: row.id, inserted: row.id === proposed };
+  return { id: row.id, inserted: row.id === proposed, closed };
 }
 
 // ---------------------------------------------------------------------------
@@ -661,6 +695,7 @@ async function threadLink(
             eq(communications.threadKey, comm.threadKey),
             ne(communications.id, comm.id),
             isNotNull(communications.opportunityId),
+            notRejected(),
           ),
         )
         .orderBy(desc(communications.sentAt), desc(communications.id))
@@ -735,7 +770,9 @@ export interface ApplyOutcome {
  * Stores a classifier result and derives everything else: the link (an existing link stays,
  * then thread continuity, then the company/title match), opportunity creation for unmatched
  * targeted outreach, the stored (never applied) transition proposal, and the review flag.
- * Running it twice for the same message creates nothing the second time.
+ * Running it twice for the same message creates nothing the second time. Null, and nothing is
+ * written, for a message rejected meanwhile: the row is read under the user's lock, which the reject
+ * takes too, in the one transaction that makes and writes everything.
  */
 export async function applyClassification(
   db: Db,
@@ -746,8 +783,7 @@ export async function applyClassification(
    * classification based on the ~200-character snippet is distinguishable afterward from one
    * based on the full message, not just correct or not. */
   bodySource: BodySource,
-): Promise<ApplyOutcome> {
-  const comm = await getRowSync(db, ctx, id);
+): Promise<ApplyOutcome | null> {
   const classification = out.classification;
   // A stated hard-constraint violation (pay below the target's floor, relocation against a
   // remote preference) makes solicitation irrelevant deterministically, whatever outreachKind
@@ -775,39 +811,47 @@ export async function applyClassification(
         }
       : null;
 
-  let opportunityId = comm.opportunityId;
-  if (opportunityId === null && !filtered) {
-    opportunityId =
-      (await threadLink(db, ctx, comm)) ??
-      (match === null ? undefined : (await resolveMatch(db, ctx, match, classification))?.id) ??
-      null;
-  }
-
-  let createdOpportunityId: string | null = null;
-  if (
-    opportunityId === null &&
-    classification === 'solicitation' &&
-    outreachKind === 'targeted' &&
-    match !== null
-  ) {
-    try {
-      const opp = await createOpportunity(db, ctx, {
-        companyName: match.company,
-        title: match.title,
-        sourceKind: 'communication',
-      });
-      opportunityId = opp.id;
-      createdOpportunityId = opp.id;
-    } catch (err) {
-      // The dedupe machinery is the backstop: an opportunity with the same key exists.
-      if (!(err instanceof HttpError && err.code === 'duplicate')) throw err;
-      const existing = err.details?.existingId;
-      if (typeof existing !== 'string') throw err;
-      opportunityId = existing;
-    }
-  }
-
+  // Not yet locked: a reject can land here.
+  await racePoint('classify.apply.read');
   return await withTransaction(db, async (tx) => {
+    // The user's lock before the message's row (the rule is at submissionScope).
+    await lockScope(tx, `user:${ctx.userId}`);
+    const comm = await getRowSync(tx, ctx, id);
+    if (comm.rejectedAt !== null) return null;
+    await racePoint('classify.apply.locked');
+
+    let opportunityId = comm.opportunityId;
+    if (opportunityId === null && !filtered) {
+      opportunityId =
+        (await threadLink(tx, ctx, comm)) ??
+        (match === null ? undefined : (await resolveMatch(tx, ctx, match, classification))?.id) ??
+        null;
+    }
+
+    let createdOpportunityId: string | null = null;
+    if (
+      opportunityId === null &&
+      classification === 'solicitation' &&
+      outreachKind === 'targeted' &&
+      match !== null
+    ) {
+      try {
+        const opp = await createOpportunity(tx, ctx, {
+          companyName: match.company,
+          title: match.title,
+          sourceKind: 'communication',
+        });
+        opportunityId = opp.id;
+        createdOpportunityId = opp.id;
+      } catch (err) {
+        // The dedupe machinery is the backstop: an opportunity with the same key exists.
+        if (!(err instanceof HttpError && err.code === 'duplicate')) throw err;
+        const existing = err.details?.existingId;
+        if (typeof existing !== 'string') throw err;
+        opportunityId = existing;
+      }
+    }
+
     const stage =
       opportunityId === null ? undefined : await opportunityStage(tx, ctx, opportunityId);
     const proposal = proposalFor(classification, out.proposedTransition, out.confidence, stage);
@@ -834,7 +878,7 @@ export async function applyClassification(
     if (createdOpportunityId !== null) {
       await tx
         .update(opportunities)
-        .set({ sourceRef: `${comm.channel}:${comm.externalId}`.slice(0, 500) })
+        .set({ sourceRef: sourceRefOf(comm) })
         .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, createdOpportunityId)))
         .run();
       const activity = await tx
@@ -872,10 +916,20 @@ export interface ReclassifyInput {
 
 const label = (v: string | null): string => v ?? 'none';
 
+const messageRejected = (): HttpError =>
+  new HttpError(
+    409,
+    'message_rejected',
+    'This message has been rejected, so it was left as it is.',
+    undefined,
+    { userFacing: true },
+  );
+
 /**
  * The user's correction: records a classification feedback row (FR-D6 pattern) and relinks.
  * A changed link drops the stored proposal, which was about the old opportunity. A rejected
- * message is refused and nothing is written, except that it can still be unlinked.
+ * message is refused and nothing is written, except that it can still be unlinked: only its link is
+ * written then, as nothing is said of it any more.
  */
 export async function reclassify(
   db: Db,
@@ -907,7 +961,7 @@ export async function reclassify(
     await racePoint('reclassify.read');
 
     const changes: string[] = [];
-    if (classification !== comm.classification) {
+    if (classification !== comm.classification && comm.rejectedAt === null) {
       changes.push(`classification ${label(comm.classification)} -> ${classification}`);
     }
     if (outreachKind !== comm.outreachKind) {
@@ -923,33 +977,30 @@ export async function reclassify(
     // put an entry with no subject or text on an opportunity's timeline. The condition is in the
     // UPDATE, so a reject that commits first leaves this changing nothing (as rejectCommunication
     // does the other way round).
+    const rejectedLink = comm.rejectedAt !== null && unlinkOnly;
     const updated = await tx
       .update(communications)
-      .set({
-        classification,
-        outreachKind,
-        mismatchReason: outreachKind === 'irrelevant' ? comm.mismatchReason : null,
-        // The user's own call: not read from any body, so a bodySource from whatever the
-        // classifier last ran on would now describe a classification this is no longer.
-        confidence: 1,
-        bodySource: null,
-        opportunityId,
-        proposedTransition: linkChanged || filtered ? null : comm.proposedTransition,
-        needsReview: needsReviewFor(classification, outreachKind, 1, opportunityId !== null),
-        updatedAt: now,
-      })
-      .where(and(ownedComm(ctx, id), unlinkOnly ? undefined : notRejected()))
+      .set(
+        rejectedLink
+          ? { opportunityId, updatedAt: now }
+          : {
+              classification,
+              outreachKind,
+              mismatchReason: outreachKind === 'irrelevant' ? comm.mismatchReason : null,
+              // The user's own call: not read from any body, so a bodySource from whatever the
+              // classifier last ran on would now describe a classification this is no longer.
+              confidence: 1,
+              bodySource: null,
+              opportunityId,
+              proposedTransition: linkChanged || filtered ? null : comm.proposedTransition,
+              needsReview: needsReviewFor(classification, outreachKind, 1, opportunityId !== null),
+              updatedAt: now,
+            },
+      )
+      .where(and(ownedComm(ctx, id), rejectedLink ? undefined : notRejected()))
       .returning({ id: communications.id })
       .all();
-    if (updated.length === 0) {
-      throw new HttpError(
-        409,
-        'message_rejected',
-        'This message has been rejected, so it was left as it is.',
-        undefined,
-        { userFacing: true },
-      );
-    }
+    if (updated.length === 0) throw messageRejected();
     await tx
       .insert(dismissalFeedback)
       .values({
@@ -969,7 +1020,8 @@ export async function reclassify(
 
 /**
  * A job alert digest (Task 12): stored, classified 'other' deterministically, never queued for
- * review and never linked or turned into an activity (a digest is not a conversation).
+ * review and never linked or turned into an activity (a digest is not a conversation). A rejected
+ * one is left as it is.
  */
 export async function markAlertDigest(exec: Exec, ctx: UserCtx, id: string): Promise<void> {
   await exec
@@ -985,22 +1037,24 @@ export async function markAlertDigest(exec: Exec, ctx: UserCtx, id: string): Pro
       proposedTransition: null,
       updatedAt: Date.now(),
     })
-    .where(ownedComm(ctx, id))
+    .where(and(ownedComm(ctx, id), notRejected()))
     .run();
 }
 
-/** Drops a stored proposal without applying it. */
+/** Drops a stored proposal without applying it. A rejected message has none: it is refused. */
 export async function dismissProposal(
   db: Db,
   ctx: UserCtx,
   id: string,
 ): Promise<CommunicationView> {
   await getRowSync(db, ctx, id);
-  await db
+  const updated = await db
     .update(communications)
     .set({ proposedTransition: null, updatedAt: Date.now() })
-    .where(ownedComm(ctx, id))
-    .run();
+    .where(and(ownedComm(ctx, id), notRejected()))
+    .returning({ id: communications.id })
+    .all();
+  if (updated.length === 0) throw messageRejected();
   return await getCommunicationView(db, ctx, id);
 }
 
@@ -1015,46 +1069,55 @@ export async function acceptProposal(
   id: string,
   opts: { reopen?: boolean | undefined },
 ): Promise<{ communication: CommunicationView; opportunity: OpportunityView }> {
-  const comm = await getRowSync(db, ctx, id);
-  // Each says why (#895): the user is looking at a suggestion that was there a moment ago.
-  if (comm.rejectedAt !== null) {
-    throw new HttpError(
-      409,
-      'no_proposal',
-      'This message has been rejected, and its suggestion with it.',
-      undefined,
-      { userFacing: true },
-    );
-  }
-  if (comm.opportunityId === null) {
-    throw new HttpError(
-      409,
-      'no_proposal',
-      'This message is no longer linked to an opportunity, so there is nothing to move.',
-      undefined,
-      { userFacing: true },
-    );
-  }
-  if (comm.proposedTransition === null) {
-    throw new HttpError(
-      409,
-      'no_proposal',
-      'This suggestion is no longer there: it was used, ignored or changed since you saw it.',
-      undefined,
-      { userFacing: true },
-    );
-  }
-  const subject = (comm.subject ?? '').trim().slice(0, 120);
-  const opportunity = await transitionOpportunity(db, ctx, comm.opportunityId, {
-    to: comm.proposedTransition,
-    ...(comm.proposedTransition === 'closed' ? { closedReason: 'rejected' as const } : {}),
-    note: subject.length > 0 ? `Proposed by message: ${subject}` : 'Proposed by a message',
-    reopen: opts.reopen === true,
+  // Not yet locked: a reject can land here.
+  await racePoint('proposal.accept.read');
+  const done = await withTransaction(db, async (tx) => {
+    // The user's lock before the message's row (the rule is at submissionScope).
+    await lockScope(tx, `user:${ctx.userId}`);
+    const comm = await getRowSync(tx, ctx, id);
+    // Each says why (#895): the user is looking at a suggestion that was there a moment ago.
+    if (comm.rejectedAt !== null) {
+      throw new HttpError(
+        409,
+        'no_proposal',
+        'This message has been rejected, and its suggestion with it.',
+        undefined,
+        { userFacing: true },
+      );
+    }
+    if (comm.opportunityId === null) {
+      throw new HttpError(
+        409,
+        'no_proposal',
+        'This message is no longer linked to an opportunity, so there is nothing to move.',
+        undefined,
+        { userFacing: true },
+      );
+    }
+    if (comm.proposedTransition === null) {
+      throw new HttpError(
+        409,
+        'no_proposal',
+        'This suggestion is no longer there: it was used, ignored or changed since you saw it.',
+        undefined,
+        { userFacing: true },
+      );
+    }
+    await racePoint('proposal.accept.locked');
+    const opportunity = await transitionOpportunityIn(tx, ctx, comm.opportunityId, {
+      to: comm.proposedTransition,
+      ...(comm.proposedTransition === 'closed' ? { closedReason: 'rejected' as const } : {}),
+      // Nothing of what the message said: the note outlives the message.
+      note: 'Proposed by a message',
+      reopen: opts.reopen === true,
+    });
+    await tx
+      .update(communications)
+      .set({ proposedTransition: null, updatedAt: Date.now() })
+      .where(ownedComm(ctx, id))
+      .run();
+    return { communication: await getCommunicationView(tx, ctx, id), opportunity };
   });
-  await db
-    .update(communications)
-    .set({ proposedTransition: null, updatedAt: Date.now() })
-    .where(ownedComm(ctx, id))
-    .run();
-  return { communication: await getCommunicationView(db, ctx, id), opportunity };
+  await afterStageChange(db, ctx, done.opportunity);
+  return done;
 }

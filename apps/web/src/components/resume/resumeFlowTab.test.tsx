@@ -7,7 +7,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import type { SubmissionView } from '@/components/apply/api';
 import { formatDate, type OpportunityView } from '@/lib/opportunities';
-import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
+import { mockApi, renderWithProviders, type ApiCall, toastRegion } from '@/test/render';
 import type { Resume, ResumeSend } from './api';
 import { OpportunityResumeTab } from './OpportunityResumeTab';
 
@@ -203,6 +203,43 @@ describe('the Resume tab flow: one test per row of the table (#440)', () => {
     await waitFor(() => expect(primary(region)).toHaveAccessibleName('Create tailored copy'));
     await user.click(primary(region));
     await waitFor(() => expect(router.state.location.pathname).toBe('/resumes/copy'));
+  });
+
+  // https://github.com/bgoleno/opportun/issues/962: the copy is made, whatever went meanwhile.
+  it.each([
+    ['the opportunity went while it was made', { opportunityId: null }, true],
+    ['the base did', { parentResumeId: null }, false],
+    ['control: nothing did', {}, false],
+  ])('B: the copy is opened, and what is said when %s', async (_w, over, says) => {
+    const { user, router } = setup({
+      resumes: [BASE],
+      extra: { 'POST /resumes': { status: 201, body: copy(over) } },
+    });
+    const region = await flow();
+    await waitFor(() => expect(primary(region)).toHaveAccessibleName('Create tailored copy'));
+    await user.click(primary(region));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/resumes/copy'));
+    const said = toastRegion().queryByText(
+      'The opportunity was deleted while the copy was made, so the resume is not attached to one.',
+    );
+    expect(said !== null).toBe(says);
+  });
+
+  it('B: a copy whose resume may not have been saved: the sentence, and nothing is opened', async () => {
+    const message =
+      'The resume may not have been saved. Look in Resumes: if it is not there, the copy named "X" was left in Google Docs.';
+    const { user, router } = setup({
+      resumes: [BASE],
+      extra: {
+        'POST /resumes': { status: 500, body: { error: { code: 'resume_not_saved', message } } },
+      },
+    });
+    const region = await flow();
+    await waitFor(() => expect(primary(region)).toHaveAccessibleName('Create tailored copy'));
+    const at = router.state.location.pathname;
+    await user.click(primary(region));
+    expect(await screen.findByText(message)).toBeVisible();
+    expect(router.state.location.pathname).toBe(at);
   });
 
   it('C: a Draft copy: step 2 Tailor, "Open and tailor" to its page', async () => {

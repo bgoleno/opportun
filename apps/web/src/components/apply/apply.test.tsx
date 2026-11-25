@@ -947,6 +947,47 @@ describe('#398: an embedded Greenhouse job with no proven board', () => {
     });
   });
 
+  // #858: this panel is here to recognise the job, so it never asks to replace the description and
+  // never says the user agreed to; the server keeps theirs, and that is said.
+  it.each([
+    [
+      'attached',
+      { outcome: 'attached', keptDescription: true },
+      'Posting attached. Your own description was kept.',
+    ],
+    [
+      'identified',
+      { outcome: 'identified', keptDescription: true },
+      'Recognised on Greenhouse. Your own description was kept.',
+    ],
+  ])('at edited, Find posting keeps the description, and says so: %s', async (_n, answer, text) => {
+    const api = mockApi({
+      'GET /resumes': { items: [RESUME], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [], total: 0 },
+      'POST /opportunities/opp-1/find-posting': answer,
+    });
+    renderWithProviders(
+      <ApplyPanel
+        opp={
+          {
+            ...OPP,
+            atsJobRef: null,
+            postingUrl: careers,
+            postingState: 'needs_review',
+            postingStateDetail: 'edited',
+            descriptionMd: 'my own notes',
+            descriptionIsUserWritten: true,
+          } as OpportunityView
+        }
+      />,
+    );
+    await userEvent.click(await screen.findByRole('button', { name: 'Find posting' }));
+    expect(await screen.findByRole('status')).toHaveTextContent(text);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    const [call] = calls(api.calls, 'POST', '/opportunities/opp-1/find-posting');
+    expect(call?.search).toBe('?seen=needs_review');
+  });
+
   it('Find posting failing shows the error', async () => {
     mockApi({
       'GET /resumes': { items: [RESUME], total: 1 },

@@ -3,14 +3,17 @@
 //   - stdio: the user's own command, spawned without a shell (execFile semantics: the command and
 //     each argument are passed as-is, nothing is interpreted), with an environment of PATH only
 //     (no secrets, no master key, no tokens), in its own process group. On completion, error or
-//     timeout the group is sent SIGTERM, then SIGKILL after a grace period, and the call returns
-//     only after the child has exited and been reaped.
+//     timeout, and when the server ends by itself, the group is sent SIGTERM, then SIGKILL after a
+//     grace period if anybody is left in it, and the call returns only after the child has exited and
+//     been reaped, and its group is empty or killed. A process the server puts in a session or a group
+//     of its own is not reached.
 //   - http (streamable HTTP): https only; prohibited hosts (PROHIBITED_HOSTS) refused; every address
 //     the host resolves to must be public; redirects are not followed; responses are size-capped.
 // Tool output is untrusted data; callers map and sanitize it.
 import { spawn, type ChildProcess } from 'node:child_process';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { setTimeout as delay } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ReadBuffer, serializeMessage } from '@modelcontextprotocol/sdk/shared/stdio.js';
@@ -24,6 +27,8 @@ export const MCP_TIMEOUT_MS = 30_000;
 export const MCP_MAX_MESSAGE_BYTES = 8 * 1024 * 1024;
 /** Between SIGTERM and SIGKILL when closing a stdio server. */
 const KILL_GRACE_MS = 2_000;
+/** How often the group is looked at once its server has gone. */
+const GROUP_LOOK_MS = 50;
 
 export type McpServerConfig =
   { transport: 'stdio'; command: string; args: string[] } | { transport: 'http'; url: string };
@@ -60,6 +65,12 @@ export class MinimalStdioTransport implements Transport {
   private exited: Promise<void> | undefined;
   private readonly buffer = new ReadBuffer({ maxBufferSize: MCP_MAX_MESSAGE_BYTES });
   private closed = false;
+  /** When the group was asked to end (SIGTERM): the grace counts from here. */
+  private askedAt: number | undefined;
+  /** The group was seen empty, or has been sent SIGKILL: it is never looked at or signalled again. */
+  private groupDone = false;
+  /** What is left of the group is being ended; the server itself has gone. */
+  private ending: Promise<void> | undefined;
 
   constructor(
     private readonly command: string,
@@ -101,6 +112,9 @@ export class MinimalStdioTransport implements Transport {
         resolve();
       });
       child.once('exit', () => {
+        // In this turn, with the server's pid just collected: an id that nobody holds any more can be
+        // given to another process, and while somebody does it cannot.
+        if (this.groupLeft()) this.ending = this.endGroup();
         if (!this.closed) {
           this.closed = true;
           this.onclose?.();
@@ -137,9 +151,12 @@ export class MinimalStdioTransport implements Transport {
     });
   }
 
+  /** Signals the server and its group, while the server runs. */
   private signal(sig: NodeJS.Signals): void {
     const child = this.child;
     if (child?.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+    if (sig === 'SIGKILL') this.groupDone = true;
+    else this.askedAt ??= performance.now();
     try {
       // The whole group, so anything the server started goes too.
       if (process.platform !== 'win32') process.kill(-child.pid, sig);
@@ -149,7 +166,57 @@ export class MinimalStdioTransport implements Transport {
     }
   }
 
-  /** Stops the server and resolves once it has exited and been reaped. */
+  /**
+   * Whether anybody is left in the group this client started, seen now; asked once the server has
+   * gone (#1024). Any failure is nobody: ESRCH, and EPERM too (macOS's answer for a group of zombies,
+   * and any system's for a group that is not ours, which must not be signalled). On Linux a zombie
+   * counts as a member: with no init to reap it (a container without one) a child that has ended
+   * holds the call for the whole grace, and no longer.
+   */
+  private groupLeft(): boolean {
+    const pid = this.child?.pid;
+    if (this.groupDone || pid === undefined || process.platform === 'win32') return false;
+    return this.toGroup(pid, 0);
+  }
+
+  /** Sends `sig` to the group (0: a look). A failure is the end of it: the group is done with. */
+  private toGroup(pid: number, sig: NodeJS.Signals | 0): boolean {
+    try {
+      process.kill(-pid, sig);
+      return true;
+    } catch {
+      this.groupDone = true;
+      return false;
+    }
+  }
+
+  /**
+   * Ends what the server left in its group: asked if it has not been (a server that ended by itself),
+   * looked at until it is empty, and killed at the end of the grace. The group is looked at in the
+   * turn of each signal, and never after it was empty once.
+   */
+  private async endGroup(): Promise<void> {
+    const pid = this.child?.pid;
+    if (pid === undefined) return;
+    if (this.askedAt === undefined) {
+      this.askedAt = performance.now();
+      this.toGroup(pid, 'SIGTERM');
+    }
+    const until = this.askedAt + KILL_GRACE_MS;
+    while (this.groupLeft()) {
+      if (performance.now() >= until) {
+        this.toGroup(pid, 'SIGKILL');
+        this.groupDone = true;
+        return;
+      }
+      await delay(GROUP_LOOK_MS);
+    }
+  }
+
+  /**
+   * Stops the server and resolves once it has exited and been reaped, and its group is empty or has
+   * been killed.
+   */
   async close(): Promise<void> {
     const child = this.child;
     if (child !== undefined) {
@@ -165,6 +232,7 @@ export class MinimalStdioTransport implements Transport {
         this.signal('SIGKILL');
         await this.exited;
       }
+      await this.ending;
       child.stdout?.destroy();
       child.stderr?.destroy();
       child.stdin?.destroy();

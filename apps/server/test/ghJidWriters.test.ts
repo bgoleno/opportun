@@ -33,6 +33,7 @@ import {
 } from '../src/repos/opportunities';
 import { insertResume } from '../src/repos/resumes';
 import { createSubmissionDraft } from '../src/repos/submissions';
+import { descriptionFingerprint } from '../src/lib/postingFingerprint';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 
@@ -757,6 +758,53 @@ describe('Find posting by the own gh_jid link writes a timeline entry (#813)', (
         externalUrl: BOARD_PAGE,
       },
     ]);
+  });
+
+  // #858: the Apply panel's Find posting, which never says the user agreed to lose their text. With
+  // that agreement the board is read for the copy to take instead.
+  describe('at edited, with a description the user wrote (#858)', () => {
+    const MINE = 'My own notes about this role.';
+    async function edited() {
+      const { app, a } = await boot();
+      api = greenhouseApi({ examplecorp: [JID] });
+      const id = await seed(app, a);
+      await updateOpportunity(app.db, ctxOf(a), id, { postingUrl: CAREERS, descriptionMd: MINE });
+      await setPostingState(app.db, ctxOf(a), id, {
+        postingState: 'needs_review',
+        postingStateDetail: 'edited',
+      });
+      const board = embeddedBoardServes([embedded('Staff Platform Engineer', JID)]);
+      return {
+        board,
+        find: async (agreed = '') =>
+          (
+            await a.request({
+              method: 'POST',
+              url: `/api/v1/opportunities/${id}/find-posting${agreed}`,
+            })
+          ).json(),
+      };
+    }
+
+    it('it is kept, and the answer says so', async () => {
+      const { board, find } = await edited();
+      expect(await find()).toMatchObject({
+        outcome: 'identified',
+        keptDescription: true,
+        opportunity: { descriptionMd: MINE, postingStateDetail: 'user_confirmed' },
+      });
+      expect(board.reads).toBe(0);
+    });
+
+    it('agreed to be lost, the board is read and its copy taken', async () => {
+      const { find } = await edited();
+      const found = await find(`?replaceDescription=${descriptionFingerprint(MINE)}`);
+      expect(found).toMatchObject({
+        outcome: 'attached',
+        opportunity: { descriptionMd: 'What We Do: Staff Platform Engineer.' },
+      });
+      expect(found.keptDescription).toBeUndefined();
+    });
   });
 
   // tl on #847: the third way Find posting identifies by the own link, with no description of the

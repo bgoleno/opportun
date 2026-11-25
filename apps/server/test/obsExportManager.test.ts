@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { obsMetricPoints } from '../src/db/schema';
 import { encryptSecret } from '../src/lib/secretBox';
@@ -469,30 +469,30 @@ describe("stopping export stops what is in flight (sec's Blocking 2 on #377)", (
   it('a send held open by the destination is destroyed when export stops, and nothing starts after', async () => {
     await boot();
     const started: IncomingMessage[] = [];
-    const closed: string[] = [];
+    let arrive!: () => void;
+    const arrived = new Promise<void>((r) => (arrive = r));
+    let close!: (url: string | undefined) => void;
+    const closed = new Promise<string | undefined>((r) => (close = r));
     const s = createServer((req) => {
       // Accepts the request and never answers.
       started.push(req);
-      req.socket.once('close', () => closed.push(req.url ?? ''));
+      req.socket.once('close', () => close(req.url));
+      arrive();
     });
     servers.push(s);
     await new Promise<void>((r) => s.listen(0, '127.0.0.1', () => r()));
     const port = (s.address() as AddressInfo).port;
+    // The send's own timeout never passes: only the stop can end it, however slow the host (#948).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    onTestFinished(() => void vi.useRealTimers());
     const ex = await buildExporters(otlp(port), undefined, opts);
     ex.sinks.spans?.export(span);
     const flushing = ex.flush();
-    for (let i = 0; i < 100 && started.length === 0; i += 1) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await arrived;
     expect(started).toHaveLength(1);
-    const stoppedAt = Date.now();
     await ex.shutdown();
     await flushing;
-    for (let i = 0; i < 100 && closed.length === 0; i += 1) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    expect(closed).toEqual(['/v1/traces']);
-    expect(Date.now() - stoppedAt).toBeLessThan(2_000);
+    expect(await closed).toBe('/v1/traces');
     ex.sinks.spans?.export(span);
     await ex.flush();
     expect(started).toHaveLength(1);
@@ -502,16 +502,19 @@ describe("stopping export stops what is in flight (sec's Blocking 2 on #377)", (
     await boot();
     const { port, got } = await receiver();
     let answer: (addresses: string[]) => void = () => undefined;
+    let ask!: () => void;
+    const asked = new Promise<void>((r) => (ask = r));
     const ex = await buildExporters({ ...otlp(port), host: 'collector.test' }, undefined, {
       ...opts,
       lookup: () =>
         new Promise<string[]>((resolve) => {
           answer = resolve;
+          ask();
         }),
     });
     ex.sinks.spans?.export(span);
     const flushing = ex.flush();
-    await new Promise((r) => setTimeout(r, 20));
+    await asked;
     await ex.shutdown();
     answer(['127.0.0.1']);
     await flushing;

@@ -16,17 +16,20 @@ const logs = captureLogs();
 const boot = useApi(() => ({ logStream: logs }));
 const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false });
 
-/** Made-up keys that are refused, and every part of them that must not be said. */
+/**
+ * Made-up keys that are refused, and every part of them that must not be said: words with letters no
+ * id has (an id is hexadecimal), and 20320, what the runtime calls the character in the first.
+ */
 const REFUSED: [string, string, string[]][] = [
   [
     'one',
-    'zq-madeup-alpha\u4f60bravo-0123',
-    ['madeup', 'alpha', 'bravo', '\u4f60', '20320', '0123'],
+    'zq-madeup-alpha\u4f60bravo-kilo',
+    ['madeup', 'alpha', 'bravo', '\u4f60', '20320', 'kilo'],
   ],
-  ['two', 'zq-madeup-alpha\nbravo-0123', ['madeup', 'alpha', 'bravo', '0123']],
-  ['three', 'zq-madeup-alpha\nbravo-0123\n', ['madeup', 'alpha', 'bravo', '0123']],
-  ['four', 'zq-madeup-alpha\u0000bravo-0123', ['madeup', 'alpha', 'bravo', '0123']],
-  ['six', 'zq-madeup-alpha\u007fbravo-0123', ['madeup', 'alpha', 'bravo', '0123']],
+  ['two', 'zq-madeup-alpha\nbravo-kilo', ['madeup', 'alpha', 'bravo', 'kilo']],
+  ['three', 'zq-madeup-alpha\nbravo-kilo\n', ['madeup', 'alpha', 'bravo', 'kilo']],
+  ['four', 'zq-madeup-alpha\u0000bravo-kilo', ['madeup', 'alpha', 'bravo', 'kilo']],
+  ['six', 'zq-madeup-alpha\u007fbravo-kilo', ['madeup', 'alpha', 'bravo', 'kilo']],
   ['five', ' \n ', []],
 ];
 const GOOD = 'zq-madeup-good-0123';
@@ -43,11 +46,16 @@ beforeEach(() => {
   logs.lines.length = 0;
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
+/** The answers' own ids and times in milliseconds, whole: their digits can be any. */
+const IDS = /[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}/g;
+const TIMES = /(?<!\d)\d{13}(?!\d)/g;
 function expectNone(text: string, parts: string[]) {
-  for (const part of parts) expect(text).not.toContain(part);
+  const said = text.replace(IDS, '').replace(TIMES, '');
+  for (const part of parts) expect(said).not.toContain(part);
 }
 const save = (c: TestClient, value: string, kind = 'ai_api_key') =>
   c.request({ method: 'POST', url: '/api/v1/secrets', payload: { kind, label: 'openai', value } });
@@ -126,6 +134,33 @@ it.each(REFUSED)(
     expect(fetchMock).not.toHaveBeenCalled();
   },
 );
+
+// https://github.com/bgoleno/opportun/issues/988: the parts were found in the answer's own times.
+it.each(REFUSED)(
+  'checking, key %s: a time that holds the digits of a key says nothing of it',
+  async (_n, value, parts) => {
+    vi.useFakeTimers({ toFake: ['Date'], now: 1_795_520_320_123 });
+    const { app, a } = await boot();
+    const ctx = ctxOf(a);
+    const { id } = await putSecret(app.db, ctx, 'ai_api_key', 'openai', value);
+    const result = await validateAndStoreAiKey(app.db, ctx, id);
+    const list = await a.request({ method: 'GET', url: '/api/v1/ai/keys' });
+    const said = JSON.stringify(result) + list.body;
+    expect(said).toContain('1795520320123');
+    expectNone(said, parts);
+  },
+);
+
+it.each(REFUSED)('control: a part of key %s is found where it is said', (_n, _value, parts) => {
+  const at = { id: '01a20d13-f349-790b-9290-b4b9292cac2b', checkedAt: 1_795_520_320_123 };
+  expectNone(JSON.stringify(at), parts);
+  for (const part of parts) {
+    for (const error of [part, `a value of ${part} at 15`, `x${part}x`, `1${part}1`]) {
+      expect(() => expectNone(JSON.stringify({ ...at, error }), parts), error).toThrow();
+    }
+    expect(() => expectNone(`{"checkedAt":1795520320123,"n":${part}}`, parts)).toThrow();
+  }
+});
 
 it.each(REFUSED)(
   'calling, key %s already stored: refused before any call',

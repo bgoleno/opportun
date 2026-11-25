@@ -3,6 +3,7 @@
 import { queryOptions, type QueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { api, ApiError, CSRF_COOKIE, readCookie } from './api';
+import { dropKeptRedirect } from './loginRedirect';
 
 export interface User {
   id: string;
@@ -103,6 +104,7 @@ export async function register(qc: QueryClient, input: RegisterInput): Promise<U
     method: 'POST',
     body: { displayName: input.displayName, email: input.email, password: input.password },
   });
+  dropKeptRedirect();
   qc.setQueryData(meQuery.queryKey, user);
   return user;
 }
@@ -118,6 +120,7 @@ export async function register(qc: QueryClient, input: RegisterInput): Promise<U
  */
 export async function logout(qc: QueryClient): Promise<void> {
   await api('/auth/logout', { method: 'POST' });
+  dropKeptRedirect();
   qc.clear();
   qc.setQueryData(meQuery.queryKey, null);
 }
@@ -130,24 +133,9 @@ export async function logout(qc: QueryClient): Promise<void> {
  * caller must tell them, in those terms, before calling this, not after.
  */
 export function forceLocalSignOut(qc: QueryClient): void {
+  dropKeptRedirect();
   qc.clear();
   qc.setQueryData(meQuery.queryKey, null);
-}
-
-/**
- * Control characters (browsers strip tab, CR and LF from URLs, so "/\t/evil" becomes
- * "//evil") and backslashes (treated as "/" by browsers) are never part of a safe target.
- */
-// eslint-disable-next-line no-control-regex
-const UNSAFE_REDIRECT_CHARS = /[\u0000-\u001f\\]/;
-
-/** Only same-origin absolute paths are honoured as post-login redirects. */
-export function safeRedirect(target: unknown): string {
-  if (typeof target !== 'string') return '/';
-  if (UNSAFE_REDIRECT_CHARS.test(target)) return '/';
-  if (!target.startsWith('/') || target.startsWith('//') || target.startsWith('/\\')) return '/';
-  if (target.startsWith('/login') || target.startsWith('/register')) return '/';
-  return target;
 }
 
 export const PUBLIC_PATHS = new Set(['/login', '/register']);

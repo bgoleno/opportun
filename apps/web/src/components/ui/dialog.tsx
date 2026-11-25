@@ -45,6 +45,11 @@ function Dialog(props: {
   );
 }
 
+/**
+ * A dialog may be drawn inside another one (#1007): each acts on its own Escape and close only, and
+ * closing the outer one closes what is inside it. An inner one whose open state is held above the outer
+ * one is its owner's to reset: still open there, it is shown again with the outer one's next opening.
+ */
 function DialogContent({
   className,
   children,
@@ -85,17 +90,23 @@ function DialogContent({
 
   // A parent may take the dialog out as it answers. An element that goes while it is open gives the
   // focus back to nobody, so it is closed first: in a layout effect's cleanup, since a passive one
-  // runs when the element has gone (#975).
+  // runs when the element has gone (#975). This one's cleanup runs before that of a dialog inside it,
+  // and while the inner one is open this one can give the focus back to nobody either, so the inner one
+  // goes first (#1007).
   useLayoutEffect(() => {
     const el = ref.current;
     return () => {
-      if (el !== null && el.open && typeof el.close === 'function') el.close();
+      if (el === null || !el.open || typeof el.close !== 'function') return;
+      for (const inner of [...el.querySelectorAll('dialog')].reverse())
+        if (inner.open) inner.close();
+      el.close();
     };
   }, []);
 
   return (
     // Caller props are spread first so they can never replace the close wiring below;
-    // caller onCancel/onClose/onClick handlers still run, before the dialog's own.
+    // caller onCancel/onClose/onClick handlers still run, before the dialog's own (the first two for
+    // the dialog's own events).
     <dialog
       {...props}
       ref={ref}
@@ -103,9 +114,11 @@ function DialogContent({
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
       onCancel={(e) => {
+        // Only the dialog's own is Escape. A file input's bubbles to here, and React passes up that of
+        // a dialog drawn inside this one, which the DOM does not (#1007).
+        if (e.target !== e.currentTarget) return;
         onCancel?.(e);
-        // A file input's own `cancel` bubbles to here: only the dialog's is Escape.
-        if (e.target !== e.currentTarget || e.defaultPrevented) return;
+        if (e.defaultPrevented) return;
         // Escape is a question to the parent, as the X and the backdrop are. Closed by the browser,
         // the dialog gave the focus back before its parent knew, and what was pressed next opened
         // nothing (#975).
@@ -113,10 +126,13 @@ function DialogContent({
         setOpen(false);
       }}
       onClose={(e) => {
+        // Its own only: React passes up that of a dialog drawn inside this one, which the DOM does not,
+        // and closing the inner one closed this one too (#1007).
+        if (e.target !== e.currentTarget) return;
         // close() gives the focus back at once, and this event comes with the next frame. Open again
         // by then, the dialog was opened by what was pressed in between: the event is an earlier
         // close's, and acting on it would close this one (#975).
-        if (e.target === e.currentTarget && e.currentTarget.open) return;
+        if (e.currentTarget.open) return;
         onClose?.(e);
         setOpen(false);
         // Escape is not always refusable (a second one, with nothing clicked or typed since, is

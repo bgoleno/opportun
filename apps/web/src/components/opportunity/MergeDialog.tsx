@@ -103,7 +103,7 @@ export function MergeDialog(props: {
                       onClick={() => setTarget(o)}
                       className="grid w-full gap-0.5 rounded-md px-3 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                      <span className="font-medium break-words">{label(o)}</span>
+                      <span className="font-medium [overflow-wrap:anywhere]">{label(o)}</span>
                       <span className="text-xs text-muted-foreground">{stageLabel(o.stage)}</span>
                     </button>
                   </li>
@@ -128,11 +128,11 @@ export function MergeDialog(props: {
             <dl className="grid gap-2 text-sm">
               <div className="grid gap-0.5 rounded-md border p-3">
                 <dt className="text-xs text-muted-foreground">Merged away (deleted)</dt>
-                <dd className="font-medium break-words">{label(opp)}</dd>
+                <dd className="font-medium [overflow-wrap:anywhere]">{label(opp)}</dd>
               </div>
               <div className="grid gap-0.5 rounded-md border border-primary p-3">
                 <dt className="text-xs text-muted-foreground">Kept</dt>
-                <dd className="font-medium break-words">{label(target)}</dd>
+                <dd className="font-medium [overflow-wrap:anywhere]">{label(target)}</dd>
               </div>
             </dl>
             <DialogFooter>
