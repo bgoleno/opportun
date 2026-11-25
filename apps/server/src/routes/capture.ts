@@ -201,7 +201,7 @@ async function resolveLeadInPlace(
     throw new HttpError(
       422,
       'invalid_posting',
-      'That posting has no description that can be saved. Paste its whole text, or press Capture again.',
+      'That posting has no company, title or description that can be saved. Paste its whole text, or press Capture again.',
       undefined,
       { userFacing: true },
     );

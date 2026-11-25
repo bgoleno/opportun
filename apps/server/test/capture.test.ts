@@ -452,26 +452,30 @@ describe('POST /capture', () => {
       expect(rank.map((j) => (j.payload as { resultId: string }).resultId)).toEqual([id]);
     });
 
-    it('a capture whose description does not survive cleaning says so, and leaves the lead', async () => {
-      const { app, a } = await boot();
-      const id = await lead(app, a);
-      vi.mocked(runStructured).mockResolvedValueOnce({
-        ...EXTRACTED,
-        descriptionMd: '<script>alert(1)</script>',
-      });
-      const res = await a.request({
-        method: 'POST',
-        url: '/api/v1/capture',
-        payload: { text: PASTED, resultId: id },
-      });
-      expect(res.statusCode, res.body).toBe(422);
-      expect(res.json().error).toEqual({
-        code: 'invalid_posting',
-        message:
-          'That posting has no description that can be saved. Paste its whole text, or press Capture again.',
-      });
-      expect((await getResult(app.db, ctxOf(a), id)).resolution).toBe('needs_capture');
-    });
+    it.each([
+      ['company', { companyName: '<b></b>' }],
+      ['title', { title: '<b></b>' }],
+      ['description', { descriptionMd: '<script>alert(1)</script>' }],
+    ])(
+      'a capture whose %s does not survive cleaning says so, and leaves the lead',
+      async (_, bad) => {
+        const { app, a } = await boot();
+        const id = await lead(app, a);
+        vi.mocked(runStructured).mockResolvedValueOnce({ ...EXTRACTED, ...bad });
+        const res = await a.request({
+          method: 'POST',
+          url: '/api/v1/capture',
+          payload: { text: PASTED, resultId: id },
+        });
+        expect(res.statusCode, res.body).toBe(422);
+        expect(res.json().error).toEqual({
+          code: 'invalid_posting',
+          message:
+            'That posting has no company, title or description that can be saved. Paste its whole text, or press Capture again.',
+        });
+        expect((await getResult(app.db, ctxOf(a), id)).resolution).toBe('needs_capture');
+      },
+    );
 
     it("another user's resultId is a 404, checked before any AI call", async () => {
       const { app, a, b } = await boot();
