@@ -202,6 +202,32 @@ export function postingAtsJobRef(postingUrl: string | null | undefined): AtsJobR
   return { ...ref, org: board.slug };
 }
 
+/** The job an application was started for, which it keeps. */
+export interface PinnedJob {
+  atsKind: string;
+  atsRef: string | null;
+  atsExternalId: string;
+}
+
+/**
+ * Whether an opportunity names another job than an application was started for: by its stored
+ * identity, else by its posting link (#1055, tl). One that names no job (no link, or a link no site
+ * reads) does not name another. A careers page's `gh_jid` names its job and no board, where the
+ * application has the board's: that is no difference, so the kind and the job id decide. A stored
+ * identity is compared whole, the board without case.
+ */
+export function namesAnotherJob(
+  opp: { atsJobRef: AtsJobRef | null | undefined; postingUrl: string | null },
+  pinned: PinnedJob,
+): boolean {
+  const stored = opp.atsJobRef ?? null;
+  const ref = stored ?? (opp.postingUrl === null ? null : atsJobRefOfUrl(opp.postingUrl));
+  if (ref === null) return false;
+  if (ref.kind !== pinned.atsKind || ref.externalId !== pinned.atsExternalId) return true;
+  if (stored === null && ref.org === null) return false;
+  return (ref.org ?? '').toLowerCase() !== (pinned.atsRef ?? '').toLowerCase();
+}
+
 /**
  * The identity a posting URL keeps, for the writers that ask nobody (#398 criterion 3: confirm,
  * the backfill, and every writer when no board read or Greenhouse check applies):

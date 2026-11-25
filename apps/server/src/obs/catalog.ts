@@ -723,6 +723,7 @@ export const AUDIT_EVENTS = [
   'submission.refused_by_ats',
   'submission.review_cap_hit',
   'submission.review_cap_set',
+  'submission.review_lapsed',
   'submission.reviewed',
   'submission.snapshot_downloaded',
   'submission.unknown',

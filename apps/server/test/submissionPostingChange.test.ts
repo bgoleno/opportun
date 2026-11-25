@@ -403,6 +403,355 @@ describe('lock order: the attempt, then the user, then rows (tl on #154; the dea
   });
 });
 
+// https://github.com/bgoleno/opportun/issues/1055: the draft goes on to where it was started for, and the
+// opportunity it is on now names another job, as after a saved link.
+describe('a merge that moves it to another job asks for another review (#1055)', () => {
+  const NEW_REF: AtsJobRef = { ...OLD_REF, externalId: '2000002', url: NEW_URL };
+
+  /** The one that is kept, at `ref`, or with no posting identity, and only a link if any. */
+  async function kept(
+    app: FastifyInstance,
+    c: TestClient,
+    ref: AtsJobRef | null,
+    link: string | null = ref?.url ?? null,
+  ) {
+    const { id } = await createOpportunity(app.db, ctxOf(c), {
+      companyName: 'Example Corp',
+      title: `Senior Example Engineer ${newId()}`,
+      sourceKind: 'manual',
+    });
+    await app.db
+      .update(opportunities)
+      .set({
+        atsJobRef: ref,
+        postingUrl: link,
+        postingState: ref === null ? null : 'confirmed',
+      })
+      .where(eq(opportunities.id, id))
+      .run();
+    return id;
+  }
+  const merge = async (c: TestClient, keepId: string, otherId: string) => {
+    const res = await api(c, 'POST', `/opportunities/${keepId}/merge`, { otherId });
+    expect(res.statusCode, res.body).toBe(200);
+  };
+  const audited = async (app: FastifyInstance, event: string) =>
+    (await app.db.select().from(auditLog).where(eq(auditLog.event, event)).all()).map((r) => [
+      r.userId,
+      r.detail,
+    ]);
+  const marks = (app: FastifyInstance) => audited(app, 'submission.posting_changed');
+  const merges = (app: FastifyInstance) => audited(app, 'submission.review_lapsed');
+
+  it('reviewed: back to draft, its review lapsed, recorded; the destination and the work kept', async () => {
+    const { app, a } = await boot(ON);
+    const d = await reviewed(app, a);
+    const keepId = await kept(app, a, NEW_REF);
+    const before = await rowOf(app, d.id);
+    await merge(a, keepId, d.oppId);
+    const row = await rowOf(app, d.id);
+    expect(row?.postingChangedAt).not.toBeNull();
+    expect(row).toEqual({
+      ...before,
+      opportunityId: keepId,
+      status: 'draft',
+      reviewDigest: null,
+      reviewExpiresAt: null,
+      postingChangedAt: row?.postingChangedAt,
+      updatedAt: row?.updatedAt,
+    });
+    expect(row).toMatchObject({ destinationUrl: OLD_URL, atsExternalId: '1000001' });
+    expect(await marks(app)).toEqual([
+      [a.userId, { submissionId: d.id, opportunityId: keepId, from: 'reviewed' }],
+    ]);
+    expect(await merges(app)).toEqual([]);
+  });
+
+  it('a draft: marked too, so the screen open before cannot be confirmed', async () => {
+    const { app, a } = await boot(ON);
+    const d = await draft(app, a);
+    const keepId = await kept(app, a, NEW_REF);
+    await merge(a, keepId, d.oppId);
+    expect(await marks(app)).toEqual([
+      [a.userId, { submissionId: d.id, opportunityId: keepId, from: 'draft' }],
+    ]);
+    const stale = await review(a, d.id, d.digest);
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json()).toMatchObject({ error: { code: 'review_stale' } });
+  });
+
+  it('a review from before it answers as after a saved link; a fresh one hands off where it was pinned', async () => {
+    const { app, a } = await boot(ON);
+    const merged = await reviewed(app, a);
+    const saved = await reviewed(app, a, {
+      ...OLD_REF,
+      externalId: '1000004',
+      url: 'https://boards.greenhouse.io/examplecorp/jobs/1000004',
+    });
+    await merge(a, await kept(app, a, NEW_REF), merged.oppId);
+    expect((await changePosting(a, saved.oppId, NEW_URL)).statusCode).toBe(200);
+    const answers = async (d: typeof merged) => {
+      const early = await handoff(a, d.id);
+      const stale = await review(a, d.id, d.digest);
+      // The attempt named apart.
+      return JSON.parse(
+        JSON.stringify([early.statusCode, early.json(), stale.statusCode, stale.json()]).replaceAll(
+          d.id,
+          'it',
+        ),
+      ) as unknown;
+    };
+    const said = await answers(merged);
+    expect(said).toMatchObject([409, {}, 409, { error: { code: 'review_stale' } }]);
+    expect(said).toEqual(await answers(saved));
+    const now = (await api(a, 'GET', `/submissions/${merged.id}`)).json<SubmissionJson>();
+    expect((await review(a, merged.id, now.reviewDigest)).statusCode).toBe(200);
+    const out = await handoff(a, merged.id);
+    expect(out.statusCode, out.body).toBe(200);
+    expect(out.json()).toMatchObject({ destinationUrl: OLD_URL });
+  });
+
+  it.each([
+    ['another site', { ...OLD_REF, kind: 'ats_lever', url: 'https://jobs.lever.co/examplecorp/1' }],
+    ['another company', { ...OLD_REF, org: 'othercorp' }],
+    ['no company', { ...OLD_REF, org: null }],
+  ] as [string, AtsJobRef][])('the kept one is of %s: marked', async (_, ref) => {
+    const { app, a } = await boot(ON);
+    const d = await reviewed(app, a);
+    await merge(a, await kept(app, a, ref), d.oppId);
+    expect(await rowOf(app, d.id)).toMatchObject({ status: 'draft', reviewDigest: null });
+    expect(await marks(app)).toHaveLength(1);
+  });
+
+  it.each([
+    ['another job', NEW_URL],
+    ['another job on a careers page', CAREER_PAGE_URL],
+    ['another company’s job of that id', OLD_URL.replace('examplecorp', 'othercorp')],
+    [
+      'another site’s job',
+      'https://jobs.lever.co/examplecorp/6b1f6a0e-7a0b-4a53-9c7d-2f6a8f1f0c11',
+    ],
+  ])('the kept one has only a link, which names %s: marked', async (_, link) => {
+    const { app, a } = await boot(ON);
+    const d = await reviewed(app, a);
+    await merge(a, await kept(app, a, null, link), d.oppId);
+    expect(await rowOf(app, d.id)).toMatchObject({ status: 'draft', reviewDigest: null });
+    expect(await marks(app)).toHaveLength(1);
+    expect(await merges(app)).toEqual([]);
+  });
+
+  it.each([
+    ['no link', null],
+    ['a link no site reads', 'https://www.examplecorp.example/careers/1000001'],
+    ['a link to a board, and no job', 'https://boards.greenhouse.io/examplecorp'],
+    ['the same link, not confirmed', OLD_URL],
+    ['the same job on a careers page', 'https://www.examplecorp.example/careers?gh_jid=1000001'],
+  ])(
+    'the kept one names no other job (%s): a draft to review again, with no mark',
+    async (_, link) => {
+      const { app, a } = await boot(ON);
+      const d = await reviewed(app, a);
+      const keepId = await kept(app, a, null, link);
+      await merge(a, keepId, d.oppId);
+      expect(await rowOf(app, d.id)).toMatchObject({
+        opportunityId: keepId,
+        status: 'draft',
+        reviewDigest: null,
+        postingChangedAt: null,
+      });
+      expect(await marks(app)).toEqual([]);
+      expect(await merges(app)).toHaveLength(1);
+    },
+  );
+
+  it('a stored identity counts before the link', async () => {
+    const { app, a } = await boot(ON);
+    const d = await reviewed(app, a);
+    await merge(a, await kept(app, a, OLD_REF, NEW_URL), d.oppId);
+    expect(await marks(app)).toEqual([]);
+    expect(await merges(app)).toHaveLength(1);
+  });
+
+  const SAME_JOB: [string, AtsJobRef][] = [
+    [
+      'another link',
+      { ...OLD_REF, url: 'https://job-boards.greenhouse.io/examplecorp/jobs/1000001?gh_src=x' },
+    ],
+    ['its company written otherwise', { ...OLD_REF, org: 'ExampleCorp' }],
+  ];
+
+  // The digest covers the opportunity's id, so no review from before a merge can be handed off.
+  it.each(SAME_JOB)(
+    'the same job, under %s: a draft to review again, with no mark, and it can be',
+    async (_, ref) => {
+      const { app, a } = await boot(ON);
+      const d = await reviewed(app, a);
+      const keepId = await kept(app, a, ref);
+      const before = await rowOf(app, d.id);
+      await merge(a, keepId, d.oppId);
+      const row = await rowOf(app, d.id);
+      expect(row).toEqual({
+        ...before,
+        opportunityId: keepId,
+        status: 'draft',
+        reviewDigest: null,
+        reviewExpiresAt: null,
+        updatedAt: row?.updatedAt,
+      });
+      expect(await marks(app)).toEqual([]);
+      expect(await merges(app)).toEqual([
+        [
+          a.userId,
+          { submissionId: d.id, opportunityId: keepId, from: 'reviewed', cause: 'merged' },
+        ],
+      ]);
+      const stale = await review(a, d.id, d.digest);
+      expect(stale.statusCode, stale.body).toBe(409);
+      expect(stale.json()).toMatchObject({ error: { code: 'review_stale' } });
+      const now = (await api(a, 'GET', `/submissions/${d.id}`)).json<SubmissionJson>();
+      expect((await review(a, d.id, now.reviewDigest)).statusCode).toBe(200);
+      const out = await handoff(a, d.id);
+      expect(out.statusCode, out.body).toBe(200);
+      expect(out.json()).toMatchObject({ destinationUrl: OLD_URL });
+    },
+  );
+
+  it.each(SAME_JOB)(
+    'the same job, under %s: a draft not reviewed moves as it is',
+    async (_, ref) => {
+      const { app, a } = await boot(ON);
+      const d = await draft(app, a);
+      const keepId = await kept(app, a, ref);
+      const before = await rowOf(app, d.id);
+      await merge(a, keepId, d.oppId);
+      expect(await rowOf(app, d.id)).toEqual({ ...before, opportunityId: keepId });
+      expect([...(await marks(app)), ...(await merges(app))]).toEqual([]);
+      const stale = await review(a, d.id, d.digest);
+      expect(stale.statusCode, stale.body).toBe(409);
+      expect(stale.json()).toMatchObject({ error: { code: 'review_stale' } });
+    },
+  );
+
+  describe.each([
+    ['another job', NEW_REF],
+    ['the same job', OLD_REF],
+  ])('with one of %s', (_, ref) => {
+    it('the kept one’s own draft stays reviewed, and is handed off', async () => {
+      const { app, a } = await boot(ON);
+      const d = await reviewed(app, a);
+      const before = await rowOf(app, d.id);
+      await merge(a, d.oppId, await kept(app, a, ref));
+      expect(await rowOf(app, d.id)).toEqual(before);
+      expect([...(await marks(app)), ...(await merges(app))]).toEqual([]);
+      const out = await handoff(a, d.id);
+      expect(out.statusCode, out.body).toBe(200);
+    });
+
+    it('one handed off moves as it is', async () => {
+      const { app, a } = await boot(ON);
+      const d = await reviewed(app, a);
+      expect((await handoff(a, d.id)).statusCode).toBe(200);
+      const before = await rowOf(app, d.id);
+      const keepId = await kept(app, a, ref);
+      await merge(a, keepId, d.oppId);
+      expect(await rowOf(app, d.id)).toEqual({ ...before, opportunityId: keepId });
+      expect([...(await marks(app)), ...(await merges(app))]).toEqual([]);
+    });
+
+    it.each(['submitted', 'abandoned'] as const)('one %s moves as it is', async (status) => {
+      const { app, a } = await boot(ON);
+      const d = await reviewed(app, a);
+      await app.db
+        .update(applicationSubmissions)
+        .set({ status })
+        .where(eq(applicationSubmissions.id, d.id))
+        .run();
+      const before = await rowOf(app, d.id);
+      const keepId = await kept(app, a, ref);
+      await merge(a, keepId, d.oppId);
+      expect(await rowOf(app, d.id)).toEqual({ ...before, opportunityId: keepId });
+      expect([...(await marks(app)), ...(await merges(app))]).toEqual([]);
+    });
+  });
+
+  it.each([
+    ['another job', NEW_REF],
+    ['the same job', OLD_REF],
+  ])(
+    'moved to %s: its place under the daily cap is neither freed nor taken twice',
+    async (_, ref) => {
+      const { app, a } = await boot(ON);
+      const used = async () =>
+        (await api(a, 'GET', '/settings/applications')).json<{ used: number }>().used;
+      const d = await reviewed(app, a);
+      expect(await used()).toBe(1);
+      await merge(a, await kept(app, a, ref), d.oppId);
+      expect(await used()).toBe(1);
+      const now = (await api(a, 'GET', `/submissions/${d.id}`)).json<SubmissionJson>();
+      expect((await review(a, d.id, now.reviewDigest)).statusCode).toBe(200);
+      expect(await used()).toBe(1);
+    },
+  );
+
+  it('started for another site, company and job: its own is what it is compared with', async () => {
+    const { app, a } = await boot(ON);
+    const job = '6b1f6a0e-7a0b-4a53-9c7d-2f6a8f1f0c11';
+    const lever: AtsJobRef = {
+      kind: 'ats_lever',
+      org: 'othercorp',
+      externalId: job,
+      url: `https://jobs.lever.co/othercorp/${job}`,
+    };
+    const same = await reviewed(app, a, lever);
+    await merge(a, await kept(app, a, lever), same.oppId);
+    expect(await marks(app)).toEqual([]);
+    expect(await merges(app)).toHaveLength(1);
+    expect(await rowOf(app, same.id)).toMatchObject({ status: 'draft', postingChangedAt: null });
+  });
+
+  it('it is the posting of the kept one that counts, not what its own was changed to', async () => {
+    const { app, a } = await boot(ON);
+    const d = await reviewed(app, a);
+    await changePosting(a, d.oppId, NEW_URL);
+    const now = (await api(a, 'GET', `/submissions/${d.id}`)).json<SubmissionJson>();
+    expect((await review(a, d.id, now.reviewDigest)).statusCode).toBe(200);
+    const { postingChangedAt } = (await rowOf(app, d.id))!;
+    await merge(a, await kept(app, a, OLD_REF), d.oppId);
+    expect(await rowOf(app, d.id)).toMatchObject({ status: 'draft', postingChangedAt });
+    expect(await marks(app)).toHaveLength(1);
+  });
+
+  it('a link saved on the kept one while the merge waits is the one compared with', async () => {
+    const { app, a } = await boot(ON);
+    const d = await reviewed(app, a);
+    const keepId = await kept(app, a, OLD_REF);
+    const [saved] = await heldApart(
+      app,
+      'opportunities.update.locked',
+      () => changePosting(a, keepId, NEW_URL),
+      () => mergeOpportunities(app.db, ctxOf(a), keepId, d.oppId),
+    );
+    expect(saved.statusCode, saved.body).toBe(200);
+    expect(await rowOf(app, d.id)).toMatchObject({ opportunityId: keepId, status: 'draft' });
+    expect(await marks(app)).toHaveLength(1);
+  });
+
+  it('a review confirmed while the merge is under way is refused, once it is done', async () => {
+    const { app, a } = await boot(ON);
+    const d = await draft(app, a);
+    const keepId = await kept(app, a, NEW_REF);
+    const [, stale] = await heldApart(
+      app,
+      'opportunities.merge.moved',
+      () => mergeOpportunities(app.db, ctxOf(a), keepId, d.oppId),
+      () => review(a, d.id, d.digest),
+    );
+    expect(stale.statusCode, stale.body).toBe(409);
+    expect(stale.json()).toMatchObject({ error: { code: 'review_stale' } });
+    expect(await rowOf(app, d.id)).toMatchObject({ opportunityId: keepId, status: 'draft' });
+  });
+});
+
 describe('the attempt the lock was taken on is the one marked (#157)', () => {
   it('lockLiveAttempt returns the id it locked, or null with no live attempt', async () => {
     const { app, a } = await boot(ON);
