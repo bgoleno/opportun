@@ -190,6 +190,9 @@ export function submissionErrorText(err: unknown): string {
   switch (code) {
     case 'live_submission_exists':
       return 'This opportunity already has an application in progress, perhaps from another tab. It is shown now.';
+    // At a start, so not the words below: there is no application yet (#913).
+    case 'posting_changed':
+      return "This opportunity's posting changed while you were starting the application. Check the posting, then start again.";
     case 'invalid_transition':
     case 'conflict':
       return 'This application changed in another tab or window. The page now shows where it stands.';
@@ -374,6 +377,7 @@ export function useSubmission(id: string) {
 }
 
 export function useCreateSubmission(opportunityId: string) {
+  const qc = useQueryClient();
   const invalidate = useInvalidate(opportunityId);
   return useMutation({
     // No resumeId on a shared demo account (#546): the server refuses every resume there.
@@ -382,6 +386,12 @@ export function useCreateSubmission(opportunityId: string) {
         method: 'POST',
         body,
       }),
+    // Refused for a posting that changed meanwhile (#913): the sentence says to check the posting,
+    // so the one on the page is read again before it is said.
+    onError: async (err) => {
+      if (!(err instanceof ApiError) || err.code !== 'posting_changed') return;
+      await qc.invalidateQueries({ queryKey: qk.opportunity(opportunityId), exact: true });
+    },
     // Settled: a refused create (another tab started one: live_submission_exists) must show
     // the attempt that exists, not leave the page retrying the same refusal.
     onSettled: invalidate,

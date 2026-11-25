@@ -44,6 +44,8 @@ export function SetPasswordCard(props: {
   email?: string;
   /** ?oauth=... on the Security page: setpw_ready after a successful confirmation. */
   flash?: string | undefined;
+  /** The confirmation has been used, or has run out. */
+  onSpent?: () => void;
   /** Leaves for the provider (tests replace it; jsdom cannot navigate). */
   navigate?: (url: string) => void;
 }) {
@@ -75,7 +77,16 @@ export function SetPasswordCard(props: {
       });
       navigate(authUrl);
     } catch (err) {
-      setNotice(errorMessage(err));
+      const code = err instanceof ApiError ? err.code : '';
+      // The card goes with the next read of hasPassword, so it is said outside it.
+      if (code === 'has_password')
+        toast({ title: 'Password already set', description: errorMessage(err) });
+      else setNotice(errorMessage(err));
+      // Changed elsewhere: a password set in another tab, or another account signed in there (#927).
+      if (code === 'has_password' || code === 'not_linked') {
+        void qc.invalidateQueries({ queryKey: twoFactorQuery.queryKey });
+        void qc.invalidateQueries({ queryKey: linkedAccountsQuery.queryKey });
+      }
     }
   }
 
@@ -83,6 +94,7 @@ export function SetPasswordCard(props: {
     setFormError(null);
     try {
       await api('/auth/password', { method: 'POST', body: { next } });
+      props.onSpent?.();
       form.reset();
       void qc.invalidateQueries({ queryKey: twoFactorQuery.queryKey });
       void qc.invalidateQueries({ queryKey: linkedAccountsQuery.queryKey });
@@ -93,6 +105,7 @@ export function SetPasswordCard(props: {
       });
     } catch (err) {
       if (err instanceof ApiError && err.code === 'reauth_required') {
+        props.onSpent?.();
         form.reset();
         setReady(false);
         setNotice(EXPIRED);

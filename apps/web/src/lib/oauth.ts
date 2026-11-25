@@ -2,6 +2,7 @@
 // navigations, since the server answers with a redirect to the provider), and the flashes
 // the callback sends back.
 import { queryOptions } from '@tanstack/react-query';
+import type { AnyRouter } from '@tanstack/react-router';
 import { api, API_BASE } from './api';
 
 export const OAUTH_PROVIDERS = ['google', 'github', 'linkedin'] as const;
@@ -59,6 +60,26 @@ const GENERIC_ERROR = 'Something went wrong signing in with that provider. Try a
 export function oauthFlashMessage(flash: string | undefined): string | null {
   if (flash === undefined || flash === '') return null;
   return LOGIN_FLASH.get(flash) ?? GENERIC_ERROR;
+}
+
+/**
+ * Takes the reason a page was sent with (`?oauth=`) out of its address, in place, once the page has read
+ * it: a reload, Back or a second visit does not say it again (#942, #1021). By the router, as the next
+ * navigation from the page would put back what only the browser's history had lost. The rest of the
+ * search stays, with `add` in it; so does the hash, where it is the page's to keep.
+ */
+export function dropReason(
+  router: AnyRouter,
+  opts: { add?: Record<string, unknown>; keepHash: boolean },
+): void {
+  const { oauth, ...rest } = router.state.location.search as Record<string, unknown>;
+  if (oauth === undefined && opts.add === undefined) return;
+  void router.navigate({
+    to: router.state.location.pathname,
+    search: { ...rest, ...opts.add },
+    ...(opts.keepHash ? { hash: true as const } : {}),
+    replace: true,
+  });
 }
 
 const PENDING_FRAGMENT = /^#pending2fa=([A-Za-z0-9_-]{16,128})$/;

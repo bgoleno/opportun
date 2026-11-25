@@ -132,7 +132,8 @@ describe("the shared demo admin's admin actions reach pinned accounts only (#563
   });
 
   it("the jobs list shows pinned and instance jobs, and a dedicated account's job cannot be retried", async () => {
-    const { app, admin } = await boot();
+    const { app, admin, pinned, dedicated } = await boot();
+    await app.db.delete(jobs).run();
     const now = Date.now();
     const job = (id: string, userId: string | null) => ({
       id,
@@ -160,6 +161,13 @@ describe("the shared demo admin's admin actions reach pinned accounts only (#563
     expect(ids).toContain('j-pinned');
     expect(ids).toContain('j-instance');
     expect(ids).not.toContain('j-dedicated');
+    // The counts are the list's (#982): the pinned accounts' and the instance's, and no one else's.
+    const dead = async (c: typeof admin) =>
+      json<{ counts: { dead: number } }>(await c.request({ method: 'GET', url: '/api/v1/jobs' }))
+        .counts.dead;
+    expect(await dead(admin)).toBe(2);
+    expect(await dead(pinned)).toBe(1);
+    expect(await dead(dedicated)).toBe(1);
     const retryDedicated = await admin.request({
       method: 'POST',
       url: '/api/v1/jobs/j-dedicated/retry',

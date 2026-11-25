@@ -383,6 +383,9 @@ job alert, an MCP source, or **Capture posting**):
   job id on the same site), even if its title or location has changed: nothing is added. This holds
   for a Closed opportunity too.
 
+A place that was linked while the role was open brings a card again, once, when it is posted anew after
+the role is Closed, Dismissed or deleted. The very posting that was linked does not.
+
 You get a card when the opportunity is Dismissed, when it is Closed and the posting is not the very
 one you captured, and for another level of the same title ("Principal" beside "Senior"), also at the
 very same place, another title or another company. Earlier versions dropped another level at the same
@@ -409,8 +412,13 @@ those settled results live.
 Dismissed a result that was wrong to skip, or a requisition reopened later? **Unsuppress**
 lets the next repost through to the review queue again, instead of it being silently treated
 as the same job forever. For an accepted result, unsuppressing only takes effect once the
-opportunity it became is itself dismissed; while that opportunity is still active, a repost
-should keep being treated as the same job.
+opportunity it became is dismissed or deleted; while that opportunity is still there, a repost
+should keep being treated as the same job. Deleting an opportunity does not bring its reposts back by
+itself: unsuppress its result too if you want them.
+
+Undoing a dismissal (the **Undo** of the notice after a bulk dismiss) puts the result back in the
+queue. If you unsuppressed it meanwhile and the job is in your pipeline or in the queue again by then,
+it stays dismissed, and the notice says where the job is, with a link.
 
 Once unsuppressed, a result shows an **Unsuppressed** badge in place of the button. Reversing
 a decision and never having made one are different states, and collapsing them into one

@@ -18,6 +18,8 @@ import {
 import { setUnknownKeyMode, UnknownTelemetryKeyError } from '../src/obs/gate';
 import { createLogger, frameLines, gatedDestination, logRequest, WITHHELD } from '../src/obs/log';
 import { captureLogs, testApp } from './helpers';
+import { PATIENCE_MS } from './patience';
+import { cpuMs } from './scaling';
 
 const NAME = 'Jane Doe';
 const EMAIL = 'jane.doe@example.com';
@@ -515,17 +517,20 @@ describe('the header search (#399)', () => {
     });
   });
 
-  /** The timing bound: generous for a slow runner, and the uncapped search takes over a second. */
+  /**
+   * The bound, in CPU time (test/scaling.ts), which a busy host does not add to: generous for a slow
+   * runner, and the uncapped search takes over a second.
+   */
   const BOUND_MS = 100;
 
-  /** The fastest of five runs, so a busy machine's one slow run does not count. */
+  /** The fastest of five runs, so one the machine disturbs does not count. */
   const fastest = (fn: () => unknown) => {
     fn();
     let best = Infinity;
     for (let i = 0; i < 5; i++) {
-      const t = performance.now();
+      const t = cpuMs();
       fn();
-      best = Math.min(best, performance.now() - t);
+      best = Math.min(best, cpuMs() - t);
     }
     return best;
   };
@@ -687,7 +692,7 @@ describe("the database's default reporters keep their frames (tl on #389)", () =
       });
     try {
       fn();
-      const end = Date.now() + 5_000;
+      const end = Date.now() + PATIENCE_MS;
       for (;;) {
         const found = lines
           .flatMap((l) => l.split('\n'))

@@ -444,7 +444,7 @@ export async function search(
      AND ${ownedSql('a.user_id', ctx)}
     LEFT JOIN communications c
       ON search_index.entity_kind = 'communication' AND c.id = search_index.entity_id
-     AND ${ownedSql('c.user_id', ctx)}
+     AND ${ownedSql('c.user_id', ctx)} AND c.rejected_at IS NULL
     LEFT JOIN network_contacts p
       ON search_index.entity_kind = 'contact' AND p.id = search_index.entity_id
      AND ${ownedSql('p.user_id', ctx)}
@@ -494,7 +494,7 @@ async function searchPg(
      AND ${ownedSql('a.user_id', ctx)}
     LEFT JOIN communications c
       ON search_index.entity_kind = 'communication' AND c.id = search_index.entity_id
-     AND ${ownedSql('c.user_id', ctx)}
+     AND ${ownedSql('c.user_id', ctx)} AND c.rejected_at IS NULL
     LEFT JOIN network_contacts p
       ON search_index.entity_kind = 'contact' AND p.id = search_index.entity_id
      AND ${ownedSql('p.user_id', ctx)}

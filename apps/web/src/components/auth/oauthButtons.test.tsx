@@ -7,7 +7,7 @@ import { OAuthButtons } from './OAuthButtons';
 describe('OAuthButtons', () => {
   it('shows a sign-in link for each configured provider only', async () => {
     mockApi({ 'GET /auth/oauth/providers': { providers: ['google', 'github'] } });
-    renderWithProviders(<OAuthButtons />);
+    renderWithProviders(<OAuthButtons onPress={() => undefined} />);
     const google = await screen.findByRole('link', { name: 'Continue with Google' });
     expect(google).toHaveAttribute('href', '/api/v1/auth/oauth/google/start?mode=login');
     expect(screen.getByRole('link', { name: 'Continue with GitHub' })).toHaveAttribute(
@@ -19,7 +19,7 @@ describe('OAuthButtons', () => {
 
   it('includes LinkedIn once an admin configures it', async () => {
     mockApi({ 'GET /auth/oauth/providers': { providers: ['linkedin'] } });
-    renderWithProviders(<OAuthButtons />);
+    renderWithProviders(<OAuthButtons onPress={() => undefined} />);
     expect(await screen.findByRole('link', { name: 'Continue with LinkedIn' })).toHaveAttribute(
       'href',
       '/api/v1/auth/oauth/linkedin/start?mode=login',
@@ -28,7 +28,7 @@ describe('OAuthButtons', () => {
 
   it('renders nothing when no provider is configured', async () => {
     const { calls } = mockApi({ 'GET /auth/oauth/providers': { providers: [] } });
-    renderWithProviders(<OAuthButtons />);
+    renderWithProviders(<OAuthButtons onPress={() => undefined} />);
     await waitFor(() => expect(calls.some((c) => c.path === '/auth/oauth/providers')).toBe(true));
     expect(screen.queryByRole('link', { name: /Continue with/ })).toBeNull();
     expect(screen.queryByText(/or continue with/i)).toBeNull();

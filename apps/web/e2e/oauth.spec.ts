@@ -124,12 +124,25 @@ test('sign in with GitHub: admin configures, member links, signs in, unlinks (FR
   await confirmLink.getByRole('button', { name: 'Continue' }).click();
   await page.waitForURL((url) => url.pathname === '/settings/security');
   await expect(page.getByText('Account linked. You can now sign in with it.')).toBeVisible();
+  // Said once: it is out of the address, and a reload has nothing to say (#1021).
+  await expect(page).toHaveURL(/\/settings\/security$/);
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Unlink GitHub' })).toBeVisible();
+  await expect(page.getByText('Account linked. You can now sign in with it.')).toBeHidden();
   await expect(page.getByRole('button', { name: 'Unlink GitHub' })).toBeVisible();
 
   await page.getByRole('button', { name: /^Account:/ }).click();
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
   await page.waitForURL((url) => url.pathname === '/login');
+  // A page asked for while signed out is the one the provider's sign-in goes on to (#942), and Back
+  // does not come to the Dashboard that the server sent the browser to first.
+  await page.goto('/settings/security#asked');
+  await expect(page).toHaveURL(/\/login\?redirect=%2Fsettings%2Fsecurity%23asked$/);
   await page.getByRole('link', { name: 'Continue with GitHub' }).click();
+  await expect(page.getByRole('button', { name: 'Unlink GitHub' })).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/security#asked$/);
+  // Once: the Dashboard is the Dashboard from here, and after a reload.
+  await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
 
   // Someone else's GitHub account with the member's address, unverified, gets nowhere.
@@ -140,15 +153,19 @@ test('sign in with GitHub: admin configures, member links, signs in, unlinks (FR
   await fakeGithubConsent(page, { id: `${identity.id}9`, email, emailVerified: false });
   await page.getByRole('link', { name: 'Continue with GitHub' }).click();
   await expect(page.getByText(/No account here matches that sign-in/)).toBeVisible();
-  await expect(page).toHaveURL(/\/login\?oauth=unknown$/);
+  // The reason is said once: it is out of the address, and a reload has nothing to say (#942).
+  await expect(page).toHaveURL(/\/login$/);
+  await page.reload();
+  await expect(page.getByRole('link', { name: 'Continue with GitHub' })).toBeVisible();
+  await expect(page.getByText(/No account here matches that sign-in/)).toBeHidden();
 
   // Even a VERIFIED address on another GitHub account never links or signs in (no email-based
   // password reset exists here, so a mailbox is not a key to the account).
   await page.unrouteAll();
   await fakeGithubConsent(page, { id: `${identity.id}8`, email, emailVerified: true });
   await page.getByRole('link', { name: 'Continue with GitHub' }).click();
-  await expect(page).toHaveURL(/\/login\?oauth=existing_account$/);
   await expect(page.getByText(/This email already has an account here/)).toBeVisible();
+  await expect(page).toHaveURL(/\/login$/);
 
   // Back in with the password, unlink with the password.
   await page.getByLabel('Email').fill(email);
@@ -252,15 +269,75 @@ test('an admin password reset also unlinks GitHub sign-in (#602)', async ({ page
   await page.reload();
   await page.waitForURL((url) => url.pathname === '/login');
   await page.getByRole('link', { name: 'Continue with GitHub' }).click();
-  await expect(page).toHaveURL(/\/login\?oauth=unknown$/);
   await expect(page.getByText(/No account here matches that sign-in/)).toBeVisible();
+  // The page the reload asked for is still asked for after the provider's refusal (#942).
+  await expect(page).toHaveURL(/\/login\?redirect=%2Fsettings%2Fsecurity/);
 
   // With the temporary password the member is in, and GitHub reads as not linked.
   await page.getByLabel('Email').fill(email);
   await page.getByLabel('Password', { exact: true }).fill(temporary);
   await page.getByRole('button', { name: 'Sign in' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
-  await page.goto('/settings/security');
+  await page.waitForURL((url) => url.pathname === '/settings/security');
   await expect(page.getByRole('button', { name: 'Link GitHub' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Unlink GitHub' })).toHaveCount(0);
+});
+
+// sec on #942: what a redirect elsewhere comes to is the browser's own address, not only the check's
+// answer. What is kept in the tab is written here, as nothing of the app would write it.
+test('a redirect to another site, in any form, ends on this one (#942)', async ({ page }) => {
+  const email = await registerUser(page, 'Octo Elsewhere');
+  const origin = new URL(page.url()).origin;
+  const dashboard = page.getByRole('heading', { name: 'Dashboard', level: 1 });
+  const FORMS = [
+    'https://evil.example/x',
+    'https:/evil.example',
+    'javascript:document.title="taken"',
+    '//evil.example/x',
+    '///evil.example',
+    ' //evil.example',
+    '/\\evil.example',
+    '/\t/evil.example',
+    '/.//evil.example',
+    '/x/..//evil.example',
+    '/%2F/evil.example',
+    '/%2f%2fevil.example',
+    '/%5cevil.example',
+    '/%252F/evil.example',
+    '/%09/evil.example',
+    '/api/v1/auth/me',
+    '/%61pi/v1/auth/me',
+    '/LOGIN/',
+    '/%6Cogin',
+  ];
+  for (const to of FORMS) {
+    await page.evaluate((page_) => {
+      window.sessionStorage.setItem(
+        'opportun.loginRedirect',
+        JSON.stringify({ to: page_, at: Date.now() }),
+      );
+    }, to);
+    await page.goto('/');
+    await expect(dashboard, to).toBeVisible();
+    expect([new URL(page.url()).origin, new URL(page.url()).pathname], to).toEqual([origin, '/']);
+  }
+  // Control: a page of the app is gone to.
+  await page.evaluate(() =>
+    window.sessionStorage.setItem(
+      'opportun.loginRedirect',
+      JSON.stringify({ to: '/inbox', at: Date.now() }),
+    ),
+  );
+  await page.goto('/');
+  await expect(page).toHaveURL(`${origin}/inbox`);
+
+  // And by the address, with a password.
+  await page.getByRole('button', { name: /^Account:/ }).click();
+  await page.getByRole('menuitem', { name: 'Sign out' }).click();
+  await page.waitForURL((url) => url.pathname === '/login');
+  await page.goto(`/login?redirect=${encodeURIComponent('/%2F/evil.example')}`);
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password', { exact: true }).fill(PASSWORD);
+  await page.getByRole('button', { name: 'Sign in' }).click();
+  await expect(dashboard).toBeVisible();
+  expect([new URL(page.url()).origin, new URL(page.url()).pathname]).toEqual([origin, '/']);
 });

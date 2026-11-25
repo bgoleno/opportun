@@ -14,6 +14,7 @@ import {
   registerUser,
   stubOtherHosts,
 } from './helpers';
+import { expectLinedUp } from './fieldRows';
 
 test.beforeEach(async ({ context }) => {
   await stubOtherHosts(context);
@@ -89,8 +90,11 @@ test('apply: choose a resume, add details, review everything, open the form, and
   await page.getByRole('button', { name: 'Next: Details' }).click();
 
   // S3: details and one question.
+  await expect(page.getByLabel('Full name')).toBeVisible();
+  // Some fields have a hint, and one whose value is not the profile's has a tick under it (#951).
   await page.getByLabel('Full name').fill('Jane Example');
   await page.getByLabel('Email').fill('jane@example.com');
+  await expectLinedUp(page, []);
   await page.getByRole('button', { name: 'Add a question' }).click();
   await page.getByLabel('Question', { exact: true }).fill('Why Vandelay?');
   await page.getByLabel('Your answer').fill('Latex, mostly.');

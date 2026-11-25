@@ -2,7 +2,7 @@
 // confident match attaches without asking; several come back for the user to pick; no board at
 // all answers with the paste hint. LinkedIn links are refused up front (constraint C-1).
 import type { Db } from '../src/db/client';
-import type { NormalizedPosting } from '@opportun/core';
+import { sha256Hex, type NormalizedPosting } from '@opportun/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   registerSource,
@@ -1363,27 +1363,159 @@ describe('POST /opportunities/:id/posting/rederive (issue #264)', () => {
     expect(res.statusCode).toBe(409);
   });
 
-  it('succeeds with force even when the description is the user’s own writing', async () => {
-    const { app, a } = await boot();
-    const id = await seed(app, a, { title: 'Staff Product Manager', ats: false });
-    await createActivity(app.db, ctxOf(a), id, {
-      kind: 'capture',
-      title: 'Captured from LinkedIn',
-      bodyMd: RAW_CAPTURE,
-      occurredAt: Date.now(),
-      participants: [],
-      externalUrl: 'https://www.linkedin.com/jobs/view/1',
+  // #1010: force alone is an answer about some text; `replaceDescription` says which.
+  describe('over the description it was asked about, and no other', () => {
+    const OLD = 'my own notes';
+    const MINE = 'what I wrote in the other tab: café, 東京 🚀';
+    /** An opportunity with a stored capture and `text`, the user's own or the system's. */
+    async function captured(text: string | null, by: 'user' | 'system') {
+      const { app, a } = await boot();
+      const ctx = ctxOf(a);
+      const id = await seed(app, a, {
+        title: 'Staff Product Manager',
+        ats: false,
+        ...(text === null ? {} : { descriptionMd: text }),
+      });
+      await createActivity(app.db, ctx, id, {
+        kind: 'capture',
+        title: 'Captured from LinkedIn',
+        bodyMd: RAW_CAPTURE,
+        occurredAt: Date.now(),
+        participants: [],
+        externalUrl: 'https://www.linkedin.com/jobs/view/1',
+      });
+      if (text !== null && by === 'system') {
+        await updateOpportunity(app.db, ctx, id, {
+          descriptionFingerprint: descriptionFingerprint(text),
+        });
+      }
+      return {
+        app,
+        id,
+        ctx,
+        // Another tab of the same user's: its save is a request of its own.
+        save: async (descriptionMd: string | null) => {
+          const res = await a.request({
+            method: 'PATCH',
+            url: `/api/v1/opportunities/${id}`,
+            payload: { descriptionMd },
+          });
+          expect(res.statusCode, res.body).toBe(200);
+        },
+        rederive: (payload: Record<string, unknown>) =>
+          a.request({
+            method: 'POST',
+            url: `/api/v1/opportunities/${id}/posting/rederive`,
+            payload,
+          }),
+        read: () => getOpportunity(app.db, ctx, id),
+        notes: async () =>
+          (await listActivities(app.db, ctx, id, { limit: 50, offset: 0 })).items
+            .filter((i) => i.kind === 'note')
+            .map((i) => i.title),
+      };
+    }
+    /** What the page sends: the answer, and the text it was about. */
+    const about = (text: string | null) => ({
+      force: true,
+      replaceDescription: sha256Hex(text ?? ''),
     });
-    await updateOpportunity(app.db, ctxOf(a), id, { descriptionMd: 'my own notes' });
 
-    const res = await a.request({
-      method: 'POST',
-      url: `/api/v1/opportunities/${id}/posting/rederive`,
-      payload: { force: true },
+    it.each([
+      ['the user’s own', OLD, 'user'],
+      ['the system’s', OLD, 'system'],
+      ['none', null, 'system'],
+    ] as const)('%s, as it was asked about: replaced', async (_what, text, by) => {
+      const { rederive, read } = await captured(text, by);
+      const res = await rederive(about(text));
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ outcome: 'capture_only' });
+      expect((await read()).descriptionMd).toContain('telemetry infrastructure');
     });
 
-    expect(res.statusCode, res.body).toBe(200);
-    expect(res.json().opportunity.descriptionMd).toContain('telemetry infrastructure');
+    it.each([
+      ['an edit of the user’s own', OLD, 'user'],
+      ['an edit of the system’s', OLD, 'system'],
+      ['a first description', null, 'system'],
+    ] as const)('%s in another tab since is kept, and it says so', async (_what, text, by) => {
+      const { save, rederive, read, notes } = await captured(text, by);
+      await save(MINE);
+      const before = await read();
+      const res = await rederive(about(text));
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toEqual({
+        code: 'description_changed',
+        message:
+          "This opportunity's description changed since this page showed it, so nothing was changed. Check the description, then try again.",
+      });
+      expect(await read()).toEqual(before);
+      expect(before.descriptionMd).toBe(MINE);
+      expect(await notes()).toEqual([]);
+      // Asked again, about the text that is there.
+      expect((await rederive(about(MINE))).statusCode).toBe(200);
+    });
+
+    it('a description cleared in another tab since is not filled', async () => {
+      const { save, rederive, read } = await captured(OLD, 'user');
+      await save(null);
+      expect((await rederive(about(OLD))).statusCode).toBe(409);
+      expect((await read()).descriptionMd).toBeNull();
+    });
+
+    // Not the user's, so their edit is not at stake; but it is not what they were asked about.
+    it('a copy the board check wrote since is left too', async () => {
+      const { app, ctx, id, rederive, read } = await captured(OLD, 'system');
+      await updateOpportunity(app.db, ctx, id, {
+        descriptionMd: "the board's copy",
+        descriptionFingerprint: descriptionFingerprint("the board's copy"),
+      });
+      expect((await rederive(about(OLD))).statusCode).toBe(409);
+      expect((await read()).descriptionMd).toBe("the board's copy");
+    });
+
+    // A page open across the upgrade, or another caller: it says yes, and not to what.
+    it('force alone does not replace the user’s own description', async () => {
+      const { rederive, read } = await captured(OLD, 'user');
+      const res = await rederive({ force: true });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.code).toBe('already_described');
+      expect((await read()).descriptionMd).toBe(OLD);
+    });
+
+    it('force alone still re-derives over the system’s', async () => {
+      const { rederive } = await captured(OLD, 'system');
+      expect((await rederive({ force: true })).json().outcome).toBe('capture_only');
+    });
+
+    it('the text alone, with no force, replaces nothing of the user’s', async () => {
+      const { rederive, read } = await captured(OLD, 'user');
+      const res = await rederive({ replaceDescription: sha256Hex(OLD) });
+      expect(res.json().error.code).toBe('already_described');
+      expect((await read()).descriptionMd).toBe(OLD);
+    });
+
+    it.each(['', 'x', 'A'.repeat(64)])(
+      'a fingerprint that is not one is refused: %s',
+      async (bad) => {
+        const { rederive, read } = await captured(OLD, 'user');
+        expect((await rederive({ force: true, replaceDescription: bad })).statusCode).toBe(400);
+        expect((await read()).descriptionMd).toBe(OLD);
+      },
+    );
+
+    it('a posting the user confirmed, with their own text: both, as before', async () => {
+      const { app, ctx, id, rederive, read } = await captured(OLD, 'user');
+      await setPostingState(app.db, ctx, id, {
+        postingState: 'confirmed',
+        postingStateDetail: 'user_confirmed',
+      });
+      expect((await rederive({ replaceDescription: sha256Hex(OLD) })).json().error.code).toBe(
+        'user_confirmed',
+      );
+      expect((await rederive({ force: true })).json().error.code).toBe('already_described');
+      expect((await read()).descriptionMd).toBe(OLD);
+      expect((await rederive(about(OLD))).statusCode).toBe(200);
+    });
   });
 
   it('refuses when the opportunity has no stored capture', async () => {

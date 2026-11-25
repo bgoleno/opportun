@@ -11,7 +11,7 @@ import { isSharedDemoAdmin, withinSharedDemo } from '../lib/demoSharedAdmin';
 import { forbidden, HttpError, notFound } from '../lib/errors';
 import { reviveDeadJob, type JobRow } from '../jobs/runner';
 import { requireAdmin, requireUser } from '../repos/base';
-import { jobExists, jobOwner, listJobs, type JobListScope } from '../repos/jobs';
+import { countJobs, jobExists, jobOwner, listJobs, type JobListScope } from '../repos/jobs';
 import { IdParams } from './common';
 
 export const JobView = z.object({
@@ -57,8 +57,18 @@ function toJobView(
 }
 
 const ListQuery = z.object({
-  status: z.enum(JOB_STATUSES).optional(),
+  // `queued` and `retrying` are the two halves of `pending`, as Settings > Jobs shows them (#982).
+  status: z.enum([...JOB_STATUSES, 'queued', 'retrying']).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
+});
+
+/** Of every job the reader may see, whatever the list is filtered or limited to (#982). */
+const Counts = z.object({
+  queued: z.number().int(),
+  retrying: z.number().int(),
+  running: z.number().int(),
+  done: z.number().int(),
+  dead: z.number().int(),
 });
 
 export async function jobRoutes(app: FastifyInstance): Promise<void> {
@@ -68,7 +78,10 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
   api.get(
     '/jobs',
     {
-      schema: { querystring: ListQuery, response: { 200: z.object({ items: z.array(JobView) }) } },
+      schema: {
+        querystring: ListQuery,
+        response: { 200: z.object({ items: z.array(JobView), counts: Counts }) },
+      },
     },
     async (req) => {
       const ctx = requireUser(req);
@@ -83,7 +96,7 @@ export async function jobRoutes(app: FastifyInstance): Promise<void> {
         status: req.query.status,
         limit: req.query.limit,
       });
-      return { items: rows.map(toJobView) };
+      return { items: rows.map(toJobView), counts: await countJobs(db, scope) };
     },
   );
 

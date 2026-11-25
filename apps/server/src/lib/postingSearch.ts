@@ -17,7 +17,7 @@ import { AtsDetectTransientError, detectAts } from './atsDetect';
 import { TITLE_MATCH_THRESHOLD } from './titleMatch';
 import { boardConfig, boardFromUrl, boardOfSource } from './atsBoard';
 import { greenhouseJidOf, NormalizedPostingSchema, type NormalizedPosting } from '@opportun/core';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm';
 import {
   ATS_SOURCE_KINDS,
   getSource,
@@ -237,7 +237,7 @@ async function mailText(
   }
 }
 
-/** The ATS job references in the opportunity's linked messages, newest message first. */
+/** The ATS job references in the opportunity's linked messages, newest first, none rejected. */
 async function refsFromMail(
   db: Db,
   ctx: UserCtx,
@@ -254,7 +254,11 @@ async function refsFromMail(
     })
     .from(communications)
     .where(
-      and(eq(communications.userId, ctx.userId), eq(communications.opportunityId, opportunityId)),
+      and(
+        eq(communications.userId, ctx.userId),
+        eq(communications.opportunityId, opportunityId),
+        isNull(communications.rejectedAt),
+      ),
     )
     .orderBy(desc(communications.sentAt), desc(communications.id))
     .limit(MAX_MAILS)

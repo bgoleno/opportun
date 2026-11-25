@@ -401,7 +401,8 @@ export function useCompleteSession(resumeId: string, sessionId: string) {
   return useMutation({
     mutationFn: () =>
       api<TailoringSession>(`/tailoring/${enc(sessionId)}/complete`, { method: 'POST' }),
-    onSuccess: () =>
+    // A refusal too: the session was finished elsewhere, so what is shown is out of date (#927).
+    onSettled: () =>
       Promise.all([
         qc.invalidateQueries({ queryKey: rk.session(resumeId) }),
         qc.invalidateQueries({ queryKey: rk.resumes }),

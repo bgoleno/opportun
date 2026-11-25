@@ -40,6 +40,7 @@ import { testDialect } from './db';
 import { captureLogs } from './helpers';
 import type { TestClient } from './isolation';
 import { createTestDatabase } from './pgHarness';
+import { PATIENCE_MS } from './patience';
 import { pauseAt } from './race';
 
 const ENDED = 'postgres connection ended';
@@ -96,7 +97,8 @@ describe.runIf(testDialect === 'postgres')('a Postgres connection that ends (#96
     return res.rowCount ?? 0;
   }
   const until = async (done: () => Promise<boolean> | boolean): Promise<void> => {
-    for (let i = 0; i < 200; i += 1) {
+    const end = performance.now() + PATIENCE_MS;
+    while (performance.now() < end) {
       if (await done()) return;
       await new Promise((r) => setTimeout(r, 25));
     }
@@ -637,9 +639,9 @@ describe.runIf(testDialect === 'postgres')('a Postgres connection that ends (#96
       const t = await caught({ body: inTransaction, rowRetry: LONG });
       try {
         await t.waiting();
-        const began = performance.now();
+        // The next try is a minute off (LONG), past this test's own limit: a stop that waited for it
+        // never gets here, and no clock has to say so (#948).
         await t.runner.stop();
-        expect(performance.now() - began).toBeLessThan(5000);
         expect(t.said()).toHaveLength(1);
         expect(t.seen.errors.length).toBeGreaterThan(0);
         expect(await t.row()).toMatchObject({ status: 'running', attempts: 1 });
@@ -677,12 +679,12 @@ describe.runIf(testDialect === 'postgres')('a Postgres connection that ends (#96
         maxAttempts: 1,
         instance: true,
         gate: () => new DemoResetGate({ stopMarginMs: HOLD_LIMIT_MS - 5000 }),
-        rowRetry: { ...LONG, firstMs: 10_000 },
+        rowRetry: LONG,
       });
       try {
         await until(() => t.said().length > 0);
         expect(t.seen.errors).toEqual([]);
-        // Until the hold's end: well before the next try.
+        // Until the hold's end, 5 s in: the next try comes after a minute, past any wait here (#948).
         await until(() => t.seen.errors.length > 0);
         await until(() => t.seen.errors.length > 1);
         await t.away.back();

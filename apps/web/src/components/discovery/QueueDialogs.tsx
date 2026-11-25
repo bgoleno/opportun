@@ -82,7 +82,7 @@ export function DismissResultDialog(props: {
         <DialogHeader>
           <DialogTitle>Dismiss result</DialogTitle>
           <DialogDescription>
-            <span className="font-medium break-words text-foreground">
+            <span className="font-medium [overflow-wrap:anywhere] text-foreground">
               {props.result === null ? '' : resultLabel(props.result)}
             </span>
             {props.otherLocations !== undefined && props.otherLocations > 0
@@ -280,7 +280,7 @@ export function DuplicateAcceptDialog(props: {
         <DialogHeader>
           <DialogTitle>Already in your pipeline?</DialogTitle>
           <DialogDescription>
-            <span className="font-medium break-words text-foreground">
+            <span className="font-medium [overflow-wrap:anywhere] text-foreground">
               {s === null ? '' : resultLabel(s.result)}
             </span>{' '}
             looks like an opportunity you already track.
@@ -353,8 +353,8 @@ export function ResultDetailDialog(props: {
     >
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="break-words">{p?.title ?? ''}</DialogTitle>
-          <DialogDescription className="break-words">
+          <DialogTitle>{p?.title ?? ''}</DialogTitle>
+          <DialogDescription>
             {p?.company ?? ''}
             {p?.location ? ` · ${p.location}` : ''}
           </DialogDescription>
@@ -382,12 +382,12 @@ export function ResultDetailDialog(props: {
               ) : null}
             </div>
             {r.aiRationale ? (
-              <p className="break-words">
+              <p className="[overflow-wrap:anywhere]">
                 <span className="text-muted-foreground">Why: </span>
                 {r.aiRationale}
               </p>
             ) : null}
-            {p.compNote ? <p className="break-words">{p.compNote}</p> : null}
+            {p.compNote ? <p className="[overflow-wrap:anywhere]">{p.compNote}</p> : null}
             {r.resolution === 'needs_capture' || r.resolution === 'capture_failed' ? (
               <div className="flex flex-wrap items-center gap-2">
                 <p className="text-muted-foreground">

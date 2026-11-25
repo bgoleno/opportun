@@ -41,7 +41,7 @@ const TABS: { tab: DecidedTab; label: string; empty: string; note: string }[] = 
     tab: 'accepted',
     label: 'Accepted',
     empty: 'Nothing accepted yet.',
-    note: "Results already in your pipeline. Unsuppress only takes effect once the linked opportunity is itself dismissed; while it's still active, a repost should keep being treated as the same job.",
+    note: "Results already in your pipeline. Unsuppress only takes effect once the linked opportunity is dismissed or deleted; while it's still there, a repost should keep being treated as the same job.",
   },
 ];
 

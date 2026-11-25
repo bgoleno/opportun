@@ -20,6 +20,7 @@ import { observeOutbound } from '../src/obs/outbound';
 import { useApi } from './api';
 import { countRows } from './db';
 import { useTestContextManager } from './otelContext';
+import { cpuMs } from './scaling';
 
 const boot = useApi();
 useTestContextManager();
@@ -97,12 +98,13 @@ describe('Collect off, the default (#353)', () => {
   it('costs one check per call: 100,000 disabled calls stay under a wide bound (14.11)', async () => {
     await boot();
     const attrs = { 'opportun.job.outcome': 'done' } as const;
-    const started = performance.now();
+    // CPU time, which a busy host does not add to (#948).
+    const started = cpuMs();
     for (let i = 0; i < 100_000; i += 1) {
       obs.record('opportun.job.duration', 1, attrs);
       obs.event('error', { 'error.type': 'TypeError' });
     }
-    const elapsed = performance.now() - started;
+    const elapsed = cpuMs() - started;
     // About a microsecond a call is the budget; 2 seconds for 200,000 is a wide margin that
     // still fails if a disabled call starts gating, aggregating or logging.
     expect(elapsed).toBeLessThan(2_000);

@@ -735,7 +735,18 @@ function CreateCopyButton({
     // (#443's e2e). A failure shows through `create.error` while the button is still here.
     create
       .mutateAsync({ baseResumeId: baseId, opportunityId })
-      .then((r) => navigate({ to: '/resumes/$id', params: { id: r.id } }))
+      .then((r) => {
+        // It was asked for with one: the copy is made all the same, as it would be had the
+        // opportunity gone a moment later (#962).
+        if (r.opportunityId === null) {
+          toast({
+            title: 'Resume not attached',
+            description:
+              'The opportunity was deleted while the copy was made, so the resume is not attached to one.',
+          });
+        }
+        return navigate({ to: '/resumes/$id', params: { id: r.id } });
+      })
       .catch(() => {})
       .finally(() => {
         sending.current = false;

@@ -4,6 +4,7 @@ import { useApi } from './api';
 import { connectGoogle, fakeGoogle, type FakeGoogle } from './fakeGoogle';
 import type { TestClient } from './isolation';
 import { type HasDb, listTables, queryAll, queryOne, withFailingWrite } from './db';
+import { PATIENCE_MS } from './patience';
 
 let google: FakeGoogle;
 const boot = useApi(() => {
@@ -302,13 +303,17 @@ describe('google connection', () => {
     const client = await app.googleConn.getClient(app.db, ctx, DOCS_SCOPES);
     expect(client.credentials.refresh_token).toBe(google.nextTokens.refresh_token);
     client.emit('tokens', { access_token: 'ya29.rotated', refresh_token: '1//rotated' });
-    await expect.poll(async () => (await readTokens(app.db, ctx))?.refreshToken).toBe('1//rotated');
+    await expect
+      .poll(async () => (await readTokens(app.db, ctx))?.refreshToken, { timeout: PATIENCE_MS })
+      .toBe('1//rotated');
     const stored = await readTokens(app.db, ctx);
     expect(stored).toMatchObject({ accessToken: 'ya29.rotated', email: 'connected@example.com' });
     expect(stored?.scopes).toEqual([...DOCS_SCOPES].sort());
     // A refresh without a new refresh token keeps the stored one.
     client.emit('tokens', { access_token: 'ya29.again' });
-    await expect.poll(async () => (await readTokens(app.db, ctx))?.accessToken).toBe('ya29.again');
+    await expect
+      .poll(async () => (await readTokens(app.db, ctx))?.accessToken, { timeout: PATIENCE_MS })
+      .toBe('ya29.again');
     expect((await readTokens(app.db, ctx))?.refreshToken).toBe('1//rotated');
     expect(await dumpDatabase(app)).not.toContain('1//rotated');
   });
@@ -323,7 +328,9 @@ describe('google connection', () => {
 
     // The library's own event, same as a real refresh: nothing here is called directly.
     client.emit('tokens', { access_token: 'ya29.lost-write' });
-    await expect.poll(() => errorSpy.mock.calls.length).toBeGreaterThan(0);
+    await expect
+      .poll(() => errorSpy.mock.calls.length, { timeout: PATIENCE_MS })
+      .toBeGreaterThan(0);
 
     const [meta, msg] = errorSpy.mock.calls[0]!;
     expect(msg).toBe('failed to persist a refreshed Google token');

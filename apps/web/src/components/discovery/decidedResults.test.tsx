@@ -7,7 +7,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { mockApi, renderWithProviders, toastRegion, type ApiCall } from '@/test/render';
-import type { DiscoveryResult } from './api';
+import { discoveryKeys, type DiscoveryResult } from './api';
 import { DecidedResults } from './DecidedResults';
 
 const NOW = Date.now();
@@ -274,6 +274,54 @@ describe('DecidedResults', () => {
     expect(await toastRegion().findByText(SENTENCE)).toBeInTheDocument();
     expect(await within(row).findByText('Unsuppressed')).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: /unsuppress/i })).toBeNull();
+  });
+
+  it('a result put back in the queue elsewhere says so, and leaves the list (#927)', async () => {
+    const SENTENCE =
+      'This result is back in the review queue, so there is nothing to unsuppress. Decide on it there.';
+    const r = result({ id: 'd1', posting: { company: 'Initech', title: 'Undone Elsewhere' } });
+    let undone = false;
+    mockApi({
+      'GET /discovery/results': (call: ApiCall) =>
+        queueHandler(undone ? {} : { dismissed: [r] })(call),
+      'POST /discovery/results/d1/unsuppress': () => {
+        undone = true;
+        return { status: 409, body: { error: { code: 'already_pending', message: SENTENCE } } };
+      },
+    });
+    const user = userEvent.setup();
+    const { queryClient } = renderWithProviders(<DecidedResults />);
+    // The queue as this page read it before: without the result that is back in it.
+    queryClient.setQueryData(discoveryKeys.queue, { pages: [], pageParams: [] });
+    const row = await screen.findByRole('listitem', { name: 'Undone Elsewhere at Initech' });
+    await user.click(within(row).getByRole('button', { name: /unsuppress/i }));
+    expect(await toastRegion().findByText(SENTENCE)).toBeInTheDocument();
+    await waitFor(() => expect(row).not.toBeInTheDocument());
+    expect(queryClient.getQueryState(discoveryKeys.queue)?.isInvalidated).toBe(true);
+  });
+
+  // https://github.com/bgoleno/opportun/issues/1008
+  it('a result whose opportunity was deleted is unsuppressed, as the Accepted tab says', async () => {
+    const r = result({
+      id: 'a1',
+      disposition: 'accepted',
+      opportunityId: null,
+      posting: { company: 'Globex', title: 'Deleted Role' },
+    });
+    mockApi({
+      'GET /discovery/results': queueHandler({ accepted: [r] }),
+      'POST /discovery/results/a1/unsuppress': { ...r, dedupeKey: null },
+    });
+    const user = userEvent.setup();
+    renderWithProviders(<DecidedResults />);
+    await user.click(await screen.findByRole('tab', { name: /^Accepted/ }));
+    expect(screen.getByRole('tabpanel')).toHaveTextContent(
+      'Unsuppress only takes effect once the linked opportunity is dismissed or deleted;',
+    );
+    const row = await screen.findByRole('listitem', { name: 'Deleted Role at Globex' });
+    expect(within(row).queryByRole('link', { name: 'View opportunity' })).toBeNull();
+    await user.click(within(row).getByRole('button', { name: /unsuppress/i }));
+    expect(await within(row).findByText('Unsuppressed')).toBeInTheDocument();
   });
 
   it('keyboard: j/k move the selection between rows (issue #155)', async () => {

@@ -23,6 +23,7 @@ import { DEFAULT_DISCOVERY_DAILY_USD } from '../src/repos/discoveryBudget';
 import { createRoleTarget } from '../src/repos/profile';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
+import { PATIENCE_MS } from './patience';
 import { runQueuedJob } from './runQueuedJob';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
@@ -55,8 +56,8 @@ beforeEach(() => {
 });
 afterEach(() => resetSources());
 
-async function until(cond: () => boolean | Promise<boolean>, ms = 5000): Promise<void> {
-  const end = Date.now() + ms;
+async function until(cond: () => boolean | Promise<boolean>): Promise<void> {
+  const end = Date.now() + PATIENCE_MS;
   while (!(await cond())) {
     if (Date.now() > end) throw new Error('timed out waiting');
     await new Promise((r) => setTimeout(r, 5));
