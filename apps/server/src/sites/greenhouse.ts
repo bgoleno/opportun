@@ -5,9 +5,9 @@
 // (`&lt;p&gt;`), which is undone here so the engine's sanitizer sees ordinary markup.
 import {
   ATS_JOB_ID,
-  ATS_SLUG,
   GREENHOUSE_API_HOST,
   greenhouse,
+  type BoardRef,
   type NormalizedPosting,
 } from '@opportun/core';
 import {
@@ -20,25 +20,20 @@ import {
   str,
   timeMs,
 } from '../adapters/sources/atsCommon';
+import { askBoard, linksOf, segment, servesJobs, slugOf } from './boardApi';
 import type { SiteModule } from './types';
 
-/** A slug or job id that a real board uses, or a throw: it cannot move the URL's host or path. */
-function segment(value: string, shape: RegExp, what: string): string {
-  if (!shape.test(value)) throw new Error(`not a Greenhouse ${what}`);
-  return encodeURIComponent(value);
-}
+const jobsUrl = (board: BoardRef): string =>
+  `https://${GREENHOUSE_API_HOST}/v1/boards/${slugOf(board, 'Greenhouse')}/jobs`;
 
 const urls = {
-  board: (slug: string, opts: { content?: boolean } = {}): string =>
-    `https://${GREENHOUSE_API_HOST}/v1/boards/${segment(slug, ATS_SLUG, 'board slug')}/jobs${
-      opts.content === true ? '?content=true' : ''
-    }`,
-  job: (slug: string, id: string): string =>
-    `https://${GREENHOUSE_API_HOST}/v1/boards/${segment(slug, ATS_SLUG, 'board slug')}/jobs/${segment(
-      id,
-      ATS_JOB_ID,
-      'job id',
-    )}`,
+  board: (board: BoardRef, opts: { content?: boolean } = {}): string =>
+    `${jobsUrl(board)}${opts.content === true ? '?content=true' : ''}`,
+  // The jobs list rather than the board's metadata, which cannot show whether it is serving
+  // anything. Without `content=true` the response carries titles and ids only.
+  probe: jobsUrl,
+  job: (board: BoardRef, id: string): string =>
+    `${jobsUrl(board)}/${segment(id, ATS_JOB_ID, 'Greenhouse job id')}`,
 };
 
 const ESCAPES: ReadonlyMap<string, string> = new Map([
@@ -76,11 +71,15 @@ export const greenhouseModule: SiteModule = {
   api: {
     urls,
     mapPosting: mapGreenhouseJob,
+    slugAddressed: true,
+    probe: (sctx, board) => askBoard(sctx, greenhouse, board, urls.probe, servesJobs),
+    boardLinks: (body) =>
+      linksOf(obj(body).jobs, (job) => ({ text: job.title, url: job.absolute_url })),
     async *listBoard(sctx, config) {
       const org = atsOrg(config);
       const body = await fetchBoardJson(
         sctx,
-        urls.board(org, { content: true }),
+        urls.board({ site: greenhouse.id, slug: org }, { content: true }),
         greenhouse.fetchHosts[0]!,
         'Greenhouse',
         org,
@@ -97,7 +96,7 @@ export const greenhouseModule: SiteModule = {
     async holdsJob(sctx, token, jid, timeoutMs) {
       let res;
       try {
-        res = await sctx.fetch(urls.job(token, jid), {
+        res = await sctx.fetch(urls.job({ site: greenhouse.id, slug: token }, jid), {
           allowHosts: greenhouse.fetchHosts,
           maxBytes: ATS_MAX_BYTES,
           ...(timeoutMs === undefined ? {} : { timeoutMs }),

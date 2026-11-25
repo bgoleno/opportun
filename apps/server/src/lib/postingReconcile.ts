@@ -220,7 +220,7 @@ async function writeConfirmed(
     // states one on nearly every success, so a live opportunity already holding that key
     // would otherwise cost the user the description they captured for. The description is
     // the point; the location is not worth losing it over.
-    if (!(err instanceof HttpError) || err.statusCode !== 409) throw err;
+    if (!(err instanceof HttpError) || err.code !== 'duplicate') throw err;
     const retry = { ...patch };
     delete retry.location;
     await updateOpportunity(db, ctx, opp.id, retry, only);

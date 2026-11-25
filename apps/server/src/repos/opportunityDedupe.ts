@@ -21,12 +21,14 @@
 // opportunities.ts; a future AI pass's own "no" would write the same way) is never revisited,
 // and a 'confirmed' pair is never re-scored. Without this, re-running on a later edit to
 // either opportunity's title or company would undo a user's own dismissal.
+import { lockScope, withTransaction } from '../db/client';
+import { racePoint } from '../lib/racePoints';
 import { TITLE_MATCH_THRESHOLD, titleOverlap } from '../lib/titleMatch';
 import { and, eq, isNull, ne, or } from 'drizzle-orm';
 import { companyMatchKey, newId } from '@opportun/core';
 import type { DedupeCandidateDecidedBy, DedupeCandidateDecision } from '../db/schema.shared';
 import { companies, opportunities, opportunityDedupeCandidates } from '../db/schema';
-import type { Exec, UserCtx } from './base';
+import type { Db, Exec, UserCtx } from './base';
 import { ownedBy } from './base';
 
 /**
@@ -133,33 +135,49 @@ export async function rejectDedupeCandidate(
  * Resolves a 'pending' pair from the AI pass's own verdict (issue #94's second PR), the same
  * "never overwrite" rule as the heuristic's confident match: a `duplicateOfRef` that echoes
  * `trackedId` confirms the pair and writes possible_duplicate_of on `candidateId`, but only
- * when `candidateHasPossibleDuplicateOf` is false. A null ref rejects it. Anything else -- a
- * ref the model was not sent -- is not a judgment either way (design principle 6: report only
- * outcomes observed), so nothing is recorded and the row stays pending.
+ * when the candidate has none. A null ref rejects it. Anything else -- a ref the model was not
+ * sent -- is not a judgment either way (design principle 6: report only outcomes observed), so
+ * nothing is recorded and the row stays pending.
+ *
+ * It writes one opportunity and names another, so it takes the user's lock before any row (lock order:
+ * repos/submissionReview.ts submissionScope; #998): a merge of the pair, or a save that has one's row
+ * and needs the other's, would else close a cycle with it on Postgres (40P01). The model is asked
+ * before this is called, with nothing held, so the pair is read again under the lock: one no longer
+ * pending (the user said they differ, or a heuristic decided) is left as it is, and one whose
+ * opportunity is gone is gone with it. Both are 'settled'.
  */
 export async function resolveDedupeCandidateByAi(
-  exec: Exec,
+  db: Db,
   ctx: UserCtx,
   trackedId: string,
   candidateId: string,
   duplicateOfRef: string | null,
-  candidateHasPossibleDuplicateOf: boolean,
   now: number,
-): Promise<'confirmed' | 'rejected' | 'invalid'> {
-  if (duplicateOfRef === null) {
-    await recordDecision(exec, ctx, trackedId, candidateId, 'rejected', 'ai', null, now);
-    return 'rejected';
-  }
-  if (duplicateOfRef !== trackedId) return 'invalid';
-  await recordDecision(exec, ctx, trackedId, candidateId, 'confirmed', 'ai', null, now);
-  if (!candidateHasPossibleDuplicateOf) {
-    await exec
+): Promise<'confirmed' | 'rejected' | 'invalid' | 'settled'> {
+  if (duplicateOfRef !== null && duplicateOfRef !== trackedId) return 'invalid';
+  return await withTransaction(db, async (tx) => {
+    await lockScope(tx, `user:${ctx.userId}`);
+    await racePoint('opportunityDedupe.ai.locked');
+    if ((await existingDecision(tx, trackedId, candidateId)) !== 'pending') return 'settled';
+    if (duplicateOfRef === null) {
+      await recordDecision(tx, ctx, trackedId, candidateId, 'rejected', 'ai', null, now);
+      return 'rejected';
+    }
+    await recordDecision(tx, ctx, trackedId, candidateId, 'confirmed', 'ai', null, now);
+    // Its own mark as it is now: one made while the model was asked is never overwritten.
+    await tx
       .update(opportunities)
       .set({ possibleDuplicateOf: trackedId, updatedAt: now })
-      .where(and(ownedBy(opportunities.userId, ctx), eq(opportunities.id, candidateId)))
+      .where(
+        and(
+          ownedBy(opportunities.userId, ctx),
+          eq(opportunities.id, candidateId),
+          isNull(opportunities.possibleDuplicateOf),
+        ),
+      )
       .run();
-  }
-  return 'confirmed';
+    return 'confirmed';
+  });
 }
 
 interface MatchCandidate {

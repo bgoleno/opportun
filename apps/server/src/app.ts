@@ -12,6 +12,7 @@ import { submissionsEnabled, type Config } from './config';
 import { closeDatabase, connectDatabase, pingDatabase, type Db } from './db/client';
 import { configureGateWatchdog, gateHeldError } from './db/gate';
 import { SCHEMA_DIALECT } from './db/schema';
+import { httpStopPlugin } from './plugins/httpStop';
 import { obsHttpPlugin } from './plugins/obsHttp';
 import { securityPlugin } from './plugins/security';
 import { AI_CALL_LIMIT_MS, demoResetHoldPlugin } from './plugins/demoResetHold';
@@ -73,7 +74,6 @@ import { REFINE_CRON, REFINE_JOB_KIND } from './jobs/refineClassifyPrompt';
 import { DISCOVERY_REFINE_CRON, DISCOVERY_REFINE_KIND } from './jobs/refineDiscoveryPrompt';
 import { enqueueRepairAlertLeadsOnce } from './jobs/repairAlertLeads';
 import { enqueueTidyRejectedOnce } from './jobs/tidyRejected';
-import { enqueueRepairDedupeKeysOnce } from './jobs/repairDedupeKeys';
 import { enqueueBackfillAtsJobRefsOnce } from './jobs/atsJobRefBackfill';
 import { enqueueRepairCompanyMatchKeysOnce } from './jobs/companyMatchKeyRepair';
 import { enqueueCompanyDomainBackfillOnce } from './jobs/companyDomainResolve';
@@ -207,6 +207,8 @@ export interface BuildOptions {
     /** How long before a hold's bound its stop signal fires (#684). */
     stopMarginMs?: number;
   };
+  /** Instead of HTTP_STOP_MS (plugins/httpStop.ts): tests set a short one. */
+  httpStopMs?: number;
   /** Replaces the googleapis-backed client (tests inject a fake: no network). */
   google?: GoogleApi;
   /** Replaces the Google Docs document store. */
@@ -339,6 +341,7 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   app.setSerializerCompiler(serializerCompiler);
   // First, so its onRequest runs before every other hook and times the whole request (#343).
   await app.register(obsHttpPlugin);
+  await app.register(httpStopPlugin, { boundMs: opts.httpStopMs });
   await app.register(cookie);
   await app.register(securityPlugin, { hsts: cfg.baseUrl.startsWith('https:') });
 
@@ -483,9 +486,6 @@ export async function buildApp(cfg: Config, opts: BuildOptions = {}): Promise<Fa
   // One-shot: repair alert leads the pre-fix LinkedIn parser shifted. Guarded by its own
   // marker, so this is a no-op on every boot after the first.
   await enqueueRepairAlertLeadsOnce(db);
-  // One-shot: recompute dedupe keys the pre-fallback formula collapsed on non-Latin locations
-  // (issue #13). Guarded by its own marker, same reasoning as the one above.
-  await enqueueRepairDedupeKeysOnce(db);
   // One-shot: backfill company_match_key for companies written before that column existed
   // (issue #193). Guarded by its own marker, same reasoning as the one above.
   await enqueueRepairCompanyMatchKeysOnce(db);

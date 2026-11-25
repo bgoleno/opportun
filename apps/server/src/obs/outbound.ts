@@ -187,8 +187,6 @@ const SITE_TARGETS: [string, OutboundTarget][] = SITES.flatMap((site) =>
 
 const TARGET_BY_HOST = new Map<string, OutboundTarget>([
   ...SITE_TARGETS,
-  ['api.lever.co', 'ats_lever'],
-  ['api.ashbyhq.com', 'ats_ashby'],
   ['api.smartrecruiters.com', 'ats_smartrecruiters'],
   ['apply.workable.com', 'ats_workable'],
   ['accounts.google.com', 'google'],

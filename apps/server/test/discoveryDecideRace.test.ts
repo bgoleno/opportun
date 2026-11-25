@@ -357,7 +357,7 @@ describe('a capture and a decision on one result (#968)', () => {
       });
     });
 
-    // A writer that does not take the user's lock (the dedupe-key repair, the purge, one to come).
+    // A writer that does not take the user's lock (the purge, one to come).
     // Only on Postgres can it write between the read and the UPDATE; SQLite's gate keeps it out.
     describe.runIf(testDialect === 'postgres')('a row changed meanwhile is not written', () => {
       it.each([
