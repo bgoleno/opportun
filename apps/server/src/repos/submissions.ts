@@ -12,6 +12,7 @@ import { destinationAllowed } from '../lib/submissionDestination';
 import {
   applySubmissionTransition,
   canSubmissionTransition,
+  mergedSinceReview,
   newId,
   submissionFieldProblem,
   type AtsJobRef,
@@ -35,7 +36,7 @@ import { audit } from '../lib/audit';
 import { demoResumeRefused, sameVisitor } from '../lib/demoOwnData';
 import { HttpError, notFound } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
-import { submissionDigest } from '../lib/submissionDigest';
+import { reviewLapsed, submissionDigest } from '../lib/submissionDigest';
 import type { Db, Exec, UserCtx } from './base';
 import { ownedBy } from './base';
 // A cycle (submissionReview imports this module's row helpers), safe because neither module uses
@@ -127,6 +128,8 @@ export function view(row: SubmissionRow): Submission {
     reapplyReason: row.reapplyReason,
     submittedActivityId: row.submittedActivityId,
     postingChangedAt: row.postingChangedAt,
+    mergedAt: row.mergedAt,
+    reviewLapsed: row.status === 'handed_off' && reviewLapsed(row),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -682,7 +685,11 @@ export type PrefillLookup =
        */
       snapshotState: SubmissionSnapshotState | 'deleted' | null;
     }
-  | { kind: 'none'; reason: PrefillMiss };
+  | { kind: 'none'; reason: PrefillMiss; cause?: 'merged' };
+
+/** Why the review lapsed, where that is known: it says nothing else of the attempt (#1057, sec). */
+const lapsedBy = (row: SubmissionRow): { cause?: 'merged' } =>
+  mergedSinceReview(row) ? { cause: 'merged' } : {};
 
 /**
  * The caller's one handed-off attempt whose pinned destination is the page the extension is on
@@ -723,8 +730,8 @@ export async function handedOffForPage(
   if (matching.length === 0) return { kind: 'none', reason: 'no_matching_attempt' };
   if (matching.length > 1) return { kind: 'none', reason: 'several_handed_off' };
   const only = matching[0]!;
-  if (only.row.reviewDigest === null || submissionDigest(only.row) !== only.row.reviewDigest) {
-    return { kind: 'none', reason: 'review_stale' };
+  if (reviewLapsed(only.row)) {
+    return { kind: 'none', reason: 'review_stale', ...lapsedBy(only.row) };
   }
   const file =
     only.row.snapshotState !== 'ready' || only.row.resumeAttachmentId === null
@@ -785,12 +792,12 @@ export async function handedOffSnapshot(
   // is not ready yet, so 404, not 409 (tl on #544).
   if (row.resumeId === null && row.resumeStore === null) throw notFound();
   // Served only for an attempt /current would return (tl on #185): what was reviewed, unchanged.
-  if (row.reviewDigest === null || submissionDigest(row) !== row.reviewDigest) {
+  if (reviewLapsed(row)) {
     throw new HttpError(
       409,
       'review_stale',
       'This application changed after it was reviewed.',
-      undefined,
+      lapsedBy(row),
       { userFacing: true },
     );
   }
@@ -896,6 +903,16 @@ export async function attemptIdsOf(
 }
 
 const NOT_YET_OPENED: SubmissionStatus[] = [...NOT_YET_OPENED_STATUSES];
+
+/** A merge moved the live attempt (#1057). In its transaction, under the attempt's own lock. */
+export async function recordMerged(
+  tx: Exec,
+  ctx: UserCtx,
+  attemptId: string,
+  now: number,
+): Promise<void> {
+  await tx.update(applicationSubmissions).set({ mergedAt: now }).where(owned(ctx, attemptId)).run();
+}
 
 /**
  * A merge moved a reviewed attempt to another opportunity of the same job (#1055): it is a draft to

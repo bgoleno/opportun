@@ -55,6 +55,7 @@ import {
   lockAttemptsOf,
   lockLiveAttempt,
   markPostingChanged,
+  recordMerged,
 } from './submissions';
 import { duplicate, HttpError, notFound } from '../lib/errors';
 import { isSystemWritten } from '../lib/postingFingerprint';
@@ -1235,6 +1236,7 @@ async function mergeOnce(
         .where(and(ownedBy(table.userId, ctx), eq(table.opportunityId, otherId)))
         .run();
     }
+    if (otherLive !== undefined) await recordMerged(tx, ctx, otherLive.id, now);
     // The moved attempt asks for another review, and one that was opened on the ATS is left alone
     // (#1055). It keeps its pinned destination: where the kept one names another job, the change is
     // recorded and said, as after a saved link.

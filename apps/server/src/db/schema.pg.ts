@@ -1135,6 +1135,12 @@ export const applicationSubmissions = pgTable(
      * covers this, so a review screen shown before the change cannot be confirmed.
      */
     postingChangedAt: int('posting_changed_at'),
+    /**
+     * When a merge moved this attempt, live then, to the opportunity it is on (#1057). Not in the
+     * digest, which has the opportunity; never cleared: what it says holds while it is later than
+     * the review (core's mergedSinceReview).
+     */
+    mergedAt: int('merged_at'),
     /** A re-application to the same requisition names the attempt it repeats. */
     reapplyOf: text('reapply_of').references((): AnyPgColumn => applicationSubmissions.id, {
       onDelete: 'set null',

@@ -65,6 +65,29 @@ export function canSubmissionTransition(from: SubmissionStatus, to: SubmissionSt
   return NEXT.get(from)?.includes(to) ?? false;
 }
 
+/**
+ * A hand-off whose review has lapsed, reviewed again (#1057): the one way from `handed_off` to `draft`.
+ * Kept out of the table on purpose, so no edit or other writer that asks the table can make a draft of
+ * an application the user has open on the employer's site. For its own route alone.
+ */
+export function reviewLapsedHandoffAgain(current: { status: SubmissionStatus }): SubmissionStatus {
+  if (current.status !== 'handed_off') {
+    throw new InvalidSubmissionTransitionError(current.status, 'draft');
+  }
+  return 'draft';
+}
+
+/**
+ * Whether a merge moved the attempt since it was last reviewed (#1057): `mergedAt` is never cleared, and
+ * says nothing of what became stale after a later review. Never reviewed counts as merged.
+ */
+export function mergedSinceReview(a: {
+  mergedAt: number | null;
+  reviewedAt: number | null;
+}): boolean {
+  return a.mergedAt !== null && (a.reviewedAt === null || a.mergedAt > a.reviewedAt);
+}
+
 /** The status after the transition, or throws InvalidSubmissionTransitionError. */
 export function applySubmissionTransition(
   current: { status: SubmissionStatus },

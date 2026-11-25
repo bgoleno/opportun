@@ -43,6 +43,7 @@ import {
 import {
   handoffSubmission,
   reviewSubmission,
+  reviewSubmissionAgain,
   reviewUsage,
   setUserReviewCap,
 } from '../repos/submissionReview';
@@ -341,6 +342,21 @@ export async function submissionRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       if (answeredInvalid(req, reply)) return reply;
       return reviewSubmission(db, app.requireUser(req), app.config, req.params.id, req.body);
+    },
+  );
+
+  // A hand-off whose review has lapsed, reviewed again (#1057): it becomes a draft, and nothing is
+  // reviewed here. With review's burst limit.
+  api.post(
+    '/submissions/:id/review-again',
+    {
+      attachValidation: true,
+      preHandler: reviewBurst,
+      schema: { params: IdParams, body: EmptyBody, response: { 200: SubmissionSchema } },
+    },
+    async (req, reply) => {
+      if (answeredInvalid(req, reply)) return reply;
+      return reviewSubmissionAgain(db, app.requireUser(req), req.params.id);
     },
   );
 

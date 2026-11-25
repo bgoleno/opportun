@@ -1,0 +1,1 @@
+ALTER TABLE "application_submissions" ADD COLUMN "merged_at" bigint;

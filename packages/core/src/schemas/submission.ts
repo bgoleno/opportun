@@ -362,6 +362,13 @@ export const SubmissionSchema = z.object({
    * its pinned destination, and the screens say so. Null when it never did.
    */
   postingChangedAt: TimestampSchema.nullable(),
+  /** When a merge last moved it, live then, to the opportunity it is on (#1057); null when none did. */
+  mergedAt: TimestampSchema.nullable(),
+  /**
+   * Opened on the employer's site, and what was reviewed is no longer what it is (#1057): the
+   * extension does not fill it. The user can record what became of it, or review it again.
+   */
+  reviewLapsed: z.boolean(),
   /** The timeline entry the user's "I submitted it" created (M2a, #118). */
   submittedActivityId: IdSchema.nullable(),
   createdAt: TimestampSchema,

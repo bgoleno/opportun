@@ -1,0 +1,1 @@
+ALTER TABLE `application_submissions` ADD `merged_at` integer;
