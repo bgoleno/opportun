@@ -898,6 +898,32 @@ export async function attemptIdsOf(
 const NOT_YET_OPENED: SubmissionStatus[] = [...NOT_YET_OPENED_STATUSES];
 
 /**
+ * A merge moved a reviewed attempt to another opportunity of the same job (#1055): it is a draft to
+ * review again, as the review digest covers the opportunity and nothing from before can be handed off.
+ * The posting did not change, so that is not recorded; that it was merged is. A draft has no review to
+ * lose, and one opened on the ATS is left alone. Runs inside the caller's transaction, under the
+ * attempt's own lock.
+ */
+export async function lapseMergedReview(
+  tx: Exec,
+  ctx: UserCtx,
+  attemptId: string,
+  opportunityId: string,
+  now: number,
+): Promise<void> {
+  const [lapsed] = await tx
+    .update(applicationSubmissions)
+    .set({ status: 'draft', reviewDigest: null, reviewExpiresAt: null, updatedAt: now })
+    .where(and(owned(ctx, attemptId), eq(applicationSubmissions.status, 'reviewed')))
+    .returning({ id: applicationSubmissions.id });
+  if (lapsed === undefined) return;
+  await audit(tx, 'submission.review_lapsed', {
+    userId: ctx.userId,
+    detail: { submissionId: attemptId, opportunityId, from: 'reviewed', cause: 'merged' },
+  });
+}
+
+/**
  * The opportunity's posting URL or ATS identity changed (#144, owner decision option A): its
  * live attempt, if one has not been opened on the ATS yet, keeps its pinned destination and
  * the user's work, but a review goes back to draft and the change is recorded. The review

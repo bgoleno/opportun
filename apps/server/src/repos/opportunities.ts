@@ -46,10 +46,11 @@ import {
   resumeSends,
   SCHEMA_DIALECT,
 } from '../db/schema';
-import { postingAtsJobRefKeeping } from '../lib/atsJobRef';
+import { namesAnotherJob, postingAtsJobRefKeeping, type PinnedJob } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
 import {
   attemptIdsOf,
+  lapseMergedReview,
   liveAttemptId,
   lockAttemptsOf,
   lockLiveAttempt,
@@ -1065,9 +1066,14 @@ async function liveAttempt(
   exec: Exec,
   ctx: UserCtx,
   opportunityId: string,
-): Promise<{ id: string } | undefined> {
+): Promise<({ id: string } & PinnedJob) | undefined> {
   return await exec
-    .select({ id: applicationSubmissions.id })
+    .select({
+      id: applicationSubmissions.id,
+      atsKind: applicationSubmissions.atsKind,
+      atsRef: applicationSubmissions.atsRef,
+      atsExternalId: applicationSubmissions.atsExternalId,
+    })
     .from(applicationSubmissions)
     .where(
       and(
@@ -1154,6 +1160,16 @@ async function mergeOnce(
         .set(move)
         .where(and(ownedBy(table.userId, ctx), eq(table.opportunityId, otherId)))
         .run();
+    }
+    // The moved attempt asks for another review, and one that was opened on the ATS is left alone
+    // (#1055). It keeps its pinned destination: where the kept one names another job, the change is
+    // recorded and said, as after a saved link.
+    if (otherLive !== undefined) {
+      if (namesAnotherJob(keep, otherLive)) {
+        await markPostingChanged(tx, ctx, otherLive.id, keepId, now);
+      } else {
+        await lapseMergedReview(tx, ctx, otherLive.id, keepId, now);
+      }
     }
     if (stageRank(other.stage) > stageRank(keep.stage)) {
       await tx
