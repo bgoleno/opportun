@@ -13,6 +13,7 @@ import { useState } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Button } from '@/components/ui/button';
 import type { OpportunityView } from '@/lib/opportunities';
+import { shownDescription } from './ReplaceDescription';
 
 /** The one line each state says, what the button that follows it offers, and whether a user
  *  who checked for themselves can confirm it instead (issue #250) -- every detail except
@@ -205,14 +206,19 @@ export function PostingConfirmedStatus(props: {
  * Always confirms first, worded by whichever of two things it could silently overwrite applies:
  * the user's own writing, or a posting the user confirmed themselves (#250) -- the same
  * protection reconcile() already gives that confirmation against an automatic background run.
+ *
+ * The question, its words and the fingerprint of the description it is about are kept as they were
+ * when it was asked (#1010): a description saved elsewhere meanwhile is not what was agreed to.
  */
 export function RederiveFromCaptureAction(props: {
   opp: OpportunityView;
-  onRederive: () => void;
+  /** `asked`: the description the question was about (shownDescription). */
+  onRederive: (asked: string) => void;
   busy?: boolean;
 }) {
   const { opp } = props;
   const [confirming, setConfirming] = useState(false);
+  const [question, setQuestion] = useState({ description: '', asked: '' });
   if (!opp.hasCapturedPage) return null;
   const userConfirmed =
     opp.postingState === 'confirmed' && opp.postingStateDetail === 'user_confirmed';
@@ -232,7 +238,10 @@ export function RederiveFromCaptureAction(props: {
           size="sm"
           variant="ghost"
           disabled={props.busy === true}
-          onClick={() => setConfirming(true)}
+          onClick={() => {
+            setQuestion({ description, asked: shownDescription(opp) });
+            setConfirming(true);
+          }}
         >
           {props.busy === true ? 'Re-deriving...' : 'Re-derive from capture'}
         </Button>
@@ -241,9 +250,9 @@ export function RederiveFromCaptureAction(props: {
         open={confirming}
         onOpenChange={setConfirming}
         title="Re-derive this description?"
-        description={description}
+        description={question.description}
         confirmLabel="Re-derive"
-        onConfirm={() => props.onRederive()}
+        onConfirm={() => props.onRederive(question.asked)}
       />
     </>
   );

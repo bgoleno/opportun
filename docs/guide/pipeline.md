@@ -102,7 +102,10 @@ own, and its timeline gets an entry, **Kept apart from a different LinkedIn post
 the other job and, if it has a posting link, linking to it. An opportunity whose title is at another
 level (Staff against Principal) is another job too, whatever it came from: the entry is then **Kept apart
 from a job at another level**. The other locations of the Discovery
-card a capture completes are not kept apart: they are that opportunity's. An opportunity that came from
+card a capture completes are not kept apart: they are that opportunity's. Nor does a posting of another
+location that is already on an opportunity (one Discovery linked, say) keep a capture of the role apart
+from it. If a job at another level is the only one in the way, a captured Discovery card still goes to an open
+opportunity of its own title in another city. An opportunity that came from
 none of these, such as one you created by hand with the same title, is filled in as usual, even if you
 gave it a posting link. A dismissed opportunity that a capture fills in comes back to Interested. If
 the opportunity a capture is kept apart from is dismissed, the capture still gets its own
@@ -139,7 +142,10 @@ five tabs.
 
 ### Timeline
 
-A running log: stage changes, attached postings, referral asks, and entries you add yourself
+A running log: stage changes, attached postings (**Also posted via ...**, with the location and the
+link: one you attached, or
+[another location Discovery found](discovery.md#a-job-already-in-your-pipeline)), referral asks, and
+entries you add yourself
 (Note, Meeting, Interview or Link, each with a title, details in Markdown and, for meetings
 and interviews, participants and a time). The **Next steps** panel holds dated to-dos; ones
 due within 7 days show on the dashboard.
@@ -449,15 +455,21 @@ posting stays as it was, matched or confirmed by you. One that changes anything 
 not yours counts as matched. A row you pick yourself is always recorded on the timeline.
 
 The description is stored as text, so it survives the posting being taken down. A description
-you wrote or edited yourself is never overwritten; one Opportun wrote, such as the page text
-from a browser capture, is replaced by the posting it was standing in for.
+you wrote or edited yourself is not overwritten unless you agree to it; one Opportun wrote, such as
+the page text from a browser capture, is replaced by the posting it was standing in for. A description
+you save while Opportun is looking the posting up, attaching it, or re-deriving from the captured
+page is kept, and you are told. So is one you saved in another tab, when the page that asks to replace
+your description does not show it yet.
 
 An opportunity captured with the [browser extension](browser-extension.md) runs this search on
 its own, in the background. When it cannot settle the result it changes nothing and says so:
 a note on the Details tab, and a **Posting unconfirmed** mark on the opportunity's card on the
 board, so you can see it without opening anything. The note carries the button that resolves
-it. If the posting you edited yourself is the reason it stopped, the button looks the board
-copy up so you can decide whether to take it.
+it. If a description you edited yourself is the reason it stopped, the timeline says "Posting check:
+description kept", and **Review board copy** and **Find posting** ask "Replace your description?"
+before they look the board copy up: if it is found, it takes your description's place, and your edit
+can't be recovered. A posting you add by hand there asks the same. **Find posting** under Assisted
+apply never replaces it.
 
 ![The Details tab after Find posting attached a Greenhouse posting, with a Posting attached toast](images/opportunity-details-posting.png)
 

@@ -1,8 +1,8 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { renderWithProviders } from '@/test/render';
-import { parseSse, type ChatMessage, type TailoringSession } from './api';
+import { mockApi, renderWithProviders, toastRegion } from '@/test/render';
+import { parseSse, rk, type ChatMessage, type TailoringSession } from './api';
 import { ChatPanel } from './ChatPanel';
 
 const NOW = Date.now();
@@ -306,5 +306,28 @@ describe('ChatPanel conversation scrolling (issue #35)', () => {
     await waitFor(() => expect(sent).toEqual(['s1', 's2']));
     await waitFor(() => expect(screen.getByLabelText('Message')).toHaveValue(''));
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('finishing a session finished elsewhere says so, and opens the new one (#927)', async () => {
+    const user = userEvent.setup();
+    const SENTENCE = 'This tailoring session was already finished. There is nothing more to do.';
+    let current: TailoringSession = session([
+      { role: 'user', content: 'From the old session', at: NOW, edits: [], incomplete: false },
+    ]);
+    mockApi({
+      'POST /resumes/r1/tailoring': () => current,
+      'POST /tailoring/s1/complete': () => {
+        current = { ...session([]), id: 's2' };
+        return { status: 409, body: { error: { code: 'session_closed', message: SENTENCE } } };
+      },
+    });
+    const { queryClient } = renderWithProviders(<ChatPanel resumeId="r1" />);
+    // The resume as this page read it before it was put in review.
+    queryClient.setQueryData(rk.resumes, { items: [], total: 0 });
+    expect(await screen.findByText('From the old session')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Finish tailoring' }));
+    expect(await toastRegion().findByText(SENTENCE)).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('From the old session')).toBeNull());
+    expect(queryClient.getQueryState(rk.resumes)?.isInvalidated).toBe(true);
   });
 });

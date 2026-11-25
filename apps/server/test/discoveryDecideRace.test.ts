@@ -13,9 +13,11 @@ import { resolveCapture } from '../src/lib/captureResolve';
 import type { UserCtx } from '../src/repos/base';
 import { createRun, ensureChannelSource, getResult, insertResult } from '../src/repos/discovery';
 import { createOpportunity, getOpportunity } from '../src/repos/opportunities';
+import { onSlowTransaction } from '../src/db/gate';
 import { useApi } from './api';
+import { testDialect } from './db';
 import type { TestClient } from './isolation';
-import { heldApart } from './race';
+import { heldApart, pauseAt, whileParked } from './race';
 
 const boot = useApi();
 const ctxOf = (c: TestClient): UserCtx => ({ userId: c.userId, isAdmin: false });
@@ -234,6 +236,179 @@ describe('a capture and a decision on one result (#968)', () => {
     expect(first.json().results).toEqual([{ id, outcome: 'restored' }]);
     expect(second.json().results).toEqual([{ id, outcome: 'already_decided' }]);
     expect((await getResult(app.db, ctxOf(a), id)).disposition).toBe('accepted');
+  });
+
+  // https://github.com/bgoleno/opportun/issues/1008: unsuppress decides from the row and writes it
+  // under the user's lock, so what an undo or a delete makes of the row is never written over.
+  describe('unsuppress', () => {
+    const unsuppress = (c: TestClient, id: string) => post(c, `${id}/unsuppress`, {});
+    const undo = (c: TestClient, id: string) => post(c, 'bulk-undo-dismiss', { ids: [id] });
+
+    it('an undo first: refused, and the result pending again has its key', async () => {
+      const { app, a } = await boot();
+      const id = await card(app, a);
+      const { dedupeKey: key } = await getResult(app.db, ctxOf(a), id);
+      expect((await post(a, `${id}/dismiss`, {})).statusCode).toBe(200);
+      const [undone, res] = await heldApart(
+        app,
+        'discovery.undo.locked',
+        () => undo(a, id),
+        () => unsuppress(a, id),
+      );
+      expect(undone.json().results).toEqual([{ id, outcome: 'restored' }]);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error.code).toBe('already_pending');
+      expect(await getResult(app.db, ctxOf(a), id)).toMatchObject({
+        disposition: 'pending',
+        dedupeKey: key,
+      });
+    });
+
+    it('before an undo: each does its own', async () => {
+      const { app, a } = await boot();
+      const id = await card(app, a);
+      expect((await post(a, `${id}/dismiss`, {})).statusCode).toBe(200);
+      const [res, undone] = await heldApart(
+        app,
+        'discovery.unsuppress.locked',
+        () => unsuppress(a, id),
+        () => undo(a, id),
+      );
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ disposition: 'dismissed', dedupeKey: null });
+      expect(undone.json().results).toEqual([{ id, outcome: 'restored' }]);
+    });
+
+    it('an undo and an accept first: refused, and the accepted result keeps its key', async () => {
+      const { app, a } = await boot();
+      const id = await card(app, a);
+      const { dedupeKey: key } = await getResult(app.db, ctxOf(a), id);
+      expect((await post(a, `${id}/dismiss`, {})).statusCode).toBe(200);
+      expect((await undo(a, id)).statusCode).toBe(200);
+      const [accepted, res] = await heldApart(
+        app,
+        'discovery.decide.locked',
+        () => post(a, `${id}/accept`, {}),
+        () => unsuppress(a, id),
+      );
+      expect(accepted.statusCode, accepted.body).toBe(200);
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error.code).toBe('opportunity_still_active');
+      expect((await getResult(app.db, ctxOf(a), id)).dedupeKey).toBe(key);
+    });
+
+    async function acceptedCard(app: FastifyInstance, a: TestClient) {
+      const id = await card(app, a);
+      const accepted = await post(a, `${id}/accept`, {});
+      const { opportunityId } = accepted.json<{ opportunityId: string }>();
+      const remove = () =>
+        a.request({ method: 'DELETE', url: `/api/v1/opportunities/${opportunityId}` });
+      return { id, opportunityId, remove };
+    }
+
+    it('a delete first: its key is let go', async () => {
+      const { app, a } = await boot();
+      const { id, remove } = await acceptedCard(app, a);
+      const [removed, res] = await heldApart(app, 'opportunities.delete.locked', remove, () =>
+        unsuppress(a, id),
+      );
+      expect(removed.statusCode, removed.body).toBe(204);
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ opportunityId: null, dedupeKey: null });
+    });
+
+    it('before a delete: refused as the opportunity is there, and the key stays', async () => {
+      const { app, a } = await boot();
+      const { id, remove } = await acceptedCard(app, a);
+      const [res, removed] = await heldApart(
+        app,
+        'discovery.unsuppress.locked',
+        () => unsuppress(a, id),
+        remove,
+      );
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error.code).toBe('opportunity_still_active');
+      expect(removed.statusCode, removed.body).toBe(204);
+      const after = await getResult(app.db, ctxOf(a), id);
+      expect(after.opportunityId).toBeNull();
+      expect(after.dedupeKey).not.toBeNull();
+    });
+
+    it('before a delete of a dismissed opportunity: both go through', async () => {
+      const { app, a } = await boot();
+      const { id, opportunityId, remove } = await acceptedCard(app, a);
+      const dismissed = await a.request({
+        method: 'POST',
+        url: `/api/v1/opportunities/${opportunityId}/stage`,
+        payload: { to: 'dismissed' },
+      });
+      expect(dismissed.statusCode, dismissed.body).toBe(200);
+      const [res, removed] = await heldApart(
+        app,
+        'discovery.unsuppress.locked',
+        () => unsuppress(a, id),
+        remove,
+      );
+      expect(res.statusCode, res.body).toBe(200);
+      expect(removed.statusCode, removed.body).toBe(204);
+      expect(await getResult(app.db, ctxOf(a), id)).toMatchObject({
+        opportunityId: null,
+        dedupeKey: null,
+      });
+    });
+
+    // A writer that does not take the user's lock (the dedupe-key repair, the purge, one to come).
+    // Only on Postgres can it write between the read and the UPDATE; SQLite's gate keeps it out.
+    describe.runIf(testDialect === 'postgres')('a row changed meanwhile is not written', () => {
+      it.each([
+        ['another key', { dedupeKey: 'another key' }],
+        ['pending', { disposition: 'pending' }],
+        ['an opportunity', { opportunityId: 'another' }],
+      ] as const)('%s', async (_what, changed) => {
+        const { app, a } = await boot();
+        const id = await card(app, a);
+        expect((await post(a, `${id}/dismiss`, {})).statusCode).toBe(200);
+        const change =
+          'opportunityId' in changed ? { opportunityId: (await other(app, a)).id } : changed;
+        onSlowTransaction(() => undefined);
+        const pause = pauseAt('discovery.unsuppress.locked');
+        const asked = unsuppress(a, id);
+        await whileParked(
+          pause,
+          async () =>
+            await app.db
+              .update(discoveryResults)
+              .set(change)
+              .where(eq(discoveryResults.id, id))
+              .run(),
+        );
+        const before = await getResult(app.db, ctxOf(a), id);
+        const res = await asked;
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.json().error).toEqual({
+          code: 'result_changed',
+          message:
+            'This result changed while it was being unsuppressed, so nothing was changed. Try again.',
+        });
+        expect(await getResult(app.db, ctxOf(a), id)).toEqual(before);
+        expect(before.dedupeKey).not.toBeNull();
+      });
+
+      it('gone', async () => {
+        const { app, a } = await boot();
+        const id = await card(app, a);
+        expect((await post(a, `${id}/dismiss`, {})).statusCode).toBe(200);
+        onSlowTransaction(() => undefined);
+        const pause = pauseAt('discovery.unsuppress.locked');
+        const asked = unsuppress(a, id);
+        await whileParked(
+          pause,
+          async () =>
+            await app.db.delete(discoveryResults).where(eq(discoveryResults.id, id)).run(),
+        );
+        expect((await asked).statusCode).toBe(404);
+      });
+    });
   });
 
   // Unparked, all at once: whatever the order, no request fails (a deadlock is a 500 here), and

@@ -11,6 +11,7 @@ import type { Db } from '../db/client';
 import type { UserCtx } from '../repos/base';
 import { createActivity } from '../repos/activities';
 import {
+  DescriptionChanged,
   getOpportunity,
   setPostingState,
   updateOpportunity,
@@ -28,6 +29,7 @@ import {
   replaceAllowedByFlag,
 } from './postingFingerprint';
 import { sanitizePosting } from './postingSanitize';
+import { racePoint } from './racePoints';
 
 /** How the posting was found, for the timeline entry. */
 export type AttachSource = 'email_link' | 'posting_link' | 'board' | 'paste';
@@ -92,8 +94,9 @@ function postingChanges(before: PostingFields, after: PostingFields): PostingCha
 
 /**
  * Stores `raw` as the opportunity's posting and records it on the timeline. Throws 404 when the
- * opportunity is not the caller's, 409 `already_described` when it already has a description,
- * and 422 `invalid_posting` when the posting carries no description text.
+ * opportunity is not the caller's, 409 `already_described` when it already has a description of the
+ * user's, 409 `description_changed` when the description changed before it could write (#858), and
+ * 422 `invalid_posting` when the posting carries no description text.
  *
  * `note` (issue #114) is findPosting's large-board truncation caveat, carried over onto the
  * timeline entry when a single confident match from a board read only in part is attached
@@ -133,8 +136,11 @@ export async function attachPostingSaying(
    * `byFindPosting` (#866): on a posting already confirmed this is a Refetch, not the user's choice
    * of a posting. So one that changes nothing writes no timeline entry (the same line would pile
    * up), and the confirmation stays what it was (below). A row the user picked is always recorded.
+   *
+   * `replaceAgreed` (#858): the fingerprint of the description the user agreed to lose, which
+   * allows replacing it at `edited` (replaceAllowedByFlag).
    */
-  opts: { keepDescription?: boolean; byFindPosting?: boolean } = {},
+  opts: { keepDescription?: boolean; byFindPosting?: boolean; replaceAgreed?: string } = {},
 ): Promise<{
   opportunity: OpportunityView;
   changed: PostingChange[] | null;
@@ -155,7 +161,7 @@ export async function attachPostingSaying(
   // The user's own writing outranks any board (design D11). A description the system wrote,
   // such as a browser capture's page text, is replaceable by the posting it was waiting for.
   const usersOwn =
-    !replaceAllowedByFlag(current) &&
+    !replaceAllowedByFlag(current, opts.replaceAgreed) &&
     !isSystemWritten(current.descriptionMd, current.descriptionFingerprint);
   // The user's own description is kept, and the posting only confirmed, when asked to (#756), the
   // posting settled already or not (#812); otherwise their writing still refuses the attach.
@@ -199,7 +205,25 @@ export async function attachPostingSaying(
       : identity.sctx !== undefined
         ? await resolvePostingAtsJobRef(db, ctx, current, patch.postingUrl, identity.sctx)
         : postingAtsJobRefKeeping(patch.postingUrl, current.atsJobRef);
-  const written = await updateOpportunity(db, ctx, opportunityId, patch, { atsJobRef });
+  await racePoint('posting.attach');
+  // Only while the description is the one all of the above was decided from (#858): whose it is, and
+  // whether the user agreed to lose it. A check on Greenhouse's API can take seconds.
+  let written: OpportunityView;
+  try {
+    written = await updateOpportunity(db, ctx, opportunityId, patch, {
+      atsJobRef,
+      ifDescription: current,
+    });
+  } catch (err) {
+    if (!(err instanceof DescriptionChanged)) throw err;
+    throw new HttpError(
+      409,
+      'description_changed',
+      "This opportunity's description changed while the posting was being attached, so nothing was changed. Check the description, then try again.",
+      undefined,
+      { userFacing: true },
+    );
+  }
   const changes = postingChanges(current, { ...written, atsJobRef });
   const byRefetch = refetch && opts.byFindPosting === true;
   // A Refetch is not the user's confirmation (tl and qa on #930): with their description kept, or

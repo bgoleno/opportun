@@ -414,19 +414,19 @@ describe('hotspot 8: inbound communication upsert', () => {
     sentAt: 1_790_000_000_000,
   });
 
-  it('upsertInbound is one statement: insert once, then refresh the same row', async () => {
+  it('upsertInbound is one statement: insert once, then meet the same row', async () => {
     const { app, a } = await boot();
     const ctx = { userId: a.userId, isAdmin: false };
     const first = await upsertInbound(app.db, ctx, 'gmail', message('Hello'));
     expect(first.inserted).toBe(true);
     const again = await upsertInbound(app.db, ctx, 'gmail', message('Hello, updated'));
-    expect(again).toEqual({ id: first.id, inserted: false });
+    expect(again).toMatchObject({ id: first.id, inserted: false });
     const rows = await queryAll<{ id: string; subject: string }>(
       app,
       'SELECT id, subject FROM communications WHERE user_id = ?',
       a.userId,
     );
-    expect(rows).toEqual([{ id: first.id, subject: 'Hello, updated' }]);
+    expect(rows).toEqual([{ id: first.id, subject: 'Hello' }]);
   });
 
   it('two concurrent ingests of one message: one row, inserted once, classified once', async () => {

@@ -30,6 +30,7 @@ import { createOpportunity } from '../repos/opportunities';
 import { insertResume } from '../repos/resumes';
 import { CsvError, parseCsv, unguardFormula, type CsvRecord } from './csv';
 import { HttpError } from './errors';
+import { racePoint } from './racePoints';
 import { cleanText } from './safeText';
 import { resumeStoreFor } from './resumeStores';
 
@@ -293,6 +294,23 @@ export function packFromZip(data: Uint8Array): ImportPack {
 
 class RowError extends Error {}
 
+/**
+ * A row whose opportunity was deleted while the import ran (#934): said of that row, and the rest goes
+ * on. What the row had written by then went with the opportunity.
+ */
+const deletedMeanwhile = (): RowError =>
+  new RowError('the opportunity was deleted while the import ran');
+
+/** Adds to the row's opportunity; not found is that it has been deleted (holdOpportunity, #925). */
+async function addTo<T>(add: Promise<T>): Promise<T> {
+  try {
+    return await add;
+  } catch (err) {
+    if (err instanceof HttpError && err.code === 'not_found') throw deletedMeanwhile();
+    throw err;
+  }
+}
+
 const HttpUrl = z.httpUrl().max(2048);
 /** A date first (2026-09-01), optionally followed by a time Date.parse understands. */
 const ISO_DATE_PREFIX = /^\d{4}-\d{2}-\d{2}(?:$|[T ])/;
@@ -401,7 +419,7 @@ async function setStage(
   closedReason: ClosedReason | null = null,
 ): Promise<void> {
   const at = Date.now();
-  await tx
+  const moved = await tx
     .update(opportunities)
     .set({
       stage: to,
@@ -410,7 +428,9 @@ async function setStage(
       updatedAt: at,
     })
     .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, oppId)))
-    .run();
+    .returning({ id: opportunities.id });
+  // The history names it, as transitionOpportunityIn's does (#925).
+  if (moved.length === 0) throw deletedMeanwhile();
   await tx
     .insert(stageHistory)
     .values({
@@ -484,12 +504,14 @@ async function importOpportunity(row: OpportunityRow, deps: RowDeps): Promise<Ou
       location: row.location,
       sourceKind: 'import',
     });
+    await racePoint('import.row.created');
     await withTransaction(db, async (tx) => {
-      await tx
+      const kept = await tx
         .update(opportunities)
         .set({ sourceRef: row.source })
         .where(and(eq(opportunities.userId, ctx.userId), eq(opportunities.id, view.id)))
-        .run();
+        .returning({ id: opportunities.id });
+      if (kept.length === 0) throw deletedMeanwhile();
       if (row.stage !== 'discovered') {
         await setStage(
           tx,
@@ -506,10 +528,12 @@ async function importOpportunity(row: OpportunityRow, deps: RowDeps): Promise<Ou
     created = true;
   } else if (isForward(existing.stage, row.stage)) {
     const { id, stage } = existing;
+    await racePoint('import.row.matched');
     await withTransaction(db, async (tx) => await setStage(tx, ctx, id, stage, row.stage, null));
     changed = true;
   }
   const oppId = existing.id;
+  await racePoint('import.row.moved');
 
   if (row.notesFile !== null) {
     const ref = normalizePackPath(row.notesFile);
@@ -519,13 +543,15 @@ async function importOpportunity(row: OpportunityRow, deps: RowDeps): Promise<Ou
     } else if (
       !(await hasActivity(db, ctx, oppId, (a) => a.kind === 'note' && a.bodyMd === body))
     ) {
-      await createActivity(db, ctx, oppId, {
-        kind: 'note',
-        title: 'Imported notes',
-        bodyMd: body,
-        occurredAt: Date.now(),
-        participants: [],
-      });
+      await addTo(
+        createActivity(db, ctx, oppId, {
+          kind: 'note',
+          title: 'Imported notes',
+          bodyMd: body,
+          occurredAt: Date.now(),
+          participants: [],
+        }),
+      );
       changed = true;
     }
   }
@@ -535,12 +561,14 @@ async function importOpportunity(row: OpportunityRow, deps: RowDeps): Promise<Ou
     if (
       !(await hasActivity(db, ctx, oppId, (a) => a.kind === 'application' && a.occurredAt === at))
     ) {
-      await createActivity(db, ctx, oppId, {
-        kind: 'application',
-        title: 'Applied',
-        occurredAt: at,
-        participants: [],
-      });
+      await addTo(
+        createActivity(db, ctx, oppId, {
+          kind: 'application',
+          title: 'Applied',
+          occurredAt: at,
+          participants: [],
+        }),
+      );
       changed = true;
     }
   }
@@ -559,17 +587,20 @@ async function importOpportunity(row: OpportunityRow, deps: RowDeps): Promise<Ou
       if (store === undefined) throw new Error('the document store is unavailable');
       const meta = await store.registerExisting(ctx, row.resumeDocRef);
       if (!(await trackedResume(db, ctx, meta.docRef))) {
-        await insertResume(db, ctx, {
-          kind: 'tailored',
-          title: meta.title,
-          store: storeKind,
-          docRef: meta.docRef,
-          opportunityId: oppId,
-          parentResumeId: null,
-        });
+        await addTo(
+          insertResume(db, ctx, {
+            kind: 'tailored',
+            title: meta.title,
+            store: storeKind,
+            docRef: meta.docRef,
+            opportunityId: oppId,
+            parentResumeId: null,
+          }),
+        );
         changed = true;
       }
     } catch (err) {
+      if (err instanceof RowError) throw err;
       warn(`resume_doc_ref: ${err instanceof Error ? err.message : String(err)}`.slice(0, 600));
     }
   }

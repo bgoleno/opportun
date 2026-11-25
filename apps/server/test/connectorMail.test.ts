@@ -140,7 +140,7 @@ describe('POST /connector/mail/batch', () => {
     expect(await appleState(app, a.userId)).toMatchObject({ lastSyncAt: T0, status: 'ok' });
   });
 
-  it('re-pushing is idempotent: upserts on the external id and queues nothing again', async () => {
+  it('re-pushing is idempotent: the stored message stays, and nothing is queued again', async () => {
     const { app, a } = await boot();
     const { token } = await mint(a);
     await push(app, token, { messages: [msg(1), msg(2)] });
@@ -158,7 +158,7 @@ describe('POST /connector/mail/batch', () => {
     expect(after).toHaveLength(3);
     const m1 = after.find((r) => r.externalId === 'apple-mail:apple-1@mail.example')!;
     expect(m1.id).toBe(before.find((r) => r.externalId === m1.externalId)!.id);
-    expect(m1.subject).toBe('Role 1 (updated)');
+    expect(m1.subject).toBe('Role 1');
     expect(await classifyJobs(app)).toHaveLength(3);
     expect(await appleState(app, a.userId)).toMatchObject({
       lastSyncAt: T0 + 60_000,

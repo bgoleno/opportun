@@ -194,6 +194,8 @@ const REVIEWED: Record<string, string> = {
     'a constant map of our own sentences, never the refused value (submissionDetailFields.test)',
   "routes/communications.ts 'not_confirmed' `Type ${PURGE_CONFIRMATION} to confirm`":
     'a constant word in the same file',
+  'routes/resumes.ts \'resume_not_saved\' `The resume may not have been saved. Look in Resumes: if it is not there, the copy named "${name}" was left in ${where}.`':
+    "the name the caller's own copy was asked for by (their template, name and opportunity), cut and cleaned, and a constant store name",
   "routes/importExport.ts 'invalid_pack' problem.userText":
     "PackError text: our own sentences, the uploader's own file names and CsvError text",
   "routes/mailFilters.ts 'not_found' `Not a built-in job sender: ${pattern}`":

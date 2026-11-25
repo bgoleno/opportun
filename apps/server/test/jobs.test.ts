@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { isStatementError, type Db } from '../src/db/client';
 import { exec } from './db';
+import { PATIENCE_MS } from './patience';
 import { pauseAt } from './race';
 import { jobs, settings, users } from '../src/db/schema';
 import { registerJob, unregisterJob } from '../src/jobs/registry';
@@ -58,8 +59,8 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return { promise, resolve };
 }
 
-const until = async (cond: () => boolean, ms = 2000): Promise<void> => {
-  const end = Date.now() + ms;
+const until = async (cond: () => boolean): Promise<void> => {
+  const end = Date.now() + PATIENCE_MS;
   while (!cond()) {
     if (Date.now() > end) throw new Error('timed out waiting');
     await new Promise((r) => setTimeout(r, 5));
@@ -334,7 +335,7 @@ describe('job queue', () => {
       onError: (e) => seen.push(e),
     });
     try {
-      const deadline = Date.now() + 2000;
+      const deadline = Date.now() + PATIENCE_MS;
       while ((await jobRow(db, id)).status !== status || runs === 0 || seen.length < errors) {
         if (Date.now() > deadline) throw new Error('timed out waiting');
         await new Promise((r) => setTimeout(r, 5));

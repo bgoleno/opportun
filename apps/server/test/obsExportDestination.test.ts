@@ -5,7 +5,7 @@
 // reserved ranges and the metadata services never; plain http to a public host never; a mapped
 // IPv4 address gets its IPv4 answer.
 import { randomBytes } from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { loadConfig } from '../src/config';
 import {
   checkDestination,
@@ -206,11 +206,19 @@ describe('checkDestination (14.10 rules 2 and 3)', () => {
 
   it('a lookup that never answers is abandoned as unresolvable, at the timeout (tl on #377)', async () => {
     const never = () => new Promise<string[]>(() => undefined);
-    const started = Date.now();
-    expect(
-      await checkDestination(dest(), { allowPrivate: false, lookup: never, lookupTimeoutMs: 50 }),
-    ).toEqual({ ok: false, reason: 'unresolvable' });
-    expect(Date.now() - started).toBeLessThan(2_000);
+    // The check's timer, moved by the test: no wall clock to be late by (#948).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    onTestFinished(() => void vi.useRealTimers());
+    let answer: unknown = 'none yet';
+    const checked = checkDestination(dest(), {
+      allowPrivate: false,
+      lookup: never,
+      lookupTimeoutMs: 50,
+    }).then((r) => (answer = r));
+    await vi.advanceTimersByTimeAsync(49);
+    expect(answer).toBe('none yet');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await checked).toEqual({ ok: false, reason: 'unresolvable' });
     expect(LOOKUP_TIMEOUT_MS).toBeLessThan(10_000);
   });
 

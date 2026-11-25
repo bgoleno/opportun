@@ -618,6 +618,11 @@ event and error records as logs, so in practice they stay in the instance.
 | `opportun.count.read`                   | whole number             | yes      |
 | `opportun.count.returned`               | whole number             | yes      |
 | `opportun.count.unmatched`              | whole number             | yes      |
+| `opportun.count.messages`               | whole number             | yes      |
+| `opportun.count.entries_blanked`        | whole number             | yes      |
+| `opportun.count.entries_left`           | whole number             | yes      |
+| `opportun.count.notes_cleared`          | whole number             | yes      |
+| `opportun.count.stage_notes_left`       | whole number             | yes      |
 | `opportun.count.set`                    | whole number             | yes      |
 | `opportun.count.changed`                | whole number             | yes      |
 | `opportun.count.cleared`                | whole number             | yes      |
@@ -637,6 +642,7 @@ event and error records as logs, so in practice they stay in the instance.
 | `opportun.count.invalid`                | whole number             | yes      |
 | `opportun.count.suppressed`             | whole number             | yes      |
 | `opportun.count.filtered`               | whole number             | yes      |
+| `opportun.count.linked`                 | whole number             | yes      |
 | `opportun.communication.id`             | row id                   | no       |
 | `opportun.company.id`                   | row id                   | no       |
 | `opportun.source.id`                    | row id                   | no       |

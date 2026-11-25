@@ -10,7 +10,7 @@ import { isAlertDigest, processAlertDigest } from '../adapters/sources/alertEmai
 import { triageMessage } from '../lib/mailTriage';
 import { gateApplies, gateMessage } from '../lib/triageGate';
 import { triageContext } from '../lib/triageContext';
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import { lockScope, withTransaction, type Db } from '../db/client';
 import { extractAtsJobRefs } from '../lib/atsJobRef';
 import {
@@ -55,18 +55,44 @@ async function routeNewMessage(
   await enqueueClassify(db, ctx, communicationId, body);
 }
 
+/** True when the message is stored already: the row a delivery of it meets. */
+async function isStored(
+  db: Db,
+  ctx: UserCtx,
+  channel: CommChannel,
+  externalId: string,
+): Promise<boolean> {
+  const row = await db
+    .select({ id: communications.id })
+    .from(communications)
+    .where(
+      and(
+        eq(communications.userId, ctx.userId),
+        eq(communications.channel, channel),
+        eq(communications.externalId, externalId),
+      ),
+    )
+    .get();
+  return row !== undefined;
+}
+
 /**
  * True for a stored message that is unclassified and has never had a classify job. A message
  * whose job ran and left it unclassified (no AI key) is not re-queued here on every replay:
- * the classify backfill picks those up when a key is added.
+ * the classify backfill picks those up when a key is added. Never a rejected or filtered one.
  */
 async function neverRouted(db: Db, ctx: UserCtx, communicationId: string): Promise<boolean> {
   const row = await db
-    .select({ classification: communications.classification })
+    .select({
+      classification: communications.classification,
+      rejectedAt: communications.rejectedAt,
+      triageDecision: communications.triageDecision,
+    })
     .from(communications)
     .where(and(eq(communications.userId, ctx.userId), eq(communications.id, communicationId)))
     .get();
   if (row === undefined || row.classification !== null) return false;
+  if (row.rejectedAt !== null || row.triageDecision === 'filtered') return false;
   const job = await db
     .select({ id: jobs.id })
     .from(jobs)
@@ -78,7 +104,7 @@ async function neverRouted(db: Db, ctx: UserCtx, communicationId: string): Promi
 }
 
 /**
- * Rule 6: is this message's thread already linked to an opportunity.
+ * Rule 6: is this message's thread already linked to an opportunity, by a message not rejected.
  *
  * One indexed lookup per message, and unlike the rules and the toggles it cannot be cached per
  * user, because the answer is per thread. The index it uses is `communications_user_thread_idx`.
@@ -93,6 +119,7 @@ async function threadLinked(db: Db, ctx: UserCtx, threadKey: string): Promise<bo
         eq(communications.userId, ctx.userId),
         eq(communications.threadKey, threadKey),
         isNotNull(communications.opportunityId),
+        isNull(communications.rejectedAt),
       ),
     )
     .get();
@@ -110,7 +137,8 @@ export interface IngestOptions {
 /**
  * Stores one inbound message for the caller. `alongside` runs inside the upsert's transaction
  * (Gmail saves its cursor there, so a crash never skips or repeats a message). Routing (digest
- * or classifier) happens only when the row is new: a re-delivered message is an update.
+ * or classifier) happens only when the row is new: a message that arrives again stays as it was
+ * stored (upsertInbound), so it is not looked at again and no application is matched to it.
  *
  * With assisted apply on, a new message that matches exactly one application awaiting its
  * confirmation confirms it in the same transaction (#119; repos/submissionConfirm.ts).
@@ -129,8 +157,13 @@ export async function ingestInbound(
   // https://github.com/bgoleno/opportun/pull/173), not all mail from a candidate's domain. The
   // matcher reads the body here, transiently, like the classifier will; nothing it reads is
   // stored but the signal names.
+  // A stored message is not matched again, so one that passed as a confirmation alone is filtered by
+  // the rules when it is delivered again: it keeps what it has, and is not queued a second time.
+  const stored = await isStored(db, ctx, channel, message.externalId);
   const candidates =
-    opts.submissions === true ? await confirmationCandidates(db, ctx, message.sentAt) : [];
+    opts.submissions === true && !stored
+      ? await confirmationCandidates(db, ctx, message.sentAt)
+      : [];
   const matched: ConfirmationMatch =
     candidates.length === 0
       ? { kind: 'none', reason: 'no_candidates', candidateIds: [] }
@@ -177,13 +210,14 @@ export async function ingestInbound(
   // there is no window in which the body exists on disk. It is given the parsed address rather
   // than the raw From header: the display name is attacker-controlled and says nothing a model
   // needs. Every failure inside the gate is a pass (see lib/triageGate).
-  const gate = gateApplies(verdict, digestSender)
-    ? await gateMessage(db, ctx, {
-        from: address,
-        subject: message.subject,
-        body: message.bodyText,
-      })
-    : null;
+  const gate =
+    !stored && gateApplies(verdict, digestSender)
+      ? await gateMessage(db, ctx, {
+          from: address,
+          subject: message.subject,
+          body: message.bodyText,
+        })
+      : null;
   const filtered = verdict.decision === 'drop' || gate?.decision === 'drop';
   const matchedRule = gate?.decision === 'drop' ? 'ai_gate' : verdict.matchedRule;
   // Plan 3 Task 1: the body is NOT written anywhere. What the row keeps is the snippet, the
@@ -214,13 +248,19 @@ export async function ingestInbound(
     }
     return res;
   });
-  if (filtered) return result;
-  if (result.inserted) {
-    await routeNewMessage(db, ctx, storage, result.id, digestSender, body);
-  } else if (await neverRouted(db, ctx, result.id)) {
-    // Stored by an earlier delivery whose enqueue failed after the commit (a crash, a full
-    // disk): the replay is the chance to heal it. The classify job routes digests too.
-    await enqueueClassify(db, ctx, result.id);
+  // Stored, not yet routed: a reject can land here.
+  await racePoint('mail.ingest.stored');
+  const { id, inserted } = result;
+  // Not a row that is closed, whatever this delivery's verdict (a stored message keeps its own), and
+  // not on a delivery the rules filter by now: what is stored stays, and goes no further.
+  if (!result.closed && !filtered) {
+    if (inserted) {
+      await routeNewMessage(db, ctx, storage, id, digestSender, body);
+    } else if (await neverRouted(db, ctx, id)) {
+      // Stored by an earlier delivery whose enqueue failed after the commit (a crash, a full
+      // disk): the replay is the chance to heal it. The classify job routes digests too.
+      await enqueueClassify(db, ctx, id);
+    }
   }
-  return result;
+  return { id, inserted };
 }

@@ -7,6 +7,7 @@ import { jobs, opportunities } from '../src/db/schema';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
 import { queryAll, queryOne } from './db';
+import { cpuMs } from './scaling';
 
 const boot = useApi();
 
@@ -843,15 +844,16 @@ describe('manual order (issue #240)', () => {
       // All 150 start tied at sortOrder 0 (the exact live scenario this fixes): move the first
       // card to the back, which is reorderColumn's shape for touching nearly the whole column.
       const changes = [...ids.slice(1), ids[0]].map((id, i) => ({ id, sortOrder: i * 10 }));
-      const started = Date.now();
+      // CPU time, which a busy host does not add to (#948).
+      const started = cpuMs();
       const res = await a.request({
         method: 'POST',
         url: '/api/v1/opportunities/reorder',
         payload: { changes },
       });
-      const elapsedMs = Date.now() - started;
+      const spentMs = cpuMs() - started;
       expect(res.statusCode).toBe(204);
-      expect(elapsedMs).toBeLessThan(5000);
+      expect(spentMs).toBeLessThan(5000);
       const list = await a.request({
         method: 'GET',
         url: '/api/v1/opportunities?sort=sortOrder&limit=200',

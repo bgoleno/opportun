@@ -395,13 +395,29 @@ export async function oauthLoginRoutes(app: FastifyInstance): Promise<void> {
       const { provider } = req.params;
       const user = await passwordHashRow(db, ctx.userId);
       if (user === undefined) throw new HttpError(401, 'unauthorized');
-      if (hasUsablePassword(user.hash)) throw new HttpError(409, 'has_password');
+      if (hasUsablePassword(user.hash)) {
+        throw new HttpError(
+          409,
+          'has_password',
+          'Your account already has a password. To change it, enter the current one.',
+          undefined,
+          { userFacing: true },
+        );
+      }
       const linked = await db
         .select({ id: oauthAccounts.id })
         .from(oauthAccounts)
         .where(and(eq(oauthAccounts.userId, ctx.userId), eq(oauthAccounts.provider, provider)))
         .get();
-      if (linked === undefined) throw new HttpError(409, 'not_linked');
+      if (linked === undefined) {
+        throw new HttpError(
+          409,
+          'not_linked',
+          'This provider is not linked to your account. Confirm with one that is.',
+          undefined,
+          { userFacing: true },
+        );
+      }
       const authUrl = await authorize(req, reply, provider, 'setpw', sessionIdFrom(req) ?? '');
       return reply.code(200).send({ authUrl });
     },

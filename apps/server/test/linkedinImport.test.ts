@@ -20,6 +20,7 @@ import {
   parseConnections,
 } from '../src/lib/linkedinExport';
 import { upsertInbound } from '../src/repos/communications';
+import { rejectCommunication } from '../src/repos/reject';
 import { useApi } from './api';
 import { assertIsolated, type TestClient } from './isolation';
 import { queuedBodyOf } from './classifyPayload';
@@ -291,6 +292,22 @@ describe('POST /imports/linkedin', () => {
       classify.map((j) => (j.payload as { communicationId: string }).communicationId).sort(),
     ).toEqual(comms.map((m) => m.id).sort());
     for (const m of await linkedinComms(app, a.userId)) expect(m.classification).toBeNull();
+  });
+
+  it('a rejected message stays rejected when its export is imported again', async () => {
+    const { app, a } = await boot();
+    await importAndRun(app, a, await exportZip());
+    const [first] = await linkedinComms(app, a.userId);
+    await rejectCommunication(app.db, { userId: a.userId, isAdmin: false }, first!.id, {
+      reason: 'not_job_related',
+      expectedOpportunityId: first!.opportunityId,
+    });
+    const before = await linkedinComms(app, a.userId);
+    await app.db.delete(jobs).run();
+    await importAndRun(app, a, await exportZip());
+    expect(await linkedinComms(app, a.userId)).toEqual(before);
+    const routed = await app.db.select().from(jobs).where(eq(jobs.kind, 'comms.classify')).all();
+    expect(routed).toEqual([]);
   });
 
   it('re-import creates zero duplicates and keeps message external ids stable', async () => {

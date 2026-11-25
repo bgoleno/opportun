@@ -101,6 +101,25 @@ function summarize(
   return parts.join('; ');
 }
 
+/**
+ * The same for an undo. `duplicate` there is a result that was unsuppressed meanwhile and whose job is
+ * in the pipeline, or in the queue again, by then: it stays dismissed (#1020).
+ */
+function summarizeUndo(results: BulkItemResult[]): string {
+  const held = results.filter((r) => r.outcome === 'duplicate');
+  const rest = results.filter((r) => r.outcome !== 'duplicate');
+  const notRestored = (n: number, where: string) =>
+    n === 0
+      ? []
+      : [`${n} not restored: ${n === 1 ? 'this job is' : 'these jobs are'} already in ${where}`];
+  const inPipeline = held.filter((r) => r.existingId !== undefined).length;
+  return [
+    ...(rest.length === 0 ? [] : [summarize(rest, 'restored')]),
+    ...notRestored(inPipeline, 'your pipeline'),
+    ...notRestored(held.length - inPipeline, 'the review queue'),
+  ].join('; ');
+}
+
 /** `now` dates the stale mark; tests pass a fixed time instead of reading the clock. */
 export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
   const [sort, setSort] = useState<QueueSort>(DEFAULT_QUEUE_SORT);
@@ -301,7 +320,9 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
                 onClick: () => {
                   void bulkUndoM
                     .mutateAsync({ ids: dismissedIds })
-                    .then((undone) => toast({ title: summarize(undone, 'restored') }))
+                    .then((undone) =>
+                      toast({ title: summarizeUndo(undone), ...heldAction(undone) }),
+                    )
                     .catch((err: unknown) =>
                       toast({
                         title: 'Undo failed',
@@ -360,6 +381,15 @@ export function ReviewQueue({ now = Date.now() }: { now?: number } = {}) {
               void navigate({ to: '/opportunities/$id', params: { id: opportunityId } }),
           },
         };
+  }
+
+  /** The toast's way to the first of what an undo left dismissed, as its job is there already. */
+  function heldAction(undone: BulkItemResult[]) {
+    const held = undone.find((r) => r.outcome === 'duplicate');
+    if (held === undefined) return {};
+    return held.existingId === undefined
+      ? { action: { label: 'Review queue', onClick: () => void navigate({ to: '/discovery' }) } }
+      : viewAction(held.existingId);
   }
 
   /** Nothing was created or changed, and nothing failed: says where the result is. */

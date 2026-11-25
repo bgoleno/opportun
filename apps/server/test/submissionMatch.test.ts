@@ -15,6 +15,7 @@ import {
   type ConfirmationCandidate,
   type ConfirmationMessage,
 } from '../src/lib/submissionMatch';
+import { cpuMs } from './scaling';
 
 const T = 1_800_000_000_000; // when the candidate was submitted
 const MIN = 60 * 1000;
@@ -209,10 +210,11 @@ describe('signal B: the sender address, never the display name (criterion 1)', (
 
 describe('the sender domain of a long address', () => {
   it('strips trailing dots from it', () => {
-    const started = performance.now();
+    // CPU time, which a busy host does not add to (#948).
+    const started = cpuMs();
     expect(senderDomain(`x@a${'.'.repeat(100_000)}x`)).toBe(`a${'.'.repeat(100_000)}x`);
     expect(senderDomain(`x@ExampleCorp.Example${'.'.repeat(100_000)}`)).toBe('examplecorp.example');
-    expect(performance.now() - started).toBeLessThan(500);
+    expect(cpuMs() - started).toBeLessThan(500);
   });
 });
 

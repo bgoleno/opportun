@@ -115,7 +115,15 @@ export async function addTaskRunId(db: Db, ctx: UserCtx, id: string, runId: stri
 /** Marks the session accepted. 409 when it already was. */
 export async function completeSession(db: Db, ctx: UserCtx, id: string): Promise<SessionRow> {
   return await rewrite(db, ctx, id, (row) => {
-    if (row.acceptedAt !== null) throw new HttpError(409, 'session_closed');
+    if (row.acceptedAt !== null) {
+      throw new HttpError(
+        409,
+        'session_closed',
+        'This tailoring session was already finished. There is nothing more to do.',
+        undefined,
+        { userFacing: true },
+      );
+    }
     return { acceptedAt: Date.now() };
   });
 }

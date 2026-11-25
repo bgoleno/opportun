@@ -28,14 +28,24 @@ export function isSystemWritten(
 }
 
 /**
- * True when a board write may replace the user's own description because the user asked for
- * it: the reconcile job flagged `edited` precisely because the text is theirs, and the only
- * way to reach this is to press the action on that flag (design D11, final review Important 3).
- * Without this the flag offers a button that refuses for the same reason the flag was raised.
+ * True when a board write may replace the user's own description because the user agreed to it:
+ * the reconcile job flagged `edited` precisely because the text is theirs (design D11, final review
+ * Important 3), and `agreed` is the fingerprint of the text they were told they would lose (#858).
+ * Both, so that no caller replaces it without having asked, and an answer given about one text does
+ * not cover another saved since.
  */
-export function replaceAllowedByFlag(opp: {
-  postingState?: string | null;
-  postingStateDetail?: string | null;
-}): boolean {
-  return opp.postingState === 'needs_review' && opp.postingStateDetail === 'edited';
+export function replaceAllowedByFlag(
+  opp: {
+    descriptionMd: string | null;
+    postingState?: string | null;
+    postingStateDetail?: string | null;
+  },
+  agreed: string | undefined,
+): boolean {
+  return (
+    opp.postingState === 'needs_review' &&
+    opp.postingStateDetail === 'edited' &&
+    opp.descriptionMd !== null &&
+    agreed === descriptionFingerprint(opp.descriptionMd)
+  );
 }

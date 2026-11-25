@@ -28,7 +28,7 @@ describe('race barrier', () => {
   });
 
   it('fails a caller when the others never arrive', async () => {
-    holdAt('test.lonely', 2);
+    holdAt('test.lonely', 2, 50);
     await expect(racePoint('test.lonely')).rejects.toThrow(/only 1 of 2 callers/);
-  }, 10_000);
+  });
 });
