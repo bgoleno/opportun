@@ -514,6 +514,75 @@ function descriptionIs(
   );
 }
 
+/**
+ * What a search for an opportunity's posting goes by, as it was stored when the search read it
+ * (https://github.com/bgoleno/opportun/issues/892): what it found holds only while they are the same.
+ */
+export interface SearchBasis {
+  companyId: string | null;
+  title: string;
+  postingUrl: string | null;
+}
+
+const BASIS_FIELDS = [
+  ['companyId', 'company', opportunities.companyId],
+  ['title', 'title', opportunities.title],
+  ['postingUrl', 'posting link', opportunities.postingUrl],
+] as const;
+export type BasisField = (typeof BASIS_FIELDS)[number][1];
+
+export const searchBasisOf = (opp: SearchBasis): SearchBasis => ({
+  companyId: opp.companyId,
+  title: opp.title,
+  postingUrl: opp.postingUrl,
+});
+
+/** What of `was` is another in `now`: exactly, null only being null. */
+export function basisChanges(was: Partial<SearchBasis>, now: SearchBasis): BasisField[] {
+  return BASIS_FIELDS.filter(
+    // eslint-disable-next-line security/detect-object-injection -- a BASIS_FIELDS literal
+    ([field]) => was[field] !== undefined && was[field] !== now[field],
+  ).map(([, name]) => name);
+}
+
+/** The same comparison, in a write's own condition. */
+function basisIs(was: Partial<SearchBasis>): SQL | undefined {
+  return and(
+    ...BASIS_FIELDS.map(([field, , column]) => {
+      // eslint-disable-next-line security/detect-object-injection -- a BASIS_FIELDS literal
+      const value = was[field];
+      if (value === undefined) return undefined;
+      return value === null ? isNull(column) : eq(column, value);
+    }),
+  );
+}
+
+/** A write's `ifBasis` no longer holds, in `fields`: nothing was written (#892). */
+export class SearchBasisChanged extends Error {
+  override name = 'SearchBasisChanged';
+  constructor(readonly fields: BasisField[]) {
+    super(`changed meanwhile: ${fields.join(', ')}`);
+  }
+}
+
+/** After a write that met no row: what of its basis is another now. Not found when it is gone. */
+async function basisChanged(
+  tx: Exec,
+  ctx: UserCtx,
+  id: string,
+  was: Partial<SearchBasis>,
+): Promise<SearchBasisChanged> {
+  return new SearchBasisChanged(basisChanges(was, await getViewSync(tx, ctx, id)));
+}
+
+/** What an attach or a check settles with the fields it writes. */
+export interface PostingSettle {
+  /** Undefined leaves the state as it is (#866: a Refetch is not a confirmation). */
+  postingState?: PostingState | null | undefined;
+  postingStateDetail?: PostingStateDetail | null | undefined;
+  atsJobRef: AtsJobRef | null;
+}
+
 /** updateOpportunity's `ifDescription` no longer holds: nothing was written. */
 export class DescriptionChanged extends Error {
   override name = 'DescriptionChanged';
@@ -528,6 +597,8 @@ const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
 interface UpdateOptions {
   atsJobRef?: AtsJobRef | null;
   ifDescription?: Pick<OpportunityRow, 'descriptionMd' | 'descriptionFingerprint'>;
+  ifBasis?: Partial<SearchBasis>;
+  settle?: (was: OpportunityView) => PostingSettle;
 }
 
 /**
@@ -551,6 +622,12 @@ export async function updateOpportunity(
    * throw DescriptionChanged with nothing written. The text itself is compared, not only the
    * fingerprint: a user's save leaves the fingerprint as it was, which is how it is known to be
    * theirs (lib/postingFingerprint).
+   *
+   * `ifBasis`: the same for what a search went by (#892), or SearchBasisChanged.
+   *
+   * `settle`: the posting's state and identity, written by the same statement, so a link is never there
+   * without its identity. Made from the row this write replaces, which is held from that read on; it only
+   * computes. It can be called more than once (the write starts over for an application started meanwhile).
    */
   opts: UpdateOptions = {},
 ): Promise<OpportunityView> {
@@ -569,9 +646,10 @@ async function updateOnce(
     // A new posting URL will mark the live attempt (#144): its lock comes first, before the user's
     // below (lock order: submissionScope). Taken for any posting URL, the same one too: whether it
     // is a change is known only from the read made under the user's lock, below.
-    const lockedAttempt =
-      patch.postingUrl === undefined ? null : await lockLiveAttempt(tx, ctx, id);
-    if (patch.postingUrl !== undefined) await racePoint('opportunities.update.attemptLocked');
+    // An identity is the same to it: it can be another job's under an unchanged link (#961).
+    const mayMark = patch.postingUrl !== undefined || opts.settle !== undefined;
+    const lockedAttempt = mayMark ? await lockLiveAttempt(tx, ctx, id) : null;
+    if (mayMark) await racePoint('opportunities.update.attemptLocked');
     if (patch.roleTargetId != null) await assertRoleTargetOwned(tx, ctx, patch.roleTargetId);
     const { companyName, ...fields } = patch;
     const changesKey =
@@ -585,7 +663,9 @@ async function updateOnce(
       current = await getViewSync(tx, ctx, id);
     }
     const urlChanged = fields.postingUrl !== undefined && fields.postingUrl !== current.postingUrl;
-    if (urlChanged) {
+    let settled: PostingSettle | undefined;
+    let requisitionChanges = false;
+    if (urlChanged || opts.settle !== undefined) {
       // An application can have been started while this waited for the user's lock, with a lock this
       // doesn't hold and which comes before it: then the save is started over with it, nothing being
       // written yet (#913). The row is held against a start first, so none can come after the look:
@@ -593,8 +673,14 @@ async function updateOnce(
       if (!(await lockOpportunityRow(tx, ctx, id, true))) throw notFound();
       // Not all that write the row take the user's lock: from here it is as it stays.
       current = await getViewSync(tx, ctx, id);
-      const live = await liveAttemptId(tx, ctx, id);
-      if (live !== null && live !== lockedAttempt) throw new AttemptMade();
+      if (opts.ifBasis !== undefined) {
+        const changed = basisChanges(opts.ifBasis, current);
+        if (changed.length > 0) throw new SearchBasisChanged(changed);
+      }
+      settled = opts.settle?.(current);
+      requisitionChanges =
+        settled !== undefined && !sameRequisition(current.atsJobRef, settled.atsJobRef);
+      if (urlChanged || requisitionChanges) await assertLiveAttemptHeld(tx, ctx, id, lockedAttempt);
     }
     let companyId = current.companyId;
     if (companyName !== undefined)
@@ -633,6 +719,7 @@ async function updateOnce(
       .set({
         ...fields,
         ...(dropForCompany ? { atsJobRef: null } : urlChanged ? { atsJobRef: newRef } : {}),
+        ...settled,
         ...(companyName === undefined ? {} : { companyId }),
         ...(changesKey ? { dedupeKey: key } : {}),
         updatedAt: now,
@@ -641,15 +728,21 @@ async function updateOnce(
         and(
           owned(ctx, id),
           opts.ifDescription === undefined ? undefined : descriptionIs(opts.ifDescription),
+          opts.ifBasis === undefined ? undefined : basisIs(opts.ifBasis),
         ),
       )
       .returning({ id: opportunities.id });
     if (written.length === 0) {
+      if (opts.ifBasis !== undefined) {
+        const changed = await basisChanged(tx, ctx, id, opts.ifBasis);
+        if (changed.fields.length > 0 || opts.ifDescription === undefined) throw changed;
+      }
       // Deleted while this waited for its row (#917), or the condition no longer holds.
       throw opts.ifDescription === undefined ? notFound() : new DescriptionChanged();
     }
     // A new posting URL under a live attempt (#144): the attempt says so and its review lapses.
-    if (urlChanged) await markPostingChanged(tx, ctx, lockedAttempt, id, now);
+    // Another ATS identity is the same to it. Once for both.
+    if (urlChanged || requisitionChanges) await markPostingChanged(tx, ctx, lockedAttempt, id, now);
     if (companyName !== undefined || fields.title !== undefined) {
       await detectDedupeCandidates(
         tx,
@@ -787,10 +880,12 @@ export async function setPostingState(
     atsJobRef?: AtsJobRef | null;
     descriptionFingerprint?: string | null;
   },
+  /** Written only while what a search went by is the same (#892), or SearchBasisChanged. */
+  opts: { ifBasis?: Partial<SearchBasis> } = {},
 ): Promise<OpportunityView> {
   // Starts over as a link's save does (#961), so a caller with an `atsJobRef` is in no transaction of its
   // own, and holds no lock that comes after an attempt's: what that one holds would be kept.
-  return await withEveryAttempt(() => setPostingStateOnce(db, ctx, id, patch));
+  return await withEveryAttempt(() => setPostingStateOnce(db, ctx, id, patch, opts.ifBasis));
 }
 
 async function setPostingStateOnce(
@@ -798,6 +893,7 @@ async function setPostingStateOnce(
   ctx: UserCtx,
   id: string,
   patch: Parameters<typeof setPostingState>[3],
+  ifBasis: Partial<SearchBasis> | undefined,
 ): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
     await getViewSync(tx, ctx, id); // not found
@@ -815,7 +911,7 @@ async function setPostingStateOnce(
       if (requisitionChanges) await assertLiveAttemptHeld(tx, ctx, id, lockedAttempt);
       await racePoint('opportunities.postingState.locked');
     }
-    await tx
+    const written = await tx
       .update(opportunities)
       .set({
         ...(patch.postingState === undefined ? {} : { postingState: patch.postingState }),
@@ -828,12 +924,43 @@ async function setPostingStateOnce(
           : { descriptionFingerprint: patch.descriptionFingerprint }),
         updatedAt: now,
       })
-      .where(owned(ctx, id))
-      .run();
+      .where(and(owned(ctx, id), ifBasis === undefined ? undefined : basisIs(ifBasis)))
+      .returning({ id: opportunities.id });
+    if (written.length === 0 && ifBasis !== undefined)
+      throw await basisChanged(tx, ctx, id, ifBasis);
     // Another ATS identity under a live attempt (#144): it says so and its review lapses.
     if (requisitionChanges) await markPostingChanged(tx, ctx, lockedAttempt, id, now);
     return await getViewSync(tx, ctx, id);
   });
+}
+
+/**
+ * A search that was refused for what the user changed meanwhile (#892) leaves the posting "not finished",
+ * where a search was what it waited for. What another request has settled since stays: judged by the
+ * statement that writes it.
+ */
+export async function leaveSearchUnfinished(
+  db: Db,
+  ctx: UserCtx,
+  id: string,
+): Promise<OpportunityView> {
+  await db
+    .update(opportunities)
+    .set({ postingState: 'needs_review', postingStateDetail: 'failed', updatedAt: Date.now() })
+    .where(
+      and(
+        owned(ctx, id),
+        or(
+          eq(opportunities.postingState, 'searching'),
+          and(
+            eq(opportunities.postingState, 'needs_review'),
+            inArray(opportunities.postingStateDetail, ['ambiguous', 'none_found', 'no_board']),
+          ),
+        ),
+      ),
+    )
+    .run();
+  return await getOpportunity(db, ctx, id);
 }
 
 /**
