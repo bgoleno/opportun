@@ -160,13 +160,13 @@ export function Notice({
  * for (#144): its identity, else the job its link names. An attempt is always created with the
  * opportunity's identity, so any difference is a change, recorded or not: a change landing during
  * a create finds no attempt to mark yet (tl on #154). One that names no job has lost it, unless a
- * merge is why: then nothing changed, and the merge's notice says where it goes (#1057). The attempt
- * keeps its pinned destination; this is what the screens say.
+ * merge is why and nothing changed at it or after it (#1057). The attempt keeps its pinned
+ * destination; this is what the screens say.
  */
 export function postingMoved(
   live: Pick<
     SubmissionView,
-    'atsKind' | 'atsRef' | 'atsExternalId' | 'mergedAt' | 'reviewedAt' | 'postingChangedAt'
+    'atsKind' | 'atsRef' | 'atsExternalId' | 'mergedAt' | 'postingChangedAt'
   >,
   opp: Pick<OpportunityView, 'atsJobRef' | 'postingUrl'>,
 ): boolean {
@@ -175,7 +175,11 @@ export function postingMoved(
     live,
   );
   if (named !== 'none') return named === 'another';
-  return !(mergedSinceReview(live) && live.postingChangedAt == null);
+  // Whatever was reviewed since: the posting did not change then either.
+  return (
+    live.mergedAt == null ||
+    (live.postingChangedAt != null && live.postingChangedAt >= live.mergedAt)
+  );
 }
 
 const requisitionOf = (live: SubmissionView): string =>
@@ -240,15 +244,18 @@ export function MergedDraftNotice({ live }: { live: SubmissionView }) {
   );
 }
 
-/** A draft that was opened on the employer's site before: it may have been sent (#1057, sec). */
+/** One that was opened on the employer's site before it was reviewed again: it may have been sent. */
+export const openedOnceText = (openedAt: number): string =>
+  `You opened this application on ${formatDateTime(openedAt)}. If you submitted it then, don't send it again.`;
+
+/** Until it is opened again (#1057, sec). */
 export function OpenedOnceNotice({ live }: { live: SubmissionView }) {
-  if (live.status !== 'draft' || live.handedOffAt == null) return null;
+  if ((live.status !== 'draft' && live.status !== 'reviewed') || live.handedOffAt == null) {
+    return null;
+  }
   return (
     <Notice>
-      <span>
-        You opened this application on {formatDateTime(live.handedOffAt)}. If you submitted it then,
-        don&apos;t send it again.
-      </span>
+      <span>{openedOnceText(live.handedOffAt)}</span>
     </Notice>
   );
 }

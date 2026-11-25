@@ -342,7 +342,8 @@ it goes to. Before you merge, Opportun says what becomes of it:
   press **I submitted it** instead: a draft that was opened before says when, so you don't send it
   twice.
 
-A page of the merged opportunity left open in another tab goes to the application on the kept one.
+An application step of the merged opportunity left open in another tab goes to the same step on the
+kept one.
 Where the kept one's posting is another job, the application says that the posting changed, as it
 does when you change the link yourself.
 

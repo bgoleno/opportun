@@ -67,6 +67,7 @@ import {
   MergedDraftNotice,
   Notice,
   OpenedOnceNotice,
+  openedOnceText,
   PostingChangedNotice,
   postingMoved,
   ReviewItAgain,
@@ -154,8 +155,11 @@ export function ApplyPage({
         // The sweep closed a review that was not used in time (tl on #138).
         <Notice role="alert">
           <span>
-            <strong>Your review expired and this application was closed.</strong> Nothing was
-            submitted. Start again from the{' '}
+            <strong>Your review expired and this application was closed.</strong>{' '}
+            {items[0].handedOffAt == null
+              ? 'Nothing was submitted.'
+              : openedOnceText(items[0].handedOffAt)}{' '}
+            Start again from the{' '}
             <Link
               to="/opportunities/$id/apply"
               params={{ id: o.id }}
@@ -168,6 +172,19 @@ export function ApplyPage({
             {shared ? '.' : ': your details are kept.'}
           </span>
         </Notice>
+      ) : live === undefined && items[0]?.submittedAt != null ? (
+        // Recorded in another tab, say, while this one was at a step (qa on #1072).
+        <p className="text-sm text-muted-foreground">
+          This application is recorded as submitted on {formatDateTime(items[0].submittedAt)}.{' '}
+          <Link
+            to="/opportunities/$id/applications/$submissionId"
+            params={{ id: o.id, submissionId: items[0].id }}
+            className="text-primary underline-offset-4 hover:underline"
+          >
+            See this application
+          </Link>
+          .
+        </p>
       ) : live === undefined ? (
         <p className="text-sm text-muted-foreground">
           This application has not started yet.{' '}

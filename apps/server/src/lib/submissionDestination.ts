@@ -3,7 +3,8 @@
 // importing the review repo (repos/submissionReview.ts), which imports the submissions repo back.
 import type { SubmissionRow } from '../repos/submissions';
 import { boardFromUrl } from './atsBoard';
-import { atsJobRefOfBoardPath, withoutTrailingPunctuation } from './atsJobRef';
+import { withoutTrailingPunctuation } from '@opportun/core';
+import { atsJobRefOfBoardPath } from './atsJobRef';
 import { isPageFetchProhibited } from './safeFetch';
 
 /** Why a destination may not be opened for this requisition (design 7.2), or null. */

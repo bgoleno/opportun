@@ -1,6 +1,7 @@
 // The job an opportunity names (https://github.com/bgoleno/opportun/issues/1055, #1057): by its stored
 // posting identity, else by its posting link. One comparison for the server's mark and the screens'
 // notice, so they cannot disagree.
+import { withoutTrailingPunctuation } from '../linkPunctuation';
 import { ATS_SITES, type SiteUrl } from './index';
 
 // core compiles without DOM or node types; WHATWG URL is a global in every runtime it serves (as in
@@ -28,7 +29,7 @@ export interface PinnedJob {
 export function jobNamedByLink(link: string): NamedJob | null {
   let url: SiteUrl;
   try {
-    url = new URL(link);
+    url = new URL(withoutTrailingPunctuation(link));
   } catch {
     return null;
   }

@@ -283,6 +283,10 @@ test('opened, and then its opportunity merged: told what happened, reviewed agai
     const given = await current();
     expect(given).toMatchObject({ reason: null });
     expect(given.attempt).toMatchObject({ opportunityId: keptId, firstRead: true });
+    // And then nothing untrue of its posting, which the kept one has none of (tl on #1072).
+    await other.goto(`/opportunities/${keptId}`);
+    await expect(keptPanel.getByText('Opened on ATS')).toBeVisible();
+    await expect(keptPanel).not.toContainText(/The posting changed|merged into this one/);
     await other.close();
   } finally {
     await extension.dispose();

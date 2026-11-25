@@ -51,6 +51,7 @@ import { OutcomeActions, REPORTABLE } from './OutcomeActions';
 import {
   MergedDraftNotice,
   OpenedOnceNotice,
+  openedOnceText,
   PostingChangedNotice,
   postingMoved,
   ReviewItAgain,
@@ -473,7 +474,11 @@ export function attemptPlace(
   if (live.status === 'reviewed') {
     return {
       step: 'review',
-      text: 'Your review is saved. Nothing has been sent anywhere.',
+      // Opened before it was reviewed again, it may have been sent (#1057).
+      text:
+        live.handedOffAt == null
+          ? 'Your review is saved. Nothing has been sent anywhere.'
+          : 'Your review is saved.',
       action: `Continue to open ${ats}`,
     };
   }
@@ -605,8 +610,10 @@ function LastAttempt({ latest }: { latest: SubmissionView }) {
   if (latest.status === 'abandoned' && latest.failureReason === 'review_expired') {
     return (
       <p className="text-sm text-muted-foreground">
-        Your last review expired before the form was opened. Starting again keeps your details and
-        answers.
+        {latest.handedOffAt == null
+          ? 'Your last review expired before the form was opened.'
+          : `Your last review expired. ${openedOnceText(latest.handedOffAt)}`}{' '}
+        Starting again keeps your details and answers.
       </p>
     );
   }

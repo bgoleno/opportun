@@ -11,7 +11,7 @@ import { formatDateTime } from '@/lib/opportunities';
 import { mockApi, renderWithProviders, type ApiCall } from '@/test/render';
 import { ApplyPage } from './ApplyPage';
 import { ApplyPanel } from './ApplyPanel';
-import type { SubmissionView } from './api';
+import { ak, type SubmissionView } from './api';
 import { postingMoved } from './parts';
 
 const NOW = Date.UTC(2026, 10, 25, 12);
@@ -286,6 +286,57 @@ describe('the panel', () => {
     expect(await screen.findByText(OPENED_ONCE)).toBeVisible();
   });
 
+  it('reviewed again: it was opened once still, and "nothing has been sent" is not said', async () => {
+    mockApi(
+      routes(
+        submission({
+          status: 'reviewed',
+          mergedAt: NOW - HOUR,
+          reviewedAt: NOW,
+          reviewExpiresAt: Date.now() + HOUR,
+        }),
+      ),
+    );
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    expect(await screen.findByText(OPENED_ONCE)).toBeVisible();
+    expect(screen.getByText('Your review is saved.')).toBeVisible();
+    expect(document.body).not.toHaveTextContent(/Nothing has been sent|merged/);
+  });
+
+  it('control: reviewed, and not opened before', async () => {
+    mockApi(
+      routes(
+        submission({
+          status: 'reviewed',
+          handedOffAt: null,
+          reviewExpiresAt: Date.now() + HOUR,
+        }),
+      ),
+    );
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    expect(
+      await screen.findByText('Your review is saved. Nothing has been sent anywhere.'),
+    ).toBeVisible();
+  });
+
+  it.each([
+    ['opened before', NOW - 2 * HOUR],
+    ['not opened before', null],
+  ])('its last review expired, %s', async (_, handedOffAt) => {
+    mockApi(
+      routes(submission({ status: 'abandoned', failureReason: 'review_expired', handedOffAt })),
+    );
+    renderWithProviders(<ApplyPanel opp={OPP} />);
+    const said = await screen.findByText(/Your last review expired/);
+    expect(said).toHaveTextContent('Starting again keeps your details and answers.');
+    if (handedOffAt === null) {
+      expect(said).toHaveTextContent('Your last review expired before the form was opened.');
+    } else {
+      expect(said).toHaveTextContent(`Your last review expired. ${OPENED_ONCE}`);
+      expect(said).not.toHaveTextContent(/before the form was opened/);
+    }
+  });
+
   it('a draft reviewed since, a reviewed one, and one never merged say nothing of it', async () => {
     for (const sub of [
       draftAgain({ handedOffAt: null, reviewedAt: NOW }),
@@ -316,6 +367,69 @@ describe('the review step of a draft that was merged, or opened once', () => {
     expect(screen.getByText(OPENED_ONCE)).toBeVisible();
   });
 
+  it('reviewed again, the button that opens the form has the warning above it', async () => {
+    mockApi(
+      routes(
+        submission({
+          status: 'reviewed',
+          mergedAt: NOW - HOUR,
+          reviewedAt: NOW,
+          reviewExpiresAt: Date.now() + HOUR,
+        }),
+      ),
+    );
+    renderStep('review');
+    expect(await screen.findByRole('button', { name: /^Open boards/ })).toBeVisible();
+    expect(screen.getByText(OPENED_ONCE)).toBeVisible();
+  });
+
+  it.each([
+    ['opened before', NOW - 2 * HOUR],
+    ['not opened before', null],
+  ])('its review expired and it was closed, %s', async (_, handedOffAt) => {
+    mockApi(
+      routes(submission({ status: 'abandoned', failureReason: 'review_expired', handedOffAt })),
+    );
+    renderStep('review');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Your review expired and this application was closed.');
+    if (handedOffAt === null) expect(alert).toHaveTextContent('Nothing was submitted.');
+    else {
+      expect(alert).toHaveTextContent(OPENED_ONCE);
+      expect(alert).not.toHaveTextContent(/Nothing was submitted/);
+    }
+  });
+
+  it('refused, as it was recorded in another tab: it is said to be submitted (qa on #1072)', async () => {
+    let now = lapsed();
+    mockApi({
+      ...routes(now),
+      'GET /opportunities/opp-1/submissions': () => ({ items: [now], total: 1 }),
+      'POST /submissions/sub-1/review-again': () => {
+        now = submission({ status: 'submitted', submittedAt: NOW - HOUR });
+        return { status: 409, body: { error: { code: 'invalid_transition' } } };
+      },
+    });
+    const { user } = renderStep('open');
+    await user.click(await screen.findByRole('button', { name: 'Review it again' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Review this application again?' });
+    await user.click(within(dialog).getByRole('button', { name: 'Review it again' }));
+    expect(
+      await screen.findByText(/This application is recorded as submitted on/),
+    ).toHaveTextContent(formatDateTime(NOW - HOUR));
+    expect(screen.getByRole('link', { name: 'See this application' })).toHaveAttribute(
+      'href',
+      '/opportunities/opp-1/applications/sub-1',
+    );
+    expect(document.body).not.toHaveTextContent(/has not started yet/);
+  });
+
+  it('control: one that was cancelled, and none', async () => {
+    mockApi(routes(submission({ status: 'abandoned', failureReason: 'cancelled_by_user' })));
+    renderStep('open');
+    expect(await screen.findByText(/has not started yet/)).toBeVisible();
+  });
+
   it('neither, for a draft that was neither', async () => {
     mockApi(routes(submission({ status: 'draft', handedOffAt: null })));
     renderStep('review');
@@ -343,15 +457,27 @@ describe('the posting-changed notice names another job, and only another', () =>
     ['a link no site reads', { atsJobRef: null, postingUrl: 'https://a.example/1' }, {}, true],
     ['no link, merged into it', { atsJobRef: null, postingUrl: null }, { mergedAt: NOW }, false],
     [
-      'no link, merged into it before its review',
+      'no link, merged into it and reviewed since',
       { atsJobRef: null, postingUrl: null },
       { mergedAt: NOW, reviewedAt: NOW + 1 },
+      false,
+    ],
+    [
+      'no link, its posting changed before it was merged into it',
+      { atsJobRef: null, postingUrl: null },
+      { mergedAt: NOW, postingChangedAt: NOW - 1 },
+      false,
+    ],
+    [
+      'no link, its posting changed at the merge',
+      { atsJobRef: null, postingUrl: null },
+      { mergedAt: NOW, postingChangedAt: NOW },
       true,
     ],
     [
-      'no link, merged into it and the posting changed',
+      'no link, its posting changed after it, and it was reviewed since',
       { atsJobRef: null, postingUrl: null },
-      { mergedAt: NOW, postingChangedAt: NOW },
+      { mergedAt: NOW, postingChangedAt: NOW + 1, reviewedAt: NOW + 2 },
       true,
     ],
     [
@@ -389,8 +515,15 @@ describe('the merge dialog says what becomes of the application', () => {
           : { items, total: items.length },
     });
     const user = userEvent.setup();
-    renderWithProviders(<MergeDialog opp={OPP} open onOpenChange={vi.fn()} />);
+    const { queryClient } = renderWithProviders(
+      <MergeDialog opp={OPP} open onOpenChange={vi.fn()} />,
+    );
     await user.click(await screen.findByRole('button', { name: /Staff Product Manager/ }));
+    // Its applications are read, and drawn: what is not said then is not said.
+    await waitFor(() =>
+      expect(queryClient.getQueryState(ak.submissions('opp-1'))?.status).toBe('success'),
+    );
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
     return await screen.findByRole('dialog', { name: 'Merge these opportunities?' });
   }
   const MOVES =
@@ -417,6 +550,31 @@ describe('the merge dialog says what becomes of the application', () => {
       expect(within(dialog).getByRole('button', { name: 'Merge' })).toBeEnabled();
     },
   );
+});
+
+describe('a merge, where the kept one was looked at a moment before', () => {
+  it('its applications are read again: the one that moved there is shown', async () => {
+    const TARGET = { ...OPP, id: 'opp-2', title: 'Staff Product Manager' } as OpportunityView;
+    mockApi({
+      'GET /opportunities': { items: [TARGET], total: 1 },
+      'GET /opportunities/opp-1/submissions': { items: [submission()], total: 1 },
+      'GET /opportunities/opp-2/submissions': {
+        items: [lapsed({ opportunityId: 'opp-2' })],
+        total: 1,
+      },
+      'POST /opportunities/opp-2/merge': TARGET,
+    });
+    const user = userEvent.setup();
+    const { queryClient } = renderWithProviders(
+      <MergeDialog opp={OPP} open onOpenChange={vi.fn()} />,
+    );
+    queryClient.setQueryData(ak.submissions('opp-2'), { items: [], total: 0 });
+    await user.click(await screen.findByRole('button', { name: /Staff Product Manager/ }));
+    await user.click(await screen.findByRole('button', { name: 'Merge' }));
+    await waitFor(() =>
+      expect(queryClient.getQueryState(ak.submissions('opp-2'))?.isInvalidated).toBe(true),
+    );
+  });
 });
 
 // The page of the merged-away opportunity, left open in another tab (qa on #1057).

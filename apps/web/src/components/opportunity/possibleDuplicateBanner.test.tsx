@@ -84,7 +84,7 @@ describe('PossibleDuplicateBanner', () => {
     ['a draft', 'draft', 'Its application to Greenhouse moves too, and has to be reviewed again.'],
     ['submitted', 'submitted', null],
   ])('the confirm step says what becomes of its application: %s', async (_, status, said) => {
-    const { user, api } = setup(OPP, {
+    const { user, api, queryClient } = setup(OPP, {
       'GET /opportunities/opp-1/submissions': {
         items: [
           {
@@ -103,6 +103,8 @@ describe('PossibleDuplicateBanner', () => {
     await waitFor(() =>
       expect(api.calls.some((c) => c.path === '/opportunities/opp-1/submissions')).toBe(true),
     );
+    // Read, and drawn: what is not said then is not said.
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
     if (said === null) expect(document.body).not.toHaveTextContent(/Its application/);
     else await waitFor(() => expect(document.body).toHaveTextContent(said));
   });

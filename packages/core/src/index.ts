@@ -15,4 +15,5 @@ export * from './possessive';
 export * from './sha256';
 export * from './sites';
 export * from './sites/namedJob';
+export * from './linkPunctuation';
 export * from './triageGate';

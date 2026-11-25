@@ -2,6 +2,7 @@
 import type { Activity, ActivityKind, NextStep, NormalizedPosting } from '@opportun/core';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { ak } from '@/components/apply/api';
 import { api, ApiError } from '@/lib/api';
 import {
   qk,
@@ -110,6 +111,8 @@ export function useMergeOpportunity() {
     onSettled: (_res, _err, { keepId }) =>
       Promise.all([
         qc.invalidateQueries({ queryKey: ['opportunity', keepId] }),
+        // An application that moved there, and what is said of it (#1057).
+        qc.invalidateQueries({ queryKey: ak.submissions(keepId) }),
         qc.invalidateQueries({ queryKey: qk.opportunities }),
         qc.invalidateQueries({ queryKey: qk.dashboard }),
         qc.invalidateQueries({ queryKey: ['communications'] }),
