@@ -6,10 +6,11 @@ import { insertLeads } from '../src/lib/discoveryIngest';
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { eq } from 'drizzle-orm';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { jobs } from '../src/db/schema';
+import { discoveryRuns, dismissalFeedback, jobs } from '../src/db/schema';
 import { DISCOVERY_RANK_KIND } from '../src/jobs/discoveryRank';
 import { createSafeFetch, type RawResponse, type safeFetch } from '../src/lib/safeFetch';
 import { PASTE_TEXT_HINT } from '../src/routes/capture';
+import { createCompany } from '../src/repos/companies';
 import {
   ensureChannelSource,
   getResult,
@@ -283,6 +284,117 @@ describe('POST /capture', () => {
     expect(res.json().error.code).toBe('extraction_incomplete');
   });
 
+  // https://github.com/bgoleno/opportun/issues/1044: stored as dismissed, and said so, not as a failure.
+  describe('a posting of a denied company', () => {
+    const DENIED = {
+      code: 'company_denied',
+      message:
+        'The company is on your denied list, so the posting was put in Decided as dismissed.',
+      company: 'Initech, Inc.',
+    };
+
+    async function storedAsDismissed(app: Awaited<ReturnType<typeof boot>>['app'], c: TestClient) {
+      const all = await listResults(app.db, ctxOf(c), { limit: 50, offset: 0 });
+      expect(all.items).toMatchObject([
+        {
+          disposition: 'dismissed',
+          dismissReason: 'denied_company',
+          dismissNote: 'Initech, Inc.',
+          posting: { company: 'Initech', title: 'Staff Platform Engineer' },
+        },
+      ]);
+      expect(await app.db.select().from(dismissalFeedback).all()).toHaveLength(1);
+      // Nothing to rank, and the run says what it did.
+      expect(
+        await app.db.select().from(jobs).where(eq(jobs.kind, DISCOVERY_RANK_KIND)).all(),
+      ).toEqual([]);
+      const runs = await app.db.select().from(discoveryRuns).all();
+      expect(runs.map((r) => r.stats)).toMatchObject([
+        { fetched: 1, inserted: 0, duplicates: 0, invalid: 0, suppressed: 1 },
+      ]);
+    }
+
+    it('pasted text', async () => {
+      const { app, a } = await boot();
+      await createCompany(app.db, ctxOf(a), { name: 'Initech, Inc.', status: 'denied' });
+      vi.mocked(runStructured).mockResolvedValueOnce(EXTRACTED);
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/capture',
+        payload: { text: PASTED },
+      });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toEqual(DENIED);
+      await storedAsDismissed(app, a);
+    });
+
+    it('a link', async () => {
+      const { app, a } = await boot();
+      await createCompany(app.db, ctxOf(a), { name: 'Initech, Inc.', status: 'denied' });
+      app.jobs.services.sourceFetch = (async () => ({
+        status: 200,
+        headers: new Headers({ 'content-type': 'text/plain' }),
+        body: Buffer.from(PASTED),
+      })) as unknown as typeof safeFetch;
+      vi.mocked(runStructured).mockResolvedValueOnce(EXTRACTED);
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/capture',
+        payload: { url: 'https://careers.initech.example/jobs/42' },
+      });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toEqual(DENIED);
+      await storedAsDismissed(app, a);
+    });
+
+    it('matched by the denied company’s own site: that company is named, not the posting’s', async () => {
+      const { app, a } = await boot();
+      await createCompany(app.db, ctxOf(a), {
+        name: 'Intertrode Holdings',
+        domain: 'initech.example',
+        status: 'denied',
+      });
+      vi.mocked(runStructured).mockResolvedValueOnce(EXTRACTED);
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/capture',
+        payload: { text: PASTED },
+      });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json().error).toEqual({ ...DENIED, company: 'Intertrode Holdings' });
+    });
+
+    it('another user’s denied list says nothing', async () => {
+      const { app, a, b } = await boot();
+      await createCompany(app.db, ctxOf(b), { name: 'Initech, Inc.', status: 'denied' });
+      vi.mocked(runStructured).mockResolvedValueOnce(EXTRACTED);
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/capture',
+        payload: { text: PASTED },
+      });
+      expect(res.statusCode, res.body).toBe(201);
+    });
+  });
+
+  // The other causes of invalid_posting keep a sentence of their own (#1044).
+  it('a posting whose company or title does not survive cleaning says so, and is not stored', async () => {
+    const { app, a } = await boot();
+    vi.mocked(runStructured).mockResolvedValueOnce({ ...EXTRACTED, companyName: '<b></b>' });
+    const res = await a.request({
+      method: 'POST',
+      url: '/api/v1/capture',
+      payload: { text: PASTED },
+    });
+    expect(res.statusCode, res.body).toBe(422);
+    expect(res.json().error).toEqual({
+      code: 'invalid_posting',
+      message:
+        'That posting has no company or title that can be saved. Add it with New opportunity instead.',
+    });
+    expect((await listResults(app.db, ctxOf(a), { limit: 50, offset: 0 })).total).toBe(0);
+  });
+
   describe('with a resultId (completing a needs_capture lead)', () => {
     const LEAD_URL = 'https://www.linkedin.com/jobs/view/3912345678/';
 
@@ -338,6 +450,27 @@ describe('POST /capture', () => {
       expect(all.total).toBe(1);
       const rank = await app.db.select().from(jobs).where(eq(jobs.kind, DISCOVERY_RANK_KIND)).all();
       expect(rank.map((j) => (j.payload as { resultId: string }).resultId)).toEqual([id]);
+    });
+
+    it('a capture whose description does not survive cleaning says so, and leaves the lead', async () => {
+      const { app, a } = await boot();
+      const id = await lead(app, a);
+      vi.mocked(runStructured).mockResolvedValueOnce({
+        ...EXTRACTED,
+        descriptionMd: '<script>alert(1)</script>',
+      });
+      const res = await a.request({
+        method: 'POST',
+        url: '/api/v1/capture',
+        payload: { text: PASTED, resultId: id },
+      });
+      expect(res.statusCode, res.body).toBe(422);
+      expect(res.json().error).toEqual({
+        code: 'invalid_posting',
+        message:
+          'That posting has no description that can be saved. Paste its whole text, or press Capture again.',
+      });
+      expect((await getResult(app.db, ctxOf(a), id)).resolution).toBe('needs_capture');
     });
 
     it("another user's resultId is a 404, checked before any AI call", async () => {

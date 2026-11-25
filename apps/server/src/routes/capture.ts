@@ -198,7 +198,13 @@ async function resolveLeadInPlace(
 ): Promise<DiscoveryResultView> {
   const parsed = NormalizedPostingSchema.safeParse(sanitizePosting(raw));
   if (!parsed.success || parsed.data.descriptionMd == null || parsed.data.descriptionMd === '') {
-    throw new HttpError(422, 'invalid_posting');
+    throw new HttpError(
+      422,
+      'invalid_posting',
+      'That posting has no description that can be saved. Paste its whole text, or press Capture again.',
+      undefined,
+      { userFacing: true },
+    );
   }
   const captured = parsed.data;
   const updated = await withTransaction(db, async (tx) => {
@@ -264,7 +270,7 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
         const source = await ensureChannelSource(db, ctx, 'manual');
         // In the user's one capture slot, with a bounded wait for their ingest lock (#309), so
         // captures queued behind a slow holder cannot take every pool connection.
-        const { stats, inserted, linked } = await withCaptureSlot(db, ctx.userId, () =>
+        const { stats, inserted, linked, suppressed } = await withCaptureSlot(db, ctx.userId, () =>
           insertLeads(db, ctx, [posting], source.id, undefined, {
             lockTimeoutMs: CAPTURE_SLOT.lockTimeoutMs,
           }),
@@ -276,10 +282,24 @@ export async function captureRoutes(app: FastifyInstance): Promise<void> {
             existingId: linked[0].opportunityId ?? '',
           });
         }
-        if (result === undefined) {
+        if (suppressed[0] !== undefined) {
+          // Stored, and already decided (#1044): not a failure, and there is no card to show.
           throw new HttpError(
-            stats.duplicates > 0 ? 409 : 422,
-            stats.duplicates > 0 ? 'duplicate' : 'invalid_posting',
+            409,
+            'company_denied',
+            'The company is on your denied list, so the posting was put in Decided as dismissed.',
+            { company: suppressed[0].dismissNote ?? suppressed[0].posting.company },
+            { userFacing: true },
+          );
+        }
+        if (result === undefined) {
+          if (stats.duplicates > 0) throw new HttpError(409, 'duplicate');
+          throw new HttpError(
+            422,
+            'invalid_posting',
+            'That posting has no company or title that can be saved. Add it with New opportunity instead.',
+            undefined,
+            { userFacing: true },
           );
         }
         return reply.code(201).send({ posting: result.posting, resultId: result.id });

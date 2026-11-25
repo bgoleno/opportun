@@ -598,6 +598,11 @@ export function useCapture() {
       if (err instanceof ApiError && err.code === 'not_capturable') {
         await qc.invalidateQueries({ queryKey: discoveryKeys.queue });
       }
+      // Stored as dismissed (#1044): a Decided list read before is out of date. Not waited for: the
+      // dialog says what happened at once.
+      if (err instanceof ApiError && err.code === 'company_denied') {
+        void qc.invalidateQueries({ queryKey: discoveryKeys.decided('dismissed') });
+      }
     },
   });
 }

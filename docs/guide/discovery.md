@@ -434,6 +434,8 @@ one limit with the browser extension, 60 captures per 15 minutes for your accoun
 reached, the dialog says when you can capture again.
 If the job is already in your pipeline at another location, the dialog says the posting was linked
 to that opportunity, with **View opportunity**.
+If the company is on your denied list, the dialog says so: the posting is not added to the queue but
+put in **Decided** as dismissed, with **View Decided**.
 If another capture of yours is still being saved, the dialog says so and to wait a few
 seconds and press **Capture** again; that is not a limit.
 

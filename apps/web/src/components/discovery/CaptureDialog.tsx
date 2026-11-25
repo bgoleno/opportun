@@ -4,7 +4,9 @@
 //
 // Server answers handled here: 422 with a hint (LinkedIn, Indeed and other unfetchable pages:
 // paste the text instead), 503 ai_unavailable (fall back to the New Opportunity dialog), 409
-// duplicate (with the opportunity it was linked to, when there is one: #971), 429 rate_limited (the user's capture budget, shared with the browser extension:
+// duplicate (with the opportunity it was linked to, when there is one: #971), 409 company_denied (the
+// posting was stored as dismissed: https://github.com/bgoleno/opportun/issues/1044), 429 rate_limited
+// (the user's capture budget, shared with the browser extension:
 // https://github.com/bgoleno/opportun/issues/272).
 // Server text (hints, messages) and posting fields are rendered as text only.
 import { Link } from '@tanstack/react-router';
@@ -37,6 +39,8 @@ type Failure =
   | { kind: 'decided'; message: string }
   /** Another location of a job in the pipeline: linked to it, and there is no card (#971). */
   | { kind: 'linked'; opportunityId: string }
+  /** The company is on the denied list: stored as dismissed, which is no failure (#1044). */
+  | { kind: 'denied'; company: string | null }
   | { kind: 'other'; message: string };
 
 const TEXT_MAX = 200_000;
@@ -98,6 +102,13 @@ function toFailure(err: unknown): Failure {
     }
     // The lead was completed or decided somewhere else (#968): no second try can succeed.
     if (err.code === 'not_capturable') return { kind: 'decided', message: errorMessage(err) };
+    if (err.code === 'company_denied') {
+      const company = err.details.company;
+      return {
+        kind: 'denied',
+        company: typeof company === 'string' && company !== '' ? company : null,
+      };
+    }
     if (err.code === 'duplicate') {
       const id = err.details.existingId;
       if (typeof id === 'string' && id !== '') return { kind: 'linked', opportunityId: id };
@@ -132,6 +143,12 @@ export function CaptureDialog(props: {
   function switchMode(next: Mode) {
     setMode(next);
     setFieldError(undefined);
+    edited();
+  }
+
+  /** Another posting now, so what became of the last one no longer holds Capture back. */
+  function edited() {
+    setFailure((f) => (f?.kind === 'denied' ? null : f));
   }
 
   async function submit(e: FormEvent) {
@@ -228,7 +245,10 @@ export function CaptureDialog(props: {
                   inputMode="url"
                   autoComplete="off"
                   value={url}
-                  onChange={(e) => setUrl(e.target.value)}
+                  onChange={(e) => {
+                    setUrl(e.target.value);
+                    edited();
+                  }}
                   {...c}
                 />
               )}
@@ -240,7 +260,15 @@ export function CaptureDialog(props: {
               error={fieldError}
             >
               {(c) => (
-                <Textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} {...c} />
+                <Textarea
+                  rows={8}
+                  value={text}
+                  onChange={(e) => {
+                    setText(e.target.value);
+                    edited();
+                  }}
+                  {...c}
+                />
               )}
             </FormField>
           )}
@@ -260,6 +288,18 @@ export function CaptureDialog(props: {
                 className="font-medium underline underline-offset-2"
               >
                 View opportunity
+              </Link>
+            </div>
+          ) : null}
+          {failure?.kind === 'denied' ? (
+            <div
+              role="alert"
+              className="rounded-md border border-primary/40 bg-accent px-3 py-2 text-sm [overflow-wrap:anywhere] text-accent-foreground"
+            >
+              {failure.company ?? 'The company'} is on your denied list, so the posting was put in
+              Decided as dismissed.{' '}
+              <Link to="/discovery/decided" className="font-medium underline underline-offset-2">
+                View Decided
               </Link>
             </div>
           ) : null}
@@ -307,7 +347,12 @@ export function CaptureDialog(props: {
             <Button type="button" variant="outline" onClick={props.onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={capture.isPending || failure?.kind === 'decided'}>
+            <Button
+              type="submit"
+              disabled={
+                capture.isPending || failure?.kind === 'decided' || failure?.kind === 'denied'
+              }
+            >
               {capture.isPending ? 'Capturing...' : 'Capture'}
             </Button>
           </DialogFooter>
