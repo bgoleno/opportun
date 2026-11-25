@@ -788,13 +788,33 @@ export async function setPostingState(
     descriptionFingerprint?: string | null;
   },
 ): Promise<OpportunityView> {
+  // Starts over as a link's save does (#961), so a caller with an `atsJobRef` is in no transaction of its
+  // own, and holds no lock that comes after an attempt's: what that one holds would be kept.
+  return await withEveryAttempt(() => setPostingStateOnce(db, ctx, id, patch));
+}
+
+async function setPostingStateOnce(
+  db: Exec,
+  ctx: UserCtx,
+  id: string,
+  patch: Parameters<typeof setPostingState>[3],
+): Promise<OpportunityView> {
   return await withTransaction(db, async (tx) => {
-    const before = await getViewSync(tx, ctx, id);
+    await getViewSync(tx, ctx, id); // not found
     const now = Date.now();
-    const requisitionChanges =
-      patch.atsJobRef !== undefined && !sameRequisition(before.atsJobRef, patch.atsJobRef);
-    // The live attempt's lock before the opportunity row (lock order: submissionScope).
-    const lockedAttempt = requisitionChanges ? await lockLiveAttempt(tx, ctx, id) : null;
+    let lockedAttempt: string | null = null;
+    let requisitionChanges = false;
+    if (patch.atsJobRef !== undefined) {
+      // The live attempt's lock before the opportunity row (lock order: submissionScope). Taken for any
+      // identity, the same one too: whether it is a change is known only from the row once it is held,
+      // and nothing else keeps it as it was read.
+      lockedAttempt = await lockLiveAttempt(tx, ctx, id);
+      await racePoint('opportunities.postingState.attemptLocked');
+      const held = await holdAgainstStarts(tx, ctx, id);
+      requisitionChanges = !sameRequisition(held.atsJobRef, patch.atsJobRef);
+      if (requisitionChanges) await assertLiveAttemptHeld(tx, ctx, id, lockedAttempt);
+      await racePoint('opportunities.postingState.locked');
+    }
     await tx
       .update(opportunities)
       .set({
@@ -814,6 +834,39 @@ export async function setPostingState(
     if (requisitionChanges) await markPostingChanged(tx, ctx, lockedAttempt, id, now);
     return await getViewSync(tx, ctx, id);
   });
+}
+
+/**
+ * The one-time backfill's write of the identity an opportunity's link gives (jobs/atsJobRefBackfill.ts),
+ * while the row is as it was read: any write since (a ref, a new posting) wins, and nothing is written. A
+ * corrected identity under a live attempt is a posting change like any other (#144, #961).
+ */
+export async function correctAtsJobRef(
+  db: Db,
+  ctx: UserCtx,
+  was: { id: string; postingUrl: string | null; updatedAt: number },
+  ref: AtsJobRef | null,
+): Promise<boolean> {
+  return await withEveryAttempt(() =>
+    withTransaction(db, async (tx) => {
+      // The live attempt's lock before the opportunity row (lock order: submissionScope).
+      const lockedAttempt = await lockLiveAttempt(tx, ctx, was.id);
+      await racePoint('opportunities.backfillAtsJobRef.attemptLocked');
+      if (!(await lockOpportunityRow(tx, ctx, was.id, true))) return false;
+      const row = await getViewSync(tx, ctx, was.id);
+      if (row.postingUrl !== was.postingUrl || row.updatedAt !== was.updatedAt) return false;
+      await assertLiveAttemptHeld(tx, ctx, was.id, lockedAttempt);
+      await racePoint('opportunities.backfillAtsJobRef.locked');
+      const now = Date.now();
+      await tx
+        .update(opportunities)
+        .set({ atsJobRef: ref, updatedAt: now })
+        .where(owned(ctx, was.id))
+        .run();
+      await markPostingChanged(tx, ctx, lockedAttempt, was.id, now);
+      return true;
+    }),
+  );
 }
 
 /**
@@ -938,16 +991,37 @@ async function activityIdsForUpdate(tx: Exec, ctx: UserCtx, id: string): Promise
   return rows.map((r) => r.id);
 }
 
+/**
+ * Holds the row against an application being started on it, or moved to it by a merge, and reads it as it
+ * then is: one in the making is waited for, and one that comes later waits, and reads what was written
+ * (createSubmissionDraft, #913, #961). Not found when it is gone.
+ */
+async function holdAgainstStarts(tx: Exec, ctx: UserCtx, id: string): Promise<OpportunityView> {
+  if (!(await lockOpportunityRow(tx, ctx, id, true))) throw notFound();
+  return await getViewSync(tx, ctx, id);
+}
+
+/** With the row held: the live attempt is the one whose lock was taken, or it is started over with it. */
+async function assertLiveAttemptHeld(
+  tx: Exec,
+  ctx: UserCtx,
+  id: string,
+  lockedAttempt: string | null,
+): Promise<void> {
+  const live = await liveAttemptId(tx, ctx, id);
+  if (live !== null && live !== lockedAttempt) throw new AttemptMade();
+}
+
 /** An attempt that this transaction is about to reach has a lock it doesn't hold. */
 class AttemptMade extends Error {}
-/** How often a merge, a delete or a link's save starts over for one: a live one is one at a time. */
+/** How often a merge, a delete, a link's save or an identity's write starts over for one. */
 const ATTEMPT_TRIES = 3;
 
 /**
  * A merge, a delete or a link's save takes the locks of the attempts there are and then waits for
- * the user's, and an attempt can be made in between (#944, #913). It can't be locked then: an
- * attempt's lock comes before the rows. So the transaction is rolled back, and starts over with that
- * attempt among them.
+ * the user's, and an attempt can be made in between (#944, #913). So it can before a write of the ATS
+ * identity has the row (#961). It can't be locked then: an attempt's lock comes before the rows. So the
+ * transaction is rolled back, and starts over with that attempt among them.
  */
 async function withEveryAttempt<T>(run: () => Promise<T>): Promise<T> {
   for (let tries = 1; ; tries += 1) {
