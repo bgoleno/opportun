@@ -700,10 +700,14 @@ describe('merging opportunities keeps their submissions', () => {
 
     const after = await allSubmissions(app);
     expect(after).toHaveLength(2);
-    // Every row is the same row, now on the kept opportunity; nothing else about it changed.
+    // Every row is the same row, now on the kept opportunity; nothing else about it changed, but
+    // that the live one says when (#1057).
     expect(
-      after.map((r) => ({ ...r, opportunityId: otherId })).sort((x, y) => x.id.localeCompare(y.id)),
+      after
+        .map((r) => ({ ...r, opportunityId: otherId, mergedAt: null }))
+        .sort((x, y) => x.id.localeCompare(y.id)),
     ).toEqual([...before].sort((x, y) => x.id.localeCompare(y.id)));
+    expect(after.filter((r) => r.mergedAt !== null).map((r) => r.id)).toEqual([live.json().id]);
     expect(new Set(after.map((r) => r.opportunityId))).toEqual(new Set([keepId]));
     expect(after.find((r) => r.id === live.json().id)!.answers).toEqual(answers);
     const list = await a.request({

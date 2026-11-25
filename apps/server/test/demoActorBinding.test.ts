@@ -156,6 +156,7 @@ describe('only the visitor who started an attempt may act on it (#545, criterion
       ['PATCH', `/submissions/${id}`, { fields: { fullName: 'Someone Else' } }],
       ['POST', `/submissions/${id}/review`, { reviewDigest: digest, acknowledged: true }],
       ['POST', `/submissions/${id}/handoff`, {}],
+      ['POST', `/submissions/${id}/review-again`, {}],
       // The routes a narrower URL check could miss (tl on #566).
       ['POST', `/submissions/${id}/attest`, {}],
       ['POST', `/submissions/${id}/outcome`, {}],

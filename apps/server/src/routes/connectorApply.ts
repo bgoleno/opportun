@@ -94,6 +94,8 @@ const CurrentResponse = z.object({
     .nullable(),
   /** Why there is no attempt for this page; null when there is one. */
   reason: z.enum(['no_matching_attempt', 'several_handed_off', 'review_stale']).nullable(),
+  /** With `review_stale`, when it was a merge of its opportunity (#1057). */
+  cause: z.literal('merged').optional(),
 });
 
 const IdParams = z.object({ id: z.string().min(1).max(64) }).strict();
@@ -206,7 +208,13 @@ export async function connectorApplyRoutes(app: FastifyInstance): Promise<void> 
             : { submissionId: null, reason: found.reason }),
         },
       });
-      if (found.kind === 'none') return { attempt: null, reason: found.reason };
+      if (found.kind === 'none') {
+        return {
+          attempt: null,
+          reason: found.reason,
+          ...(found.cause === undefined ? {} : { cause: found.cause }),
+        };
+      }
       const { row } = found;
       // On the demo, the last check before anything leaves for the form: a seeded identity value,
       // or any resume, put back behind the server's back is never sent, and nothing is marked

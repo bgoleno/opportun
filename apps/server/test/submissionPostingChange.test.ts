@@ -454,6 +454,7 @@ describe('a merge that moves it to another job asks for another review (#1055)',
     expect(row).toEqual({
       ...before,
       opportunityId: keepId,
+      mergedAt: expect.any(Number) as number,
       status: 'draft',
       reviewDigest: null,
       reviewExpiresAt: null,
@@ -593,6 +594,7 @@ describe('a merge that moves it to another job asks for another review (#1055)',
       expect(row).toEqual({
         ...before,
         opportunityId: keepId,
+        mergedAt: expect.any(Number) as number,
         status: 'draft',
         reviewDigest: null,
         reviewExpiresAt: null,
@@ -624,7 +626,11 @@ describe('a merge that moves it to another job asks for another review (#1055)',
       const keepId = await kept(app, a, ref);
       const before = await rowOf(app, d.id);
       await merge(a, keepId, d.oppId);
-      expect(await rowOf(app, d.id)).toEqual({ ...before, opportunityId: keepId });
+      expect(await rowOf(app, d.id)).toEqual({
+        ...before,
+        opportunityId: keepId,
+        mergedAt: expect.any(Number) as number,
+      });
       expect([...(await marks(app)), ...(await merges(app))]).toEqual([]);
       const stale = await review(a, d.id, d.digest);
       expect(stale.statusCode, stale.body).toBe(409);
@@ -654,7 +660,11 @@ describe('a merge that moves it to another job asks for another review (#1055)',
       const before = await rowOf(app, d.id);
       const keepId = await kept(app, a, ref);
       await merge(a, keepId, d.oppId);
-      expect(await rowOf(app, d.id)).toEqual({ ...before, opportunityId: keepId });
+      expect(await rowOf(app, d.id)).toEqual({
+        ...before,
+        opportunityId: keepId,
+        mergedAt: expect.any(Number) as number,
+      });
       expect([...(await marks(app)), ...(await merges(app))]).toEqual([]);
     });
 

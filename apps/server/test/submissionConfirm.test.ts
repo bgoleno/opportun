@@ -27,7 +27,7 @@ import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { heldApart } from './race';
 import { queuedBodyOf } from './classifyPayload';
-import { api, submittedAttempt, type Submitted } from './submissionFixtures';
+import { api, handedOffAttempt, submittedAttempt, type Submitted } from './submissionFixtures';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -466,6 +466,22 @@ describe('triage stays narrow: submission_window passes only what the matcher ma
       triageDecision: 'filtered',
       opportunityId: null,
     });
+  });
+});
+
+describe('an application back in draft to review again (#1057)', () => {
+  it('an email confirms nothing of it', async () => {
+    const { app, a } = await boot(ON);
+    const s = await handedOffAttempt(app, a);
+    await app.db
+      .update(applicationSubmissions)
+      .set({ reviewDigest: null })
+      .where(eq(applicationSubmissions.id, s.id))
+      .run();
+    expect((await api(a, 'POST', `/submissions/${s.id}/review-again`, {})).statusCode).toBe(200);
+    const before = await attempt(app, s.id);
+    await ingest(app, a, confirmation({ ...s, submittedAt: Date.now() }));
+    expect(await attempt(app, s.id)).toEqual(before);
   });
 });
 

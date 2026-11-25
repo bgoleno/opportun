@@ -7,6 +7,8 @@ import {
   applySubmissionTransition,
   canSubmissionTransition,
   isLiveSubmission,
+  mergedSinceReview,
+  reviewLapsedHandoffAgain,
 } from './submissionStateMachine';
 
 // Expected allowed targets per status, written out by hand from the assisted-apply design,
@@ -92,5 +94,29 @@ describe('submission state machine', () => {
   it('a new attempt is a new row: nothing returns to draft except from reviewed or draft', () => {
     const into = SUBMISSION_STATUSES.filter((s) => canSubmissionTransition(s, 'draft'));
     expect(into.sort()).toEqual(['draft', 'reviewed']);
+  });
+});
+
+describe('a lapsed hand-off reviewed again (#1057)', () => {
+  it('is the one way from handed_off to draft, and not in the table', () => {
+    expect(reviewLapsedHandoffAgain({ status: 'handed_off' })).toBe('draft');
+    expect(canSubmissionTransition('handed_off', 'draft')).toBe(false);
+  });
+
+  it.each(SUBMISSION_STATUSES.filter((s) => s !== 'handed_off'))('refuses %s', (status) => {
+    expect(() => reviewLapsedHandoffAgain({ status })).toThrow(InvalidSubmissionTransitionError);
+  });
+});
+
+describe('mergedSinceReview (#1057)', () => {
+  it.each([
+    [null, null, false],
+    [null, 5, false],
+    [5, null, true],
+    [6, 5, true],
+    [5, 5, false],
+    [4, 5, false],
+  ])('merged %s, reviewed %s: %s', (mergedAt, reviewedAt, expected) => {
+    expect(mergedSinceReview({ mergedAt, reviewedAt })).toBe(expected);
   });
 });

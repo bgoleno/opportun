@@ -22,7 +22,7 @@
 import { destinationAllowed } from '../lib/submissionDestination';
 import { and, desc, eq, gt, inArray, isNull, lte, max, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
-import type { Submission } from '@opportun/core';
+import { reviewLapsedHandoffAgain, type Submission } from '@opportun/core';
 import { DEFAULT_DAILY_REVIEW_CAP, MAX_DAILY_REVIEW_CAP, type Config } from '../config';
 import { lockScope, withTransaction } from '../db/client';
 import { jsonText } from '../db/dialect';
@@ -32,7 +32,7 @@ import { isSharedDemoAccount } from '../lib/demoAccounts';
 import { refuseFixtureData } from '../lib/demoOwnData';
 import { HttpError } from '../lib/errors';
 import { racePoint } from '../lib/racePoints';
-import { submissionDigest } from '../lib/submissionDigest';
+import { reviewLapsed, submissionDigest } from '../lib/submissionDigest';
 import type { Db, Exec, UserCtx } from './base';
 import { ownedBy } from './base';
 import {
@@ -450,9 +450,7 @@ export async function handoffSubmission(
         { userFacing: true },
       );
     }
-    if (row.reviewDigest === null || submissionDigest(row) !== row.reviewDigest) {
-      throw reviewStale();
-    }
+    if (row.reviewDigest === null || reviewLapsed(row)) throw reviewStale();
     if (!destinationAllowed(row.destinationUrl, row)) {
       throw new HttpError(
         422,
@@ -485,6 +483,43 @@ export async function handoffSubmission(
       },
     });
     return handedOff(updated);
+  });
+}
+
+/**
+ * Takes a hand-off whose review has lapsed back to a draft, to review again (#1057): the review digest
+ * covers the opportunity, so after a merge the extension no longer fills what was reviewed. Nothing is
+ * reviewed here: the next review echoes the state its screen showed, like any. The answers, the resume,
+ * the destination and when it was opened stay: it may have been sent (sec). One whose review holds is
+ * refused, like one that is not handed off.
+ */
+export async function reviewSubmissionAgain(db: Db, ctx: UserCtx, id: string): Promise<Submission> {
+  // Ownership first, outside any lock, as a review's.
+  await getRow(db, ctx, id);
+  return await withTransaction(db, async (tx) => {
+    await lockScope(tx, submissionScope(id));
+    const row = await getRow(tx, ctx, id);
+    if (row.status !== 'handed_off' || !reviewLapsed(row)) throw notNow(row, 'draft');
+    await racePoint('submissions.reviewAgain.locked');
+    const [updated] = await tx
+      .update(applicationSubmissions)
+      .set({
+        status: reviewLapsedHandoffAgain(row),
+        reviewDigest: null,
+        reviewExpiresAt: null,
+        // Filled on opening again, once: it is a new review and a new hand-off.
+        prefillReadAt: null,
+        updatedAt: Date.now(),
+      })
+      .where(and(owned(ctx, id), eq(applicationSubmissions.status, 'handed_off')))
+      .returning();
+    // The idle sweep has no attempt's lock, and gave it up in between.
+    if (updated === undefined) throw notNow(await getRow(tx, ctx, id), 'draft');
+    await audit(tx, 'submission.review_lapsed', {
+      userId: ctx.userId,
+      detail: { submissionId: id, opportunityId: row.opportunityId, from: 'handed_off' },
+    });
+    return view(updated);
   });
 }
 

@@ -35,6 +35,10 @@ export interface DigestInput {
   postingChangedAt?: number | null;
 }
 
+/** Whether the stored review is of another state than the attempt's (a missing one is). */
+export const reviewLapsed = (s: DigestInput & { reviewDigest: string | null }): boolean =>
+  s.reviewDigest === null || submissionDigest(s) !== s.reviewDigest;
+
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
 
 /** sha256 of the canonical JSON (keys sorted, no whitespace) of the reviewed state. */
