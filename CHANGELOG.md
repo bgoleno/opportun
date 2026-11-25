@@ -334,8 +334,8 @@ merged after it.
   [#905](https://github.com/bgoleno/opportun/pull/905)).
 - **Postgres: a connection that ends fails what was using it and never stops the server.** After a
   restart, a failover or a session limit, the request or job that was using it fails as for any
-  database error, and the server serves the next request. Each ending is logged once as `postgres
-  connection ended`, in place of `postgres idle connection error`. A transaction that finds its
+  database error, and the server serves the next request. Each ending is logged once, as
+  `postgres connection ended`, in place of `postgres idle connection error`. A transaction that finds its
   connection ended no longer leaves the pool without a connection. A job caught while Postgres is
   away ends once it is back: its end is tried again for up to 5 minutes, where before the job stayed
   `running` until the next start and was not run again until then
