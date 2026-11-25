@@ -11,9 +11,15 @@
 import type { UserCtx } from '../repos/base';
 import type { Db } from '../db/client';
 import { createActivity } from '../repos/activities';
-import { getOpportunity, setPostingState, type OpportunityView } from '../repos/opportunities';
+import {
+  getOpportunity,
+  SearchBasisChanged,
+  setPostingState,
+  type OpportunityView,
+} from '../repos/opportunities';
 import { postingAtsJobRefKeeping } from './atsJobRef';
 import { HttpError } from './errors';
+import { racePoint } from './racePoints';
 
 /** The flagged states a user can stand behind without the board ever confirming it. `edited`
  *  is excluded: that flag already has its own resolution (Review board copy), and confirming
@@ -39,13 +45,33 @@ export async function confirmPosting(
       { userFacing: true },
     );
   }
-  const updated = await setPostingState(db, ctx, opportunityId, {
-    postingState: 'confirmed',
-    postingStateDetail: 'user_confirmed',
-    // The posting the user vouched for carries its own ATS identity, or none (issue #137); a
-    // verified `gh_jid` identity stays while the link still names its job (#398).
-    atsJobRef: postingAtsJobRefKeeping(current.postingUrl, current.atsJobRef),
-  });
+  await racePoint('posting.userConfirm');
+  let updated: OpportunityView;
+  try {
+    updated = await setPostingState(
+      db,
+      ctx,
+      opportunityId,
+      {
+        postingState: 'confirmed',
+        postingStateDetail: 'user_confirmed',
+        // The posting the user vouched for carries its own ATS identity, or none (issue #137); a
+        // verified `gh_jid` identity stays while the link still names its job (#398).
+        atsJobRef: postingAtsJobRefKeeping(current.postingUrl, current.atsJobRef),
+      },
+      // Made from this link: one saved meanwhile would have its identity (#892).
+      { ifBasis: { postingUrl: current.postingUrl } },
+    );
+  } catch (err) {
+    if (!(err instanceof SearchBasisChanged)) throw err;
+    throw new HttpError(
+      409,
+      'opportunity_changed',
+      'The posting link changed while you were confirming it, so nothing was confirmed. Check the link, then try again.',
+      undefined,
+      { userFacing: true },
+    );
+  }
   await createActivity(db, ctx, opportunityId, {
     kind: 'note',
     title: 'Posting confirmed by you',
