@@ -621,7 +621,13 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     // filled, and busy says the server did not answer (qa on #713).
     if (action?.controller.signal.aborted === true) return;
     if (resume.kind === 'review_stale') {
-      show(renderPrefillStop({ kind: 'none', reason: 'review_stale' }));
+      show(
+        renderPrefillStop({
+          kind: 'none',
+          reason: 'review_stale',
+          ...(resume.cause === undefined ? {} : { cause: resume.cause }),
+        }),
+      );
       return;
     }
     const plan = buildPlan(attempt, pinned, resume.kind === 'file' ? resume.base64 : null);
@@ -802,34 +808,37 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
   /**
    * A resume check that a closed popup left unfinished on this tab's posting (#191): said once,
    * then forgotten. Another tab's note is under its own key, for that tab's popup; one older than
-   * an hour, or for another page now, is dropped without a word.
+   * an hour, or for another page now, is dropped without a word. Whether it was said.
    */
   const tellUnfinishedCheck = async (
     tabId: number | null,
     posting: { board: string; jobId: string } | null,
-  ): Promise<void> => {
-    if (deps.checkStore === null || tabId === null) return;
+  ): Promise<boolean> => {
+    if (deps.checkStore === null || tabId === null) return false;
     const key = checkPendingKey(tabId);
     // Only this tab's key is asked for, so the one value back is its note, if any.
     const [note] = Object.values(await deps.checkStore.get([key]));
-    if (!isCheckPending(note)) return;
+    if (!isCheckPending(note)) return false;
     await deps.checkStore.set({ [key]: null });
-    if (note.tabId !== tabId || Date.now() - note.at > CHECK_PENDING_MAX_AGE_MS) return;
-    if (posting !== null && samePosting(posting, note)) {
-      show({ tone: 'error', text: note.stage === 'fill' ? FILL_UNSEEN : RESUME_UNCONFIRMED });
-    }
+    if (note.tabId !== tabId || Date.now() - note.at > CHECK_PENDING_MAX_AGE_MS) return false;
+    if (posting === null || !samePosting(posting, note)) return false;
+    show({ tone: 'error', text: note.stage === 'fill' ? FILL_UNSEEN : RESUME_UNCONFIRMED });
+    return true;
   };
 
   /**
    * Opening the popup over the handed-off posting fills it (#403 slice 2, tl's note with sec's
    * conditions 1 to 5): only over a Greenhouse posting (the tab's address alone decides, and
    * nothing in the page is read for it), only with settings saved, and only when the server says
-   * this is the first read of an attempt pinned to this posting. Anything else, a failed lookup
-   * included, leaves the popup as it was, with the button and no message.
+   * this is the first read of an attempt pinned to this posting. One whose review is stale is said
+   * (#1057: it filled before the merge, and nothing said why not now), unless a note is already shown
+   * (`told`). Anything else, a failed lookup included, leaves the popup as it was, with the button
+   * and no message.
    */
   const fillOnOpen = async (
     tab: { id: number; url: string },
     posting: { board: string; jobId: string },
+    told: boolean,
   ): Promise<void> => {
     try {
       // The settings and the lookup, bounded (OPEN_LOOKUP_MS): past the bound the open gives up
@@ -852,6 +861,10 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       if (decided === 'gave_up') lookup.abort();
       if (decided === null || decided === 'gave_up') return;
       const { s, current } = decided;
+      if (current.kind === 'none' && current.reason === 'review_stale') {
+        if (!told) show(renderPrefillStop(current));
+        return;
+      }
       if (current.kind !== 'attempt' || !current.attempt.firstRead) return;
       const { attempt } = current;
       // fillAttempt checks the pinned posting again; checked here too, so another posting is
@@ -876,6 +889,7 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
     let opened: {
       tab: { id: number; url: string };
       posting: { board: string; jobId: string };
+      told: boolean;
     } | null = null;
     try {
       const tab = await deps.activeTab();
@@ -890,16 +904,16 @@ async function setupPopup(doc: Document, deps: PopupDeps): Promise<void> {
       assist.hidden = posting === null;
       // Any https page may be a thank-you page; which one counts is the server's to say.
       confirm.hidden = tab?.url === undefined || !isHttpsPage(tab.url);
-      await tellUnfinishedCheck(tab?.id ?? null, posting);
+      const told = await tellUnfinishedCheck(tab?.id ?? null, posting);
       if (tab !== null && tab.url !== undefined && posting !== null) {
-        opened = { tab: { id: tab.id, url: tab.url }, posting };
+        opened = { tab: { id: tab.id, url: tab.url }, posting, told };
       }
     } catch {
       assist.hidden = true;
       confirm.hidden = true;
     }
     try {
-      if (opened !== null) await fillOnOpen(opened.tab, opened.posting);
+      if (opened !== null) await fillOnOpen(opened.tab, opened.posting, opened.told);
     } finally {
       // Released on every way out, a failure before the lookup included, so the buttons are never
       // left held. A fill the open started counted as its own work, inside this hold.

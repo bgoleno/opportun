@@ -157,6 +157,11 @@ a file already, or does not take a PDF, the extension leaves it and lists the re
 it did not fill. The extension
 still never presses Submit.
 
+**After a merge.** An application whose opportunity you merged into another one is no longer filled,
+as what you reviewed was for the merged one. The extension says so when you open it on the form, or
+press **Fill in this application**. In Opportun, press **Review it again** on it, or finish
+the form yourself (see [When its opportunity is merged](pipeline.md#when-its-opportunity-is-merged)).
+
 It fills only a Greenhouse form on Greenhouse's own pages (`boards.greenhouse.io` or
 `job-boards.greenhouse.io`), and only the application you reviewed and opened from Opportun.
 Opportun's last step says which applies: where the extension cannot fill the form, or you have

@@ -339,9 +339,16 @@ export function useOpportunitySubmissions(opportunityId: string) {
 function useInvalidate(opportunityId: string) {
   const qc = useQueryClient();
   // An attempt changed: its list, and the daily review usage a review may have moved (#130).
-  return () =>
+  return (now?: SubmissionView) =>
     Promise.all([
       qc.invalidateQueries({ queryKey: ak.submissions(opportunityId) }),
+      // The one it is on by now, when this one was merged into another meanwhile (#1057).
+      ...(now === undefined || now.opportunityId === opportunityId
+        ? []
+        : [
+            qc.invalidateQueries({ queryKey: ak.submissions(now.opportunityId) }),
+            qc.invalidateQueries({ queryKey: qk.opportunity(now.opportunityId) }),
+          ]),
       qc.invalidateQueries({ queryKey: ak.reviewUsage }),
       // A submission detail page open on it reads it again too (#149).
       qc.invalidateQueries({ queryKey: ['submissions', 'one'] }),
@@ -394,7 +401,7 @@ export function useCreateSubmission(opportunityId: string) {
     },
     // Settled: a refused create (another tab started one: live_submission_exists) must show
     // the attempt that exists, not leave the page retrying the same refusal.
-    onSettled: invalidate,
+    onSettled: () => invalidate(),
   });
 }
 
@@ -433,7 +440,7 @@ export function usePatchSubmission(opportunityId: string) {
   return useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: SubmissionPatch }) =>
       api<SubmissionView>(`/submissions/${enc(id)}`, { method: 'PATCH', body: patch }),
-    onSettled: invalidate,
+    onSettled: () => invalidate(),
   });
 }
 
@@ -460,7 +467,21 @@ export function useReviewSubmission(opportunityId: string) {
       }),
     // Settled, not only on success: a refusal (stale, expired) must refresh the digest the
     // screen holds, or the next attempt would send the same stale one.
-    onSettled: invalidate,
+    onSettled: () => invalidate(),
+  });
+}
+
+/**
+ * Takes a hand-off whose review has lapsed back to a draft, to review again (#1057). It reviews
+ * nothing: the review step, as always, sends what it showed.
+ */
+export function useReviewSubmissionAgain(opportunityId: string) {
+  const invalidate = useInvalidate(opportunityId);
+  return useMutation({
+    mutationFn: (id: string) =>
+      api<SubmissionView>(`/submissions/${enc(id)}/review-again`, { method: 'POST', body: {} }),
+    // Settled: refused, it moved on elsewhere, and the page shows where it stands.
+    onSettled: () => invalidate(),
   });
 }
 
@@ -474,7 +495,7 @@ export function useHandoffSubmission(opportunityId: string) {
   return useMutation({
     mutationFn: (id: string) =>
       api<HandoffResult>(`/submissions/${enc(id)}/handoff`, { method: 'POST', body: {} }),
-    onSettled: invalidate,
+    onSettled: () => invalidate(),
   });
 }
 
@@ -499,8 +520,8 @@ export function useAttestSubmission(opportunityId: string) {
         method: 'POST',
         body: { moveToApplied, ...(submittedAt === undefined ? {} : { submittedAt }) },
       }),
-    onSettled: async () => {
-      await invalidate();
+    onSettled: async (recorded) => {
+      await invalidate(recorded);
       // The stage, the timeline and the resume record changed: the pages that show them read
       // again (qk.opportunity covers its timeline and next steps).
       await Promise.all([
@@ -590,7 +611,7 @@ export function useCancelSubmission(opportunityId: string) {
   return useMutation({
     mutationFn: (id: string) =>
       api<SubmissionView>(`/submissions/${enc(id)}/cancel`, { method: 'POST' }),
-    onSuccess: invalidate,
+    onSuccess: (stopped) => invalidate(stopped),
   });
 }
 

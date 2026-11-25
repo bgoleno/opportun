@@ -48,7 +48,15 @@ import {
   type SubmissionView,
 } from './api';
 import { OutcomeActions, REPORTABLE } from './OutcomeActions';
-import { PostingChangedNotice, postingMoved, SubmissionStatusChip } from './parts';
+import {
+  MergedDraftNotice,
+  OpenedOnceNotice,
+  PostingChangedNotice,
+  postingMoved,
+  ReviewItAgain,
+  ReviewLapsedNotice,
+  SubmissionStatusChip,
+} from './parts';
 
 /** The stages an attempt may start at (the server's SUBMISSION_ELIGIBLE_STAGES). */
 const ELIGIBLE_STAGES: readonly string[] = ['interested', 'preparing', 'applied'];
@@ -507,6 +515,17 @@ function InProgress({
       <p className="text-sm text-muted-foreground">{text}</p>
       {/* The posting changed under the attempt (#144): say so where the user starts from. */}
       {postingMoved(live, opp) ? <PostingChangedNotice live={live} opp={opp} /> : null}
+      <MergedDraftNotice live={live} />
+      <OpenedOnceNotice live={live} />
+      {live.reviewLapsed ? (
+        <>
+          <ReviewLapsedNotice live={live}>
+            If you submitted it, say so in Instructions. If not, finish the form there, or review it
+            again to have it filled.
+          </ReviewLapsedNotice>
+          <ReviewItAgain live={live} opportunityId={opportunityId} />
+        </>
+      ) : null}
       <Button asChild className="w-full">
         <Link to="/opportunities/$id/apply" params={{ id: opportunityId }} search={{ step }}>
           {action}

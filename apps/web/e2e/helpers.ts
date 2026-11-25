@@ -186,12 +186,16 @@ export async function choose(scope: Page | Locator, label: string, option: strin
  * Creates a device token with the browser-capture scope through Settings, as a user setting up
  * the extension does, so a test can post a captured page the way the extension would.
  */
-export async function createCaptureToken(page: Page, password = PASSWORD): Promise<string> {
+export async function createCaptureToken(
+  page: Page,
+  password = PASSWORD,
+  permission = /^Browser capture/,
+): Promise<string> {
   await page.goto('/settings/integrations');
   await page.getByRole('button', { name: 'Create token' }).click();
   const dialog = page.getByRole('dialog', { name: 'Create a device token' });
   await dialog.getByLabel('Name').fill('Chrome extension');
-  await dialog.getByRole('checkbox', { name: /^Browser capture/ }).setChecked(true);
+  await dialog.getByRole('checkbox', { name: permission }).setChecked(true);
   await dialog.getByLabel('Current password').fill(password);
   await dialog.getByRole('button', { name: 'Create' }).click();
   const shown = page.getByRole('dialog', { name: 'Copy your device token' });

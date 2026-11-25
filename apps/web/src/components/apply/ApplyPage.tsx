@@ -6,7 +6,7 @@
 // employer's address, the browser opens it in a new tab, and the user fills in and submits the
 // form there themselves.
 import { submissionFieldProblem, type ApplicationDetailKey } from '@opportun/core';
-import { Link, useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate, useRouter } from '@tanstack/react-router';
 import { ArrowLeft, Check, Copy, Download, Loader2 } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -32,7 +32,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { API_BASE, ApiError } from '@/lib/api';
+import { api, API_BASE, ApiError } from '@/lib/api';
 import { formatDateTime, safeHttpUrl, type OpportunityView } from '@/lib/opportunities';
 import { cn } from '@/lib/utils';
 import { usableResumes } from './ApplyPanel';
@@ -64,9 +64,13 @@ import {
 } from './api';
 import {
   ApplyStepper,
+  MergedDraftNotice,
   Notice,
+  OpenedOnceNotice,
   PostingChangedNotice,
   postingMoved,
+  ReviewItAgain,
+  ReviewLapsedNotice,
   SubmissionStatusChip,
   WillNotSubmitCallout,
   type StepId,
@@ -98,7 +102,16 @@ export function ApplyPage({
     if (loaded) heading.current?.focus();
   }, [step, loaded]);
 
-  if (opp.isPending || submissions.isPending) {
+  const gone =
+    submissions.data === null || (opp.error instanceof ApiError && opp.error.status === 404);
+  const following = useFollowMerged({
+    opportunityId,
+    step,
+    liveId: submissions.data?.items.find(isLive)?.id,
+    gone,
+  });
+
+  if (opp.isPending || submissions.isPending || following) {
     return <p className="text-sm text-muted-foreground">Loading...</p>;
   }
   if (opp.data === undefined) return <FormError message="This opportunity could not be loaded." />;
@@ -177,6 +190,58 @@ export function ApplyPage({
       )}
     </section>
   );
+}
+
+/**
+ * The page of an opportunity that was merged away in another tab (#1057): it holds the id of its
+ * application, which is on the kept one now, so it goes to the same step there, in place of this page.
+ * True while it looks. Loaded afresh it holds none, and is as it was: nothing records where the
+ * opportunity went.
+ */
+function useFollowMerged({
+  opportunityId,
+  step,
+  liveId,
+  gone,
+}: {
+  opportunityId: string;
+  step: StepId;
+  liveId: string | undefined;
+  gone: boolean;
+}): boolean {
+  const router = useRouter();
+  // Of this page's opportunity: the route may show another in the same component.
+  const held = useRef<{ opportunityId: string; id: string } | null>(null);
+  if (liveId !== undefined) held.current = { opportunityId, id: liveId };
+  const [lost, setLost] = useState<string | null>(null);
+  const id = gone && held.current?.opportunityId === opportunityId ? held.current.id : undefined;
+  useEffect(() => {
+    if (id === undefined) return;
+    let shown = true;
+    const here = `/opportunities/${opportunityId}/apply`;
+    void (async () => {
+      const on = await api<SubmissionView>(`/submissions/${encodeURIComponent(id)}`).then(
+        (s) => s.opportunityId,
+        () => opportunityId,
+      );
+      // Left meanwhile (an outcome recorded here goes to its opportunity): nowhere else then. Not the
+      // address when this began: by then the page can be on its way already.
+      if (!shown || router.state.location.pathname !== here) return;
+      if (on === opportunityId) setLost(id);
+      else {
+        await router.navigate({
+          to: '/opportunities/$id/apply',
+          params: { id: on },
+          search: { step },
+          replace: true,
+        });
+      }
+    })();
+    return () => {
+      shown = false;
+    };
+  }, [id, opportunityId, router, step]);
+  return id !== undefined && lost !== id;
 }
 
 function headingFor(step: StepId, o: OpportunityView): string {
@@ -872,6 +937,25 @@ function ReviewStep({
     setHint(null);
   }, [snapshotBlock]);
 
+  if (live.status === 'handed_off' && live.reviewLapsed) {
+    return (
+      <div className="grid gap-3">
+        <ReviewLapsedNotice live={live}>
+          If you submitted it, say so on{' '}
+          <Link
+            to="/opportunities/$id/apply"
+            params={{ id: opp.id }}
+            search={{ step: 'open' }}
+            className="font-medium underline underline-offset-4"
+          >
+            Finish on the application site
+          </Link>
+          . If not, review it again to have it filled.
+        </ReviewLapsedNotice>
+        <ReviewItAgain live={live} opportunityId={opp.id} />
+      </div>
+    );
+  }
   if (live.status === 'handed_off') {
     return (
       <p className="text-sm text-muted-foreground">
@@ -1002,6 +1086,8 @@ function ReviewStep({
       </p>
       <div ref={bannerRef} tabIndex={-1} className="grid gap-2 outline-none">
         {postingMoved(live, opp) ? <PostingChangedNotice live={live} opp={opp} /> : null}
+        <MergedDraftNotice live={live} />
+        <OpenedOnceNotice live={live} />
         {earlier !== undefined ? (
           <Notice>
             <span>
@@ -1306,8 +1392,8 @@ function ReviewStep({
         description="Nothing was submitted. You can start again later."
         confirmLabel="Stop application"
         onConfirm={async () => {
-          await cancel.mutateAsync(live.id);
-          await navigate({ to: '/opportunities/$id', params: { id: opp.id } });
+          const stopped = await cancel.mutateAsync(live.id);
+          await navigate({ to: '/opportunities/$id', params: { id: stopped.opportunityId } });
         }}
       />
     </div>
@@ -1432,14 +1518,30 @@ function OpenStep({
           page.
         </p>
       )}
+      {live.reviewLapsed ? (
+        <>
+          <ReviewLapsedNotice live={live}>
+            If you submitted it, press <strong>I submitted it</strong>. If not, finish the form with
+            the details below, or review it again to have it filled.
+          </ReviewLapsedNotice>
+          <ReviewItAgain live={live} opportunityId={opp.id} />
+        </>
+      ) : null}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">On the application site</CardTitle>
           </CardHeader>
           <CardContent className="grid gap-3 text-sm">
-            {canFill ? <ExtensionSteps host={host} /> : <CopySteps />}
-            <ExtensionRead live={live} canFill={canFill} />
+            {/* A lapsed review is not filled (#1057): copying is the way, and nothing offers the other. */}
+            {live.reviewLapsed ? (
+              <CopyList />
+            ) : canFill ? (
+              <ExtensionSteps host={host} />
+            ) : (
+              <CopySteps />
+            )}
+            {live.reviewLapsed ? null : <ExtensionRead live={live} canFill={canFill} />}
             <p>Did the tab not open? {link}.</p>
           </CardContent>
         </Card>
@@ -1481,8 +1583,8 @@ function OpenStep({
         description="Nothing was submitted. You can start again later."
         confirmLabel="Stop application"
         onConfirm={async () => {
-          await cancel.mutateAsync(live.id);
-          await navigate({ to: '/opportunities/$id', params: { id: opp.id } });
+          const stopped = await cancel.mutateAsync(live.id);
+          await navigate({ to: '/opportunities/$id', params: { id: stopped.opportunityId } });
         }}
       />
     </div>
@@ -1537,6 +1639,17 @@ function ExtensionRead({ live, canFill }: { live: SubmissionView; canFill: boole
   return canFill ? <p className="text-muted-foreground">Not filled by the extension yet.</p> : null;
 }
 
+function CopyList() {
+  return (
+    <ol className="grid list-decimal gap-1 pl-5">
+      <li>Fill in the form, copying from your details below.</li>
+      <li>Attach your resume.</li>
+      <li>Answer any other questions the site asks.</li>
+      <li>Press the site&apos;s own Submit button. Only you can do this.</li>
+    </ol>
+  );
+}
+
 /**
  * The steps where the extension cannot fill this form (no usable token, or a site it does not
  * fill): today's copying, and where to set the extension up, promising nothing more (#416).
@@ -1544,12 +1657,7 @@ function ExtensionRead({ live, canFill }: { live: SubmissionView; canFill: boole
 function CopySteps() {
   return (
     <>
-      <ol className="grid list-decimal gap-1 pl-5">
-        <li>Fill in the form, copying from your details below.</li>
-        <li>Attach your resume.</li>
-        <li>Answer any other questions the site asks.</li>
-        <li>Press the site&apos;s own Submit button. Only you can do this.</li>
-      </ol>
+      <CopyList />
       <p>
         The Opportun browser extension can fill this form for you:{' '}
         <Link
@@ -1623,14 +1731,15 @@ function AttestDialog({
       return;
     }
     try {
-      await attest.mutateAsync({
+      const recorded = await attest.mutateAsync({
         id: live.id,
         moveToApplied: canMove && moveToApplied,
         ...(typed === undefined ? {} : { submittedAt: typed }),
       });
       onOpenChange(false);
       toast({ title: 'Application recorded', variant: 'success' });
-      await navigate({ to: '/opportunities/$id', params: { id: opp.id } });
+      // The one it is on: another, when this one was merged into it meanwhile (#1057).
+      await navigate({ to: '/opportunities/$id', params: { id: recorded.opportunityId } });
     } catch (err) {
       setError(submissionErrorText(err));
     }

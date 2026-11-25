@@ -14,11 +14,23 @@ import {
   Pencil,
   ShieldCheck,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { jobNamedByLink, mergedSinceReview, namedAgainst } from '@opportun/core';
+import { useNavigate } from '@tanstack/react-router';
+import { useState, type ReactNode } from 'react';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import type { OpportunityView } from '@/lib/opportunities';
-import { hostOf, type SubmissionView } from './api';
+import { formatDateTime, type OpportunityView } from '@/lib/opportunities';
+import {
+  atsLabel,
+  hostOf,
+  isLive,
+  submissionErrorText,
+  useOpportunitySubmissions,
+  useReviewSubmissionAgain,
+  type SubmissionView,
+} from './api';
 
 type BadgeVariant = 'default' | 'secondary' | 'outline' | 'success' | 'warning' | 'destructive';
 
@@ -145,20 +157,140 @@ export function Notice({
 
 /**
  * Whether the opportunity's posting now names another job than the one this attempt was started
- * for (#144). An attempt is always created with the opportunity's identity, so any difference
- * is a change, recorded or not: a change landing during a create finds no attempt to mark yet
- * (tl on #154). The attempt keeps its pinned destination; this is what the screens say.
+ * for (#144): its identity, else the job its link names. An attempt is always created with the
+ * opportunity's identity, so any difference is a change, recorded or not: a change landing during
+ * a create finds no attempt to mark yet (tl on #154). One that names no job has lost it, unless a
+ * merge is why: then nothing changed, and the merge's notice says where it goes (#1057). The attempt
+ * keeps its pinned destination; this is what the screens say.
  */
 export function postingMoved(
-  live: Pick<SubmissionView, 'atsKind' | 'atsRef' | 'atsExternalId'>,
-  opp: Pick<OpportunityView, 'atsJobRef'>,
+  live: Pick<
+    SubmissionView,
+    'atsKind' | 'atsRef' | 'atsExternalId' | 'mergedAt' | 'reviewedAt' | 'postingChangedAt'
+  >,
+  opp: Pick<OpportunityView, 'atsJobRef' | 'postingUrl'>,
 ): boolean {
-  const ref = opp.atsJobRef;
-  return !(
-    ref != null &&
-    ref.kind === live.atsKind &&
-    (ref.org ?? '').toLowerCase() === (live.atsRef ?? '').toLowerCase() &&
-    ref.externalId === live.atsExternalId
+  const named = namedAgainst(
+    { atsJobRef: opp.atsJobRef, postingUrl: opp.postingUrl ?? null },
+    live,
+  );
+  if (named !== 'none') return named === 'another';
+  return !(mergedSinceReview(live) && live.postingChangedAt == null);
+}
+
+const requisitionOf = (live: SubmissionView): string =>
+  `${hostOf(live.destinationUrl)}, REQ ${live.atsExternalId}`;
+
+/**
+ * Opened on the employer's site, and what was reviewed is no longer what it is (#1057): the extension
+ * does not fill it. `children` says what to do, where it is shown.
+ */
+export function ReviewLapsedNotice({
+  live,
+  children,
+}: {
+  live: SubmissionView;
+  children: ReactNode;
+}) {
+  return (
+    <Notice>
+      <span>
+        {mergedSinceReview(live) ? (
+          <>
+            <strong>Its opportunity was merged into this one after you opened it.</strong> The
+            extension no longer fills it, as what you reviewed was for the merged one.
+          </>
+        ) : (
+          <>
+            <strong>Your review no longer holds.</strong> The extension no longer fills it.
+          </>
+        )}{' '}
+        It still goes to {requisitionOf(live)}. {children}
+      </span>
+    </Notice>
+  );
+}
+
+/**
+ * What a merge does to the live application of the opportunity that goes (#1057). Nothing where there is
+ * none, or assisted apply is off.
+ */
+export function MergeMovesApplication({ opportunityId }: { opportunityId: string }) {
+  const live = useOpportunitySubmissions(opportunityId).data?.items.find(isLive);
+  if (live === undefined) return null;
+  return (
+    <p className="basis-full text-sm">
+      {live.status === 'handed_off'
+        ? `Its application is open on ${hostOf(live.destinationUrl)}. It moves too, but the extension will no longer fill it: finish it and record it first, or review it again afterwards.`
+        : `Its application to ${atsLabel(live.atsKind)} moves too, and has to be reviewed again.`}
+    </p>
+  );
+}
+
+/** A draft whose opportunity was merged into this one, until it is reviewed (#1057). */
+export function MergedDraftNotice({ live }: { live: SubmissionView }) {
+  if (live.status !== 'draft' || !mergedSinceReview(live)) return null;
+  return (
+    <Notice>
+      <span>
+        <strong>Its opportunity was merged into this one.</strong> Check everything, then review it
+        again.
+      </span>
+    </Notice>
+  );
+}
+
+/** A draft that was opened on the employer's site before: it may have been sent (#1057, sec). */
+export function OpenedOnceNotice({ live }: { live: SubmissionView }) {
+  if (live.status !== 'draft' || live.handedOffAt == null) return null;
+  return (
+    <Notice>
+      <span>
+        You opened this application on {formatDateTime(live.handedOffAt)}. If you submitted it then,
+        don&apos;t send it again.
+      </span>
+    </Notice>
+  );
+}
+
+/** Asks first: one that was submitted is said to be, not reviewed again (#1057). */
+export function ReviewItAgain({
+  live,
+  opportunityId,
+}: {
+  live: SubmissionView;
+  opportunityId: string;
+}) {
+  const navigate = useNavigate();
+  const again = useReviewSubmissionAgain(opportunityId);
+  const [asking, setAsking] = useState(false);
+  return (
+    <>
+      <Button variant="outline" className="w-fit" onClick={() => setAsking(true)}>
+        Review it again
+      </Button>
+      <ConfirmDialog
+        open={asking}
+        onOpenChange={setAsking}
+        title="Review this application again?"
+        description="If you have already submitted it, press I submitted it instead."
+        confirmLabel="Review it again"
+        confirmVariant="default"
+        onConfirm={async () => {
+          let draft: SubmissionView;
+          try {
+            draft = await again.mutateAsync(live.id);
+          } catch (err) {
+            throw new Error(submissionErrorText(err), { cause: err });
+          }
+          await navigate({
+            to: '/opportunities/$id/apply',
+            params: { id: draft.opportunityId },
+            search: { step: 'review' },
+          });
+        }}
+      />
+    </>
   );
 }
 
@@ -174,12 +306,16 @@ export function PostingChangedNotice({
   opp: Pick<OpportunityView, 'atsJobRef' | 'postingUrl'>;
 }) {
   const ref = opp.atsJobRef;
+  const linked = ref == null && opp.postingUrl != null ? jobNamedByLink(opp.postingUrl) : null;
   const now =
     ref != null
       ? `${hostOf(ref.url)}, REQ ${ref.externalId}`
-      : opp.postingUrl != null
-        ? `${hostOf(opp.postingUrl)}, which is not an application site Opportun recognises`
-        : 'no longer set';
+      : // A board's own page names its job, confirmed or not.
+        linked !== null && linked.org !== null && opp.postingUrl != null
+        ? `${hostOf(opp.postingUrl)}, REQ ${linked.externalId}`
+        : opp.postingUrl != null
+          ? `${hostOf(opp.postingUrl)}, which is not an application site Opportun recognises`
+          : 'no longer set';
   return (
     <Notice>
       <span>

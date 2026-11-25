@@ -138,7 +138,8 @@ _Dismissing asks why. The reason is kept with the opportunity and used to tune d
 ## The opportunity page
 
 Click a card's title to open it. The header has the stage control, a priority (High, Normal,
-Low) and a `...` menu with **Merge into...** for duplicates. A possible-duplicate banner, when
+Low) and a `...` menu with **Merge into...** for duplicates (what happens to an application then:
+[When its opportunity is merged](#when-its-opportunity-is-merged)). A possible-duplicate banner, when
 there is one, sits above the tabs (see [Possible duplicates](#possible-duplicates)). Below are
 five tabs.
 
@@ -325,6 +326,25 @@ The last step, **Finish on the application site**, says what to do on that tab:
 
 **Your details to copy** stays below either way. When you are done, tell Opportun: **I submitted
 it** or **I did not submit it**.
+
+#### When its opportunity is merged
+
+An application moves with its opportunity when you merge that into another one, and keeps the form
+it goes to. Before you merge, Opportun says what becomes of it:
+
+- **A draft, or reviewed and not opened yet:** it has to be reviewed again. The panel and the review
+  step say "Its opportunity was merged into this one." until you do.
+- **Already open on the employer's site:** the browser extension no longer fills it, as what you
+  reviewed was for the merged one, and the panel and the last step say so. Record what became of it
+  as always: **I submitted it** or **I did not submit it**. Or finish the form yourself, from **Your
+  details to copy**. To have it filled, press **Review it again**: it becomes a draft with your
+  details and answers kept, and you review and open it once more. If you have already submitted it,
+  press **I submitted it** instead: a draft that was opened before says when, so you don't send it
+  twice.
+
+A page of the merged opportunity left open in another tab goes to the application on the kept one.
+Where the kept one's posting is another job, the application says that the posting changed, as it
+does when you change the link yourself.
 
 #### After you apply
 
