@@ -68,7 +68,8 @@ const userScope = (ctx: UserCtx): string => `user:${ctx.userId}`;
  * claims its key, and updateOpportunity for a company, title, location or link, #889), then rows.
  * A transaction that writes or names two opportunities, or writes an opportunity's message and then
  * names that opportunity, takes the user's lock first (#920): createOpportunity and the saves above,
- * mergeOpportunities, reorderOpportunities, dismissPossibleDuplicate, reclassify,
+ * mergeOpportunities, reorderOpportunities, dismissPossibleDuplicate, the AI dedupe pass's decision
+ * (resolveDedupeCandidateByAi, #998, the model asked before it), reclassify,
  * rejectCommunication, applyClassification, acceptProposal (each of these also so that a message
  * rejected meanwhile is seen as rejected); and deleteOpportunity, whose cascade reaches those rows the
  * other way. No

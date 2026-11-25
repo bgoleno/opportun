@@ -81,7 +81,6 @@ interface OppForPrompt {
   title: string;
   location: string | null;
   postingUrl: string | null;
-  possibleDuplicateOf: string | null;
 }
 
 async function loadOpp(
@@ -96,7 +95,6 @@ async function loadOpp(
       title: opportunities.title,
       location: opportunities.location,
       postingUrl: opportunities.postingUrl,
-      possibleDuplicateOf: opportunities.possibleDuplicateOf,
     })
     .from(opportunities)
     .innerJoin(companies, eq(companies.id, opportunities.companyId))
@@ -259,12 +257,12 @@ export async function runOpportunityDedupeAi(
         tracked.id,
         candidate.id,
         out.duplicateOfRef,
-        candidate.possibleDuplicateOf !== null,
         now,
       );
       if (verdict === 'confirmed') confirmed += 1;
       else if (verdict === 'rejected') rejected += 1;
-      else {
+      // Decided or gone while the model was asked (#998): there is nothing left to decide.
+      else if (verdict === 'invalid') {
         sctx.log.warn(
           // The ref is what the model returned: model output is never logged (14.8).
           { 'opportun.dedupe_candidate.id': row.id },
