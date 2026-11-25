@@ -86,6 +86,8 @@ const JobResponse = z.object({
   linked: z.number().int().positive().optional(),
   /** Sent only when the capture is saved and what the opportunity lacked is not (#914). */
   filled: z.literal(false).optional(),
+  /** Sent when it joined the role's opportunity as another posting of it (#1037). */
+  anotherPosting: z.literal(true).optional(),
 });
 const CaptureResponse = z.union([ProfileResponse, JobResponse]);
 
@@ -312,6 +314,7 @@ export async function connectorCaptureRoutes(app: FastifyInstance): Promise<void
           ...(resolved.description === undefined ? {} : { description: resolved.description }),
           ...(resolved.linked === 0 ? {} : { linked: resolved.linked }),
           ...(resolved.filled ? {} : { filled: false as const }),
+          ...(resolved.anotherPosting === undefined ? {} : { anotherPosting: true as const }),
         });
       });
     },

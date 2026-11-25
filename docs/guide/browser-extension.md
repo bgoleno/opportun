@@ -64,10 +64,19 @@ short text that came with this same posting, such as one from a feed, if nobody 
 never replaces your own words or the company's own posting. Either way the whole page is on the
 opportunity's timeline, and the popup says which it was.
 
+One role is one opportunity. Another posting of a role you track (the same company and the same
+whole title, at another place, or at the same place with another job id) joins its opportunity while
+that is open, at any stage but Closed and Dismissed; if several fit, the oldest. The popup says that the
+page is another posting of that job, and the opportunity's timeline gets the page and an **Also
+posted via ...** entry with its place and link. Its own link, location and pay stay as they are, and the
+page gives it a description only when it has none. (The page of a Discovery card you have not decided
+fills in what the opportunity lacks, as Accept does.) If two openings of one title are separate to you,
+add the second with **New opportunity** on the Pipeline page.
+
 A different job that only looks like one you track is kept apart instead: for example a
 Principal role where you track the Staff role at that company and location, or another posting
-on the same site with the same title and place. It gets its own opportunity, flagged as a possible
-duplicate, with a **Kept apart** entry on its timeline. See
+on the same site with the same title and place when the one you track is Closed or Dismissed. It gets
+its own opportunity, flagged as a possible duplicate, with a **Kept apart** entry on its timeline. See
 [Possible duplicates](pipeline.md#possible-duplicates) for exactly when that happens and what
 you can do about it.
 

@@ -180,6 +180,23 @@ describe('postCapture outcomes', () => {
     }
   });
 
+  it('carries anotherPosting only when the server says true (#1037)', async () => {
+    const job = {
+      kind: 'job',
+      resultId: 'r1',
+      duplicate: false,
+      refined: false,
+      opportunityId: 'o1',
+      stage: null,
+    };
+    const read = (body: Record<string, unknown>) =>
+      postCapture(respond(200, { ...job, ...body }), SETTINGS, PAYLOAD);
+    expect(await read({ anotherPosting: true })).toEqual({ ...job, anotherPosting: true });
+    for (const other of [{}, { anotherPosting: false }, { anotherPosting: 'yes' }]) {
+      expect(await read(other)).toEqual(job);
+    }
+  });
+
   it('a refusal carries the server’s reason', async () => {
     const fetch = respond(422, {
       error: { code: 'unrecognized_page', reason: 'unsupported_path' },

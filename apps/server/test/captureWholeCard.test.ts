@@ -34,6 +34,8 @@ import { runQueuedJob } from './runQueuedJob';
 
 const boot = useApi();
 const ctxOf = (c: TestClient) => ({ userId: c.userId, isAdmin: false });
+const close = (app: FastifyInstance, id: string) =>
+  app.db.update(opportunities).set({ stage: 'closed' }).where(eq(opportunities.id, id)).run();
 afterEach(() => resetSources());
 
 const PAGE = 'Own the platform, as the page has it.';
@@ -301,7 +303,7 @@ describe('the opportunity it goes into', () => {
     expect(done.createdOpportunity).toBe(true);
   });
 
-  it('none of these when the key it would hold is another job’s on the same site: kept apart', async () => {
+  it('none of these when the key it would hold is another job’s on the same site, over: kept apart', async () => {
     const { app, a } = await boot();
     // Another LinkedIn posting under the same key, tracked: what keeps two apart (#73, #80).
     const there = await location(app, a, 'linkedin', 0);
@@ -311,6 +313,8 @@ describe('the opportunity it goes into', () => {
       payload: {},
     });
     const { opportunityId } = accepted.json();
+    // Open, it is the role, and the card goes to it (#1037, captureJoins.test.ts).
+    await close(app, opportunityId);
     await location(app, a, 'linkedin', 2, { location: CITIES[0] });
     const done = await capture(app, a, 'linkedin', 2, { location: CITIES[0] });
     expect(done.createdOpportunity).toBe(true);
@@ -480,6 +484,7 @@ it('one just kept apart is not then found by another posting on the card', async
     url: `/api/v1/discovery/results/${other}/accept`,
     payload: {},
   });
+  await close(app, accepted.json().opportunityId);
   // Of the same card and key, with no id to contradict the tracked one.
   const noId = await location(app, a, 'linkedin', 0, {
     location: CITIES[0],
@@ -621,14 +626,15 @@ describe('a lead that has been given a location since', () => {
     },
   );
 
-  it('one whose leads are another posting on the site: kept apart, once', async () => {
+  it('one whose leads are another posting on the site, over: kept apart, once', async () => {
     const { app, a } = await boot();
     const other = await location(app, a, 'linkedin', 2, { location: CITIES[0] });
-    await a.request({
+    const accepted = await a.request({
       method: 'POST',
       url: `/api/v1/discovery/results/${other}/accept`,
       payload: {},
     });
+    await close(app, accepted.json().opportunityId);
     await given(app, a);
     const done = await capture(app, a, 'linkedin', 0);
     expect(done.createdOpportunity).toBe(true);

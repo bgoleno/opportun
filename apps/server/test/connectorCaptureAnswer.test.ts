@@ -168,6 +168,42 @@ describe('POST /connector/capture: what a job capture answers', () => {
     expect(await app.db.select().from(opportunities).all()).toHaveLength(1);
   });
 
+  // https://github.com/bgoleno/opportun/issues/1037: said by the capture that joins, whether a place was
+  // read (with AI) or not, and not again.
+  it('one of another place of an open role: not created, another posting, the first time', async () => {
+    const { app, a } = await boot();
+    const bearer = await device(a);
+    const tracked = await createOpportunity(app.db, ctxOf(a), {
+      companyName: 'Initech',
+      title: 'Staff Platform Engineer',
+      location: 'Reykjavik, Iceland',
+      descriptionMd: 'my own words',
+      sourceKind: 'manual',
+    });
+    const first = await push(app, bearer);
+    expect([first.status, first.body]).toEqual([
+      200,
+      {
+        kind: 'job',
+        resultId: expect.any(String),
+        duplicate: false,
+        refined: false,
+        opportunityId: tracked.id,
+        stage: 'interested',
+        created: false,
+        currentStage: 'interested',
+        description: 'kept',
+        anotherPosting: true,
+      },
+    ]);
+    const again = await push(app, bearer);
+    expect(again.body).toEqual({
+      ...first.body,
+      stage: null,
+      anotherPosting: undefined,
+    });
+  });
+
   // #956: the move of a created one used to be a step of its own, skipped when its lock could not be
   // had in time, and the capture then said the job was already tracked.
   describe('when the stage move cannot have its lock', () => {
