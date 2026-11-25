@@ -126,13 +126,15 @@ describe('CaptureDialog', () => {
         // It is stored: the same once more could only be a duplicate. Another posting can be.
         expect(screen.getByRole('button', { name: 'Capture' })).toBeDisabled();
         await user.type(screen.getByLabelText(label), 'x');
-        expect(screen.queryByRole('alert')).toBeNull();
         expect(screen.getByRole('button', { name: 'Capture' })).toBeEnabled();
+        await user.type(screen.getByLabelText(label), '{Backspace} ');
+        expect(screen.getByRole('button', { name: 'Capture' })).toBeDisabled();
+        expect(screen.getByRole('alert')).toHaveTextContent(SAID);
         expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
       },
     );
 
-    it('pasting the text instead is another capture: what was said goes, and Capture is back', async () => {
+    it('pasting the text instead is another capture: Capture is not held back', async () => {
       const user = userEvent.setup();
       mockApi({ 'POST /capture': () => DENIED });
       renderDialog();
@@ -143,8 +145,39 @@ describe('CaptureDialog', () => {
       await user.click(screen.getByRole('button', { name: 'Capture' }));
       await screen.findByRole('alert');
       await user.click(screen.getByRole('radio', { name: 'Pasted text' }));
-      expect(screen.queryByRole('alert')).toBeNull();
       expect(screen.getByRole('button', { name: 'Capture' })).toBeEnabled();
+      await user.click(screen.getByRole('radio', { name: 'Link' }));
+      expect(screen.getByRole('button', { name: 'Capture' })).toBeDisabled();
+    });
+
+    it('a link replaced while the first is captured is not held back by it', async () => {
+      const user = userEvent.setup();
+      let answer: () => void = () => undefined;
+      const answered = new Promise<void>((resolve) => {
+        answer = resolve;
+      });
+      const { calls } = mockApi({
+        'POST /capture': async () => {
+          await answered;
+          return DENIED;
+        },
+      });
+      renderDialog();
+      const link = await screen.findByLabelText('Posting link');
+      await user.type(link, 'https://careers.example.com/jobs/42');
+      await user.click(screen.getByRole('button', { name: 'Capture' }));
+      await screen.findByRole('button', { name: 'Capturing...' });
+      await user.clear(link);
+      await user.type(link, 'https://careers.example.com/jobs/43');
+      answer();
+      expect(await screen.findByRole('alert')).toHaveTextContent(SAID);
+      await user.click(screen.getByRole('button', { name: 'Capture' }));
+      await waitFor(() =>
+        expect(calls.filter((c) => c.method === 'POST').map((c) => c.body)).toEqual([
+          { url: 'https://careers.example.com/jobs/42' },
+          { url: 'https://careers.example.com/jobs/43' },
+        ]),
+      );
     });
 
     it('a server that does not name the company says so all the same', async () => {

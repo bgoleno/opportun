@@ -39,8 +39,8 @@ type Failure =
   | { kind: 'decided'; message: string }
   /** Another location of a job in the pipeline: linked to it, and there is no card (#971). */
   | { kind: 'linked'; opportunityId: string }
-  /** The company is on the denied list: stored as dismissed, which is no failure (#1044). */
-  | { kind: 'denied'; company: string | null }
+  /** The company is on the denied list: what was sent is stored as dismissed, no failure (#1044). */
+  | { kind: 'denied'; company: string | null; sent: CaptureVars }
   | { kind: 'other'; message: string };
 
 const TEXT_MAX = 200_000;
@@ -74,7 +74,7 @@ function limitMessage(err: ApiError): string {
   return `Capture limit for your account reached${size}. Try again in ${wait}.`;
 }
 
-function toFailure(err: unknown): Failure {
+function toFailure(err: unknown, sent: CaptureVars): Failure {
   if (err instanceof ApiError) {
     if (err.status === 429 && err.code === 'rate_limited') {
       return { kind: 'other', message: limitMessage(err) };
@@ -107,6 +107,7 @@ function toFailure(err: unknown): Failure {
       return {
         kind: 'denied',
         company: typeof company === 'string' && company !== '' ? company : null,
+        sent,
       };
     }
     if (err.code === 'duplicate') {
@@ -143,13 +144,15 @@ export function CaptureDialog(props: {
   function switchMode(next: Mode) {
     setMode(next);
     setFieldError(undefined);
-    edited();
   }
 
-  /** Another posting now, so what became of the last one no longer holds Capture back. */
-  function edited() {
-    setFailure((f) => (f?.kind === 'denied' ? null : f));
-  }
+  // The same once more could only be a duplicate. Compared with what was sent: the field can be
+  // edited while a capture runs.
+  const storedAlready =
+    failure?.kind === 'denied' &&
+    (mode === 'url'
+      ? 'url' in failure.sent && failure.sent.url === url.trim()
+      : 'text' in failure.sent && failure.sent.text === text.trim());
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -186,7 +189,7 @@ export function CaptureDialog(props: {
       });
       props.onClose();
     } catch (err) {
-      setFailure(toFailure(err));
+      setFailure(toFailure(err, body));
     }
   }
 
@@ -245,10 +248,7 @@ export function CaptureDialog(props: {
                   inputMode="url"
                   autoComplete="off"
                   value={url}
-                  onChange={(e) => {
-                    setUrl(e.target.value);
-                    edited();
-                  }}
+                  onChange={(e) => setUrl(e.target.value)}
                   {...c}
                 />
               )}
@@ -260,15 +260,7 @@ export function CaptureDialog(props: {
               error={fieldError}
             >
               {(c) => (
-                <Textarea
-                  rows={8}
-                  value={text}
-                  onChange={(e) => {
-                    setText(e.target.value);
-                    edited();
-                  }}
-                  {...c}
-                />
+                <Textarea rows={8} value={text} onChange={(e) => setText(e.target.value)} {...c} />
               )}
             </FormField>
           )}
@@ -349,9 +341,7 @@ export function CaptureDialog(props: {
             </Button>
             <Button
               type="submit"
-              disabled={
-                capture.isPending || failure?.kind === 'decided' || failure?.kind === 'denied'
-              }
+              disabled={capture.isPending || failure?.kind === 'decided' || storedAlready}
             >
               {capture.isPending ? 'Capturing...' : 'Capture'}
             </Button>
