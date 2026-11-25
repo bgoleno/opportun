@@ -4,12 +4,12 @@
 // runs without a shell and with PATH only, and is gone (reaped) after every call, including a
 // call that times out against a server that ignores SIGTERM.
 import { enqueue } from '../src/lib/jobQueue';
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { NormalizedPosting } from '@opportun/core';
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi, type MockInstance } from 'vitest';
 import { resetSources, type SourceContext } from '../src/adapters/discoverySource';
 import { MCP_FIELD_CAPS, mcpSource, valueAt } from '../src/adapters/sources/mcp';
 import { McpConfigSchema } from '../src/adapters/sources/mcpConfig';
@@ -19,11 +19,13 @@ import {
   guardedMcpFetch,
   MCP_TIMEOUT_MS,
   McpTimeoutError,
+  MinimalStdioTransport,
   type HttpGuardDeps,
 } from '../src/lib/mcpClient';
 import { FetchBlockedError } from '../src/lib/safeFetch';
 import { createSource, getSourceRow, listResults } from '../src/repos/discovery';
 import { useApi } from './api';
+import { PATIENCE_MS } from './patience';
 
 const boot = useApi();
 afterEach(() => {
@@ -196,6 +198,9 @@ describe('MCP source over stdio (fake server)', () => {
   it('times out a hanging server and leaves no child behind (killed and reaped)', async () => {
     expect(MCP_TIMEOUT_MS).toBe(30_000);
     let pid: number | undefined;
+    onTestFinished(() => {
+      if (pid !== undefined && !isGone(pid)) process.kill(pid, 'SIGKILL');
+    });
     const err = await callMcpTool(
       { transport: 'stdio', command: process.execPath, args: [SERVER, 'hang'] },
       'search_jobs',
@@ -204,7 +209,8 @@ describe('MCP source over stdio (fake server)', () => {
     ).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(McpTimeoutError);
     expect(pid).toBeGreaterThan(0);
-    // The server ignores SIGTERM: the client escalated to SIGKILL and waited for the exit.
+    // The server ignores SIGTERM and its input's end: the client escalated to SIGKILL and waited for
+    // the exit.
     expect(isGone(pid!)).toBe(true);
     // Vitest's 30 s is what ends this if the 800 ms are not applied: the default is 30 s itself (#948).
   });
@@ -218,6 +224,153 @@ describe('MCP source over stdio (fake server)', () => {
       { onSpawn: (p) => (pid = p) },
     );
     expect(isGone(pid!)).toBe(true);
+  });
+
+  // A child of the server's own is in the group this client started, and goes with it (#1024).
+  describe('a child the server started', () => {
+    /** Not a spy: what ends what a test started, and what a spy passes on to. */
+    const real = process.kill.bind(process);
+    afterEach(() => vi.restoreAllMocks());
+    /** A family of fakeServer.mjs: its arguments, and the child's pid once it runs. Ended by pid. */
+    function family(server: string, kind: string) {
+      const dir = mkdtempSync(join(tmpdir(), 'opportun-mcp-'));
+      const file = join(dir, 'child.pid');
+      const child = () => Number(readFileSync(file, 'utf8'));
+      let leader: number | undefined;
+      onTestFinished(() => {
+        for (const pid of [leader, existsSync(file) ? child() : undefined]) {
+          if (pid !== undefined && !isGone(pid)) real(pid, 'SIGKILL');
+        }
+        rmSync(dir, { recursive: true, force: true });
+      });
+      const args = [SERVER, 'family', server, kind, file];
+      const call = (timeoutMs = PATIENCE_MS) =>
+        callMcpTool(
+          { transport: 'stdio', command: process.execPath, args },
+          'search_jobs',
+          {},
+          { timeoutMs, onSpawn: (p) => (leader = p) },
+        ).catch((e: unknown) => e);
+      return { args, call, child, leader: () => leader! };
+    }
+    /** What was sent to the group `pid` leads, in order; a 0 is a look. */
+    function sentTo(kill: MockInstance<typeof process.kill>, pid: number) {
+      return kill.mock.calls.filter(([to]) => to === -pid).map(([, sig]) => sig);
+    }
+    const signals = (sent: unknown[]) => sent.filter((s) => s !== 0);
+    const gone = (pid: number) =>
+      vi.waitFor(() => expect(isGone(pid)).toBe(true), { timeout: PATIENCE_MS });
+
+    it.each(['answers', 'leaves'])(
+      'that ignores SIGTERM is killed after the grace, its server gone (%s)',
+      async (server) => {
+        const kill = vi.spyOn(process, 'kill');
+        const f = family(server, 'stubborn');
+        await f.call();
+        const sent = sentTo(kill, f.leader());
+        expect(signals(sent)).toEqual(['SIGTERM', 'SIGKILL']);
+        expect(isGone(f.leader())).toBe(true);
+        await gone(f.child());
+        // Looked at again in the turn of the kill.
+        expect(sent.at(-2)).toBe(0);
+      },
+    );
+
+    it.each(['answers', 'leaves'])(
+      'that ends when asked is waited for, not killed, and no longer than it takes (%s)',
+      async (server) => {
+        const kill = vi.spyOn(process, 'kill');
+        const f = family(server, 'slow');
+        const call = f.call();
+        await vi.waitFor(() => expect(signals(sentTo(kill, f.leader()))).toEqual(['SIGTERM']), {
+          timeout: PATIENCE_MS,
+          interval: 5,
+        });
+        // Started as the group is asked: timers fire in the order they are due, so a call that waits
+        // for the whole grace (2 s) ends after this one, however busy the host.
+        const grace = new Promise((r) => setTimeout(() => r('the grace first'), 1_800));
+        expect(await Promise.race([call.then(() => 'the call first'), grace])).toBe(
+          'the call first',
+        );
+        expect(signals(sentTo(kill, f.leader()))).toEqual(['SIGTERM']);
+        await gone(f.child());
+      },
+    );
+
+    it('of a server that ended by itself is ended with nobody closing', async () => {
+      const f = family('leaves', 'stubborn');
+      const t = new MinimalStdioTransport(process.execPath, f.args);
+      await t.start();
+      await vi.waitFor(() => f.child(), { timeout: PATIENCE_MS });
+      await gone(f.child());
+    });
+
+    it('of a server that is killed goes with it, with no signal after', async () => {
+      const kill = vi.spyOn(process, 'kill');
+      const f = family('hang', 'stubborn');
+      await f.call(800);
+      // Two close at once (the SDK's client, at its own failed connect), so each may come twice.
+      const sent = sentTo(kill, f.leader());
+      expect([...new Set(sent)]).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(sent.at(-1)).toBe('SIGKILL');
+      await gone(f.child());
+    });
+
+    it('is left alone once its group has been seen empty: no look and no signal after', async () => {
+      const kill = vi.spyOn(process, 'kill');
+      const t = new MinimalStdioTransport(process.execPath, [SERVER, 'jobs']);
+      await t.start();
+      await t.close();
+      await t.close();
+      expect(sentTo(kill, t.pid!)).toEqual(['SIGTERM', 0]);
+    });
+
+    it.each(['ESRCH', 'EPERM'])('a look answered %s is an empty group: no signal', async (code) => {
+      const f = family('answers', 'stubborn');
+      let looks = 0;
+      const kill = vi.spyOn(process, 'kill').mockImplementation((to, sig) => {
+        // The first look only: what comes after it must not be asked.
+        if (to < 0 && sig === 0 && ++looks === 1) throw Object.assign(new Error(code), { code });
+        return real(to, sig);
+      });
+      const t = new MinimalStdioTransport(process.execPath, f.args);
+      await t.start();
+      await vi.waitFor(() => f.child(), { timeout: PATIENCE_MS });
+      await t.close();
+      await t.close();
+      expect(sentTo(kill, t.pid!)).toEqual(['SIGTERM', 0]);
+      expect(kill.mock.calls.filter(([to]) => to === t.pid)).toEqual([]);
+      expect(isGone(f.child()), 'the child is not this client’s to end any more').toBe(false);
+    });
+
+    it('a group that cannot be asked to end is an empty group: no look and no signal after', async () => {
+      const f = family('leaves', 'stubborn');
+      const kill = vi.spyOn(process, 'kill').mockImplementation((to, sig) => {
+        if (to < 0 && sig === 'SIGTERM') throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+        return real(to, sig);
+      });
+      const t = new MinimalStdioTransport(process.execPath, f.args);
+      const ended = new Promise<void>((r) => (t.onclose = r));
+      await t.start();
+      await ended;
+      await t.close();
+      await t.close();
+      expect(sentTo(kill, t.pid!)).toEqual([0, 'SIGTERM']);
+      expect(isGone(f.child())).toBe(false);
+    });
+
+    it('that goes during the grace by itself is not killed', async () => {
+      const f = family('answers', 'stubborn');
+      const kill = vi.spyOn(process, 'kill');
+      const t = new MinimalStdioTransport(process.execPath, f.args);
+      await t.start();
+      await vi.waitFor(() => f.child(), { timeout: PATIENCE_MS });
+      const closing = t.close();
+      await vi.waitFor(() => expect(sentTo(kill, t.pid!)).toContain(0), { timeout: PATIENCE_MS });
+      real(f.child(), 'SIGKILL');
+      await closing;
+      expect(signals(sentTo(kill, t.pid!))).toEqual(['SIGTERM']);
+    });
   });
 
   it('an unknown tool fails the run with the source showing the error', async () => {

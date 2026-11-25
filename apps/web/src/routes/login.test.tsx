@@ -170,6 +170,15 @@ describe('the page that was asked for', () => {
     expect(kept()).toBeNull();
   });
 
+  it('a second step’s token, taken from the address, is not put back in it', async () => {
+    put('/inbox');
+    const token = 'b'.repeat(32);
+    window.history.replaceState(null, '', `/login#pending2fa=${token}`);
+    const t = await load(`/login?oauth=denied#pending2fa=${token}`);
+    await screen.findByLabelText('Authentication code');
+    await waitFor(() => expect(at(t)).toBe('/login?redirect=%2Finbox'));
+  });
+
   it('of the address wins over what is kept', async () => {
     put('/inbox');
     const t = await load('/login?oauth=denied&redirect=%2Fpipeline');
