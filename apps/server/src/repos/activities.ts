@@ -9,6 +9,7 @@ import {
   isNotNull,
   isNull,
   lte,
+  ne,
   notInArray,
   or,
   sql,
@@ -117,6 +118,37 @@ export async function listActivities(
     .offset(opts.offset)
     .all();
   return { items, total: await countWhere(db, activities, where) };
+}
+
+/** The pages captured into an opportunity, newest first; their texts are read one at a time. */
+export async function listCaptures(
+  db: Db,
+  ctx: UserCtx,
+  opportunityId: string,
+): Promise<Pick<ActivityRow, 'id' | 'title' | 'externalUrl'>[]> {
+  return await db
+    .select({ id: activities.id, title: activities.title, externalUrl: activities.externalUrl })
+    .from(activities)
+    .where(
+      and(
+        ownedBy(activities.userId, ctx),
+        eq(activities.opportunityId, opportunityId),
+        eq(activities.kind, 'capture'),
+        ne(activities.bodyMd, ''),
+      ),
+    )
+    .orderBy(desc(activities.occurredAt), desc(activities.id))
+    .all();
+}
+
+/** A captured page's text; null when the entry has been deleted since, or has none. */
+export async function textOfCapture(db: Db, ctx: UserCtx, id: string): Promise<string | null> {
+  const row = await db
+    .select({ bodyMd: activities.bodyMd })
+    .from(activities)
+    .where(ownedActivity(ctx, id))
+    .get();
+  return row === undefined || row.bodyMd === '' ? null : row.bodyMd;
 }
 
 export async function getActivitySync(exec: Exec, ctx: UserCtx, id: string): Promise<ActivityRow> {

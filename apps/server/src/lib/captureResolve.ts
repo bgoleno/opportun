@@ -26,7 +26,7 @@ import {
   type NormalizedPosting,
   type OpportunityStage,
 } from '@opportun/core';
-import { and, asc, eq, inArray, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import {
   boundLockWaits,
@@ -47,6 +47,13 @@ import { boardFromUrl } from './atsBoard';
 import { postingIdentity, siteLabel, siteOfUrl } from './captureSites';
 import { sourceLabel } from './sourceLabels';
 import { capturedInto } from './openOpportunity';
+import {
+  identitiesContradict,
+  identityBeside,
+  isElsewhere,
+  isKnownOther,
+  leadsBehind,
+} from './ownPosting';
 import { descriptionFingerprint } from './postingFingerprint';
 import { createActivity } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
@@ -132,21 +139,6 @@ function mayCarryIdentity(identity: string): SQL {
     inArray(sql`lower(trim(${externalId}))`, [identity, bare]),
     ilike(jsonText(discoveryResults.posting, 'postingUrl'), bare),
   ) as SQL;
-}
-
-/**
- * A result's identity, read beside a capture's. postingIdentity, and one case more: a job alert's
- * result whose own link gives none, and whose bare id is the capture's, is the capture's posting.
- * That is a lead whose job was found on the company's board (jobs/leadResolve.ts merged): the board's
- * link has replaced the site's, and the alert's id is all that is left of it. Only the alert parsers
- * store a bare id that is a site's; from any other source it is opaque
- * (tl, https://github.com/bgoleno/opportun/issues/967#issuecomment-7120119028).
- */
-function identityBeside(capture: string | null, result: DiscoveryResultView): string | null {
-  const own = postingIdentity(result.posting);
-  if (own !== null || capture === null || result.sourceKind !== 'alert_email') return own;
-  const bare = (result.posting.externalId ?? '').trim().toLowerCase();
-  return bare !== '' && capture === `${siteOfIdentity(capture)}:${bare}` ? capture : null;
 }
 
 /** Results of this user whose posting is the same req as `posting`. */
@@ -331,19 +323,6 @@ interface Match {
   acceptedById: DiscoveryResultView[];
 }
 
-/** The site part of a `<site>:<id>` identity. */
-const siteOfIdentity = (identity: string): string => identity.slice(0, identity.indexOf(':'));
-
-/**
- * True when two posting identities say the postings are different reqs. Only ids on the same
- * site can say that: a LinkedIn job id and an Indeed job key say nothing about each other, so a
- * LinkedIn capture of the req behind a pending Indeed alert lead still key-matches it, as it did
- * before Indeed was a capture site (https://github.com/bgoleno/opportun/issues/73).
- */
-function identitiesContradict(a: string | null, b: string | null): boolean {
-  return a !== null && b !== null && a !== b && siteOfIdentity(a) === siteOfIdentity(b);
-}
-
 /**
  * What this capture already corresponds to. Posting identity first, dedupe key second (D20):
  * the key carries a location, and a capture only has one when the optional `capture.linkedin`
@@ -469,40 +448,8 @@ async function acceptPending(
   }
 }
 
-/**
- * The leads the user accepted, or a capture took, into an opportunity. Not one ingest linked (#971):
- * nobody decided it, and it gave the opportunity nothing, so it says neither who holds a key nor where
- * a description came from (sec on https://github.com/bgoleno/opportun/pull/985).
- */
-async function leadsBehind(
-  db: Exec,
-  ctx: UserCtx,
-  opportunityId: string,
-): Promise<DiscoveryResultView[]> {
-  const rows = await db
-    .select({ id: discoveryResults.id })
-    .from(discoveryResults)
-    .where(
-      and(
-        eq(discoveryResults.userId, ctx.userId),
-        eq(discoveryResults.opportunityId, opportunityId),
-        eq(discoveryResults.disposition, 'accepted'),
-        or(isNull(discoveryResults.rankSkipReason), ne(discoveryResults.rankSkipReason, 'linked')),
-      ),
-    )
-    .all();
-  const results: DiscoveryResultView[] = [];
-  // One at a time: they all run on the transaction's one client.
-  for (const r of rows) results.push(await getResult(db, ctx, r.id));
-  return results;
-}
-
 /** The leads behind each opportunity already looked at: a card can have many postings of one key. */
 type LeadsRead = Map<string, DiscoveryResultView[]>;
-
-/** A lead of a location of its own, under a key that is not `key`. */
-const isElsewhere = (r: DiscoveryResultView, key: string): boolean =>
-  (r.posting.location ?? '').trim() !== '' && r.dedupeKey !== null && r.dedupeKey !== key;
 
 /**
  * The opportunity holding `key`, split by whether this capture may attach to it.
@@ -564,52 +511,6 @@ async function openOfCard(
   const chained = await findChainTarget(tx, ctx, key, posting);
   if (chained === undefined || chained === keptApartFrom?.opportunity.id) return null;
   return await getOpportunity(tx, ctx, chained);
-}
-
-/**
- * Whether the captured posting is known to be another than the opportunity's own
- * (https://github.com/bgoleno/opportun/issues/1037, tl): both places are there and differ, by the key's
- * own measure, or its id contradicts every lead behind it (of this place, when the places are the same).
- * What it says of its place, its link and its pay is then not the opportunity's.
- *
- * One found by its id is judged by what was stored of it (`sameId`), not by how its place reads this
- * time. It is never another when what was found of it (`found`, by id or key) is the result the
- * opportunity came from, whatever either's place reads as since. With no result of that kind, the oldest
- * of this place behind it stands for it: an opportunity made by hand has its first posting's facts.
- */
-async function isKnownOther(
-  tx: Exec,
-  ctx: UserCtx,
-  opp: OpportunityView,
-  posting: NormalizedPosting,
-  identity: string | null,
-  found: readonly DiscoveryResultView[] = [],
-  sameId: readonly DiscoveryResultView[] = [],
-): Promise<boolean> {
-  const placeOf = (location: string | null | undefined): string | null =>
-    (location ?? '').trim() === '' ? null : dedupeKey('', '', location);
-  const own = placeOf(opp.location);
-  const behind = await leadsBehind(tx, ctx, opp.id);
-  const ofThisPlace = behind.filter((r) => {
-    const place = placeOf(r.posting.location);
-    return own === null || place === null || place === own;
-  });
-  const origin =
-    behind.find((r) => r.id === opp.sourceRef) ??
-    ofThisPlace.sort((x, y) => x.createdAt - y.createdAt)[0];
-  if (found.some((r) => r.id === origin?.id)) return false;
-  const places = (sameId.length > 0 ? sameId.map((r) => r.posting) : [posting]).map((p) =>
-    placeOf(p.location),
-  );
-  if (own !== null && places.every((p) => p !== null && p !== own)) return true;
-  if (identity === null) return false;
-  const contradicts = (r: DiscoveryResultView): boolean =>
-    identitiesContradict(identity, identityBeside(identity, r));
-  if (sameId.length > 0) return origin !== undefined && contradicts(origin);
-  const here = own !== null && places.includes(own);
-  const key = dedupeKey(posting.company, posting.title, posting.location);
-  const asked = here ? behind.filter((r) => !isElsewhere(r, key)) : behind;
-  return asked.length > 0 && asked.every(contradicts);
 }
 
 /** Pending leads, the one to complete first: the sole `needs_capture`, else the oldest. */
@@ -1018,11 +919,16 @@ async function settleLead(
     opportunity = await openOfCard(tx, ctx, key, posting, keptApartFrom);
     if (opportunity !== null) {
       knownOther = await isKnownOther(tx, ctx, opportunity, posting, identity);
-      anotherPosting = true;
+      // Not where there is nothing it could be another than: it is the first one's own (#1064).
+      anotherPosting =
+        (opportunity.postingUrl ?? '') !== '' ||
+        (opportunity.location ?? '').trim() !== '' ||
+        (await leadsBehind(tx, ctx, opportunity.id)).length > 0;
     }
     const lead = await createLead(tx, ctx, posting);
     resultId = lead.id;
-    if (opportunity !== null) await recordFoldedLead(tx, ctx, opportunity.id, lead);
+    if (opportunity !== null && anotherPosting)
+      await recordFoldedLead(tx, ctx, opportunity.id, lead);
     createdOpportunity = opportunity === null;
     opportunity ??= await createOpportunity(
       tx,
