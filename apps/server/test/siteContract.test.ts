@@ -300,6 +300,15 @@ describe.each(SITE_MODULES.map((m): [string, SiteModule] => [m.identity.id, m]))
         expect(() => site.board!.configOf(named), JSON.stringify(bad)).toThrow();
         expect(() => site.board!.pageUrl(named), JSON.stringify(bad)).toThrow();
       }
+      // The first part alone, and with a letter more: no site is named, and none is made of it.
+      for (const bad of second === undefined ? [] : [first!, `${first}X`]) {
+        const named = { ...board, slug: bad };
+        expect(() => urls.board(named), bad).toThrow();
+        if (urls.page !== undefined) expect(() => urls.page!(named, 0), bad).toThrow();
+        if (urls.probe !== undefined) expect(() => urls.probe!(named), bad).toThrow();
+        expect(() => site.board!.configOf(named), bad).toThrow();
+        expect(() => site.board!.pageUrl(named), bad).toThrow();
+      }
       for (const bad of HOSTILE) {
         expect(site.board!.fromConfig({ org: bad }), bad).toBeNull();
         // Each part of a board that is more than one slug, in turn.

@@ -123,6 +123,8 @@ export function workdayPosting(url: SiteUrl): { externalPath: string; reqId: str
 /** The config of a board ref, or a throw: one whose host's first label is not its tenant is none. */
 function configOf(board: BoardRef): WorkdayConfig {
   const cut = board.slug.indexOf('/');
+  // Without one, slice() below would make a tenant and a site of a slug that names no site.
+  if (cut < 0) throw new Error('not a Workday board: no site');
   return WorkdayConfig.parse({
     host: board.host,
     tenant: board.slug.slice(0, cut),

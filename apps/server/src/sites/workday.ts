@@ -3,9 +3,10 @@
 // career site is addressed by tenant plus site on the tenant's own host,
 // `<tenant>.<dc>.myworkdayjobs.com`, whose datacenter label (`wd1`, `wd5`, `wd12`) is learned from a
 // URL and never derived. The candidate-experience (CXS) endpoints behind each company's careers site
-// are public and unauthenticated, the same class as the other ATS sites (C-2). Only the board's own exact host is ever allowed, from a config parsed at
-// that call, never the site's pattern: one tenant's source must not reach another's. Values are
-// passed on raw and the engine sanitizes every posting (the description HTML included) like any source's.
+// are public and unauthenticated, the same class as the other ATS sites (C-2). Only the board's own
+// exact host is ever allowed, from a config parsed at that call, never the site's pattern: one
+// tenant's source must not reach another's. Values are passed on raw and the engine sanitizes every
+// posting (the description HTML included) like any source's.
 //
 // The CXS contract, probed live on 2026-10-17 against tenant globexnetworks, site
 // globexexternalcareers (after the weekly service window ended):

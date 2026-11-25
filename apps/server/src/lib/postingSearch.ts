@@ -27,6 +27,7 @@ import {
   ATS_SOURCE_KINDS,
   getSource,
   hasSource,
+  SourceConfigError,
   type SourceContext,
   type SourceKind,
 } from '../adapters/discoverySource';
@@ -340,7 +341,15 @@ function referenceBoards(refs: AtsJobRef[], owned: Board[]): Board[] {
       slug: ref.org,
       ...(ref.host === undefined ? {} : { host: ref.host }),
     };
-    out.push({ kind: ref.kind, org: ref.org, config: boardConfig(board) });
+    let config: Record<string, unknown>;
+    try {
+      config = boardConfig(board);
+    } catch (err) {
+      // A stored reference that names no board: there is none to read, and the others still are.
+      if (!(err instanceof SourceConfigError)) throw err;
+      continue;
+    }
+    out.push({ kind: ref.kind, org: ref.org, config });
     if (out.length >= MAX_REFERENCE_BOARDS) break;
   }
   return out;
