@@ -788,6 +788,49 @@ test('case 21: Accept on a card whose role is at Applied elsewhere goes to it', 
   });
 });
 
+// The owner: one role is one opportunity (https://github.com/bgoleno/opportun/issues/1037).
+test('cases 64, 65, 70 and 84: a page of another place of an open role joins it, and the popup says so', async () => {
+  await atDesk(async (desk) => {
+    const another = 'This page is another posting of that job, and was added to its timeline.';
+    const first = posting('linkedin', 'Joined Role', {
+      description: `${DESCRIPTION}\nqa-mock: location is Austin.`,
+    });
+    desk.publish(first);
+    expect(await desk.capture(first)).toContain(ADDED);
+    const one = await desk.oneAtInterested(first);
+    for (const [site, place, stage] of [
+      ['linkedin', 'Denver', null],
+      ['indeed', 'Boston', 'applied'],
+    ] as const) {
+      if (stage !== null) {
+        for (const to of ['preparing', stage])
+          await desk.api('POST', `/opportunities/${one.id}/stage`, { to });
+      }
+      const next = posting(site, 'Joined Role', {
+        description: `Another text.\nqa-mock: location is ${place}.`,
+      });
+      desk.publish(next);
+      const at = stage === null ? 'Interested' : 'Applied';
+      expect(await desk.capture(next)).toBe(
+        `Already in your pipeline, at ${at}. ${another} Its own description was kept.`,
+      );
+      expect(await desk.capture(next)).toContain('This page was added to its timeline.');
+    }
+    const all = await desk.opportunities('Joined Role');
+    expect(all.map((o) => [o.id, o.stage, o.location, o.descriptionMd])).toEqual([
+      [one.id, 'applied', one.location, one.descriptionMd],
+    ]);
+    await desk.page.goto('/pipeline');
+    await expect(desk.page.getByRole('article', { name: 'Initech: Joined Role' })).toHaveCount(1);
+    await desk.page.goto(`/opportunities/${one.id}`);
+    await desk.page.getByRole('tab', { name: 'Timeline' }).click();
+    const timeline = desk.page.getByRole('list', { name: 'Timeline' });
+    await expect(timeline.getByText('Also posted via', { exact: false })).toHaveCount(2);
+    await expect(timeline).toContainText('Denver');
+    await expect(timeline).toContainText('Boston');
+  });
+});
+
 test('case 55: a location that arrives after the capture makes no card and is linked', async () => {
   await atDesk(async (desk) => {
     const p = posting('indeed', 'Later Place Role');

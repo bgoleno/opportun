@@ -182,7 +182,8 @@ and location. possible_duplicate_of names the existing opportunity a new one may
 duplicate, and is written in three ways. A forced create past an exact dedupe_key
 collision with a live opportunity records the one it was forced past: the user's
 Create anyway, or a browser capture kept apart from the opportunity holding its
-dedupe_key because every lead accepted against that opportunity is a different
+dedupe_key because that one is closed or dismissed (or at another level) and every
+lead accepted against it is a different
 posting on the capture's own site (posting identities only contradict on the same
 site; `keyHolder` in captureResolve.ts). The kept-apart capture also adds a `link`
 activity naming the other opportunity. A confirmed opportunity_dedupe_candidates

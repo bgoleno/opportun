@@ -95,7 +95,7 @@ Two opportunities are flagged as possible duplicates of each other when:
   same role. This needs AI to be set up.
 
 Capturing a job that matches an opportunity you already track usually fills that opportunity
-in, or joins it as [another posting of the same role](browser-extension.md#capturing). It is kept
+in, or joins it as [another posting of the same role](browser-extension.md#using-it). It is kept
 apart instead when that opportunity is Closed or Dismissed and everything it came from (job alert
 leads, accepted discovery results, earlier captures) is a different job on the same site, for
 example two LinkedIn jobs with different job ids. The capture then gets an opportunity of its
