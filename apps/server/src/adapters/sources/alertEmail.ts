@@ -60,7 +60,7 @@ export async function alertSource(db: Db, ctx: UserCtx): Promise<DiscoverySource
 
 export type DigestOutcome =
   | { status: 'processed'; runId: string; stats: RunStats }
-  | { status: 'skipped'; reason: 'missing' | 'not_digest' };
+  | { status: 'skipped'; reason: 'missing' | 'rejected' | 'not_digest' };
 
 /** Turns one stored digest into leads and marks the message; never calls the AI. */
 export async function processAlertDigest(
@@ -81,6 +81,7 @@ export async function processAlertDigest(
     .where(and(eq(communications.userId, ctx.userId), eq(communications.id, communicationId)))
     .get();
   if (row === undefined) return { status: 'skipped', reason: 'missing' };
+  if (row.rejectedAt !== null) return { status: 'skipped', reason: 'rejected' };
   if (!(await isAlertDigest(db, ctx, row.from))) return { status: 'skipped', reason: 'not_digest' };
   const text =
     body !== undefined && body.length > 0

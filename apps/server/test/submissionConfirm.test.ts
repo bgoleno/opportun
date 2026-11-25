@@ -21,6 +21,8 @@ import { ingestInbound } from '../src/jobs/mailIngest';
 import { ATS_SENDER_DOMAINS } from '../src/lib/submissionMatch';
 import { createOpportunity } from '../src/repos/opportunities';
 import { followUpSubmissions } from '../src/repos/submissionOutcome';
+import { rejectCommunication } from '../src/repos/reject';
+import { setRaceHook } from '../src/lib/racePoints';
 import { useApi } from './api';
 import type { TestClient } from './isolation';
 import { heldApart } from './race';
@@ -157,6 +159,21 @@ describe('criterion 1: a matching confirmation confirms, and the stage does not 
   // https://github.com/bgoleno/opportun/issues/176 item 1, the server half of "(unreadable)":
   // a From header that names no single mailbox gives the evidence card an empty address,
   // never the raw header (the web half shows "(unreadable)" for it, emailEvidence.test.tsx).
+  it('shows no subject once the message is rejected', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const { id } = await ingest(app, a, confirmation(s));
+    await rejectCommunication(app.db, ctxOf(a), id, {
+      reason: 'other',
+      expectedOpportunityId: null,
+    });
+    const detail = await api(a, 'GET', `/submissions/${s.id}`);
+    expect(detail.json()).toMatchObject({
+      status: 'confirmed',
+      confirmationEmail: { communicationId: id, subject: null },
+    });
+  });
+
   it('gives the evidence an empty sender address when the From header names no single mailbox', async () => {
     const { app, a } = await boot(ON);
     const s = await submittedAttempt(app, a);
@@ -169,6 +186,34 @@ describe('criterion 1: a matching confirmation confirms, and the stage does not 
     expect((await attempt(app, s.id)).status).toBe('confirmed');
     const detail = (await api(a, 'GET', `/submissions/${s.id}`)).json();
     expect(detail.confirmationEmail.fromAddress).toBe('');
+  });
+
+  it('a stored message is not matched when it is delivered again', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const msg = confirmation(s);
+    await ingest(app, a, msg, false);
+    const reached: string[] = [];
+    setRaceHook((point) => {
+      reached.push(point);
+      return Promise.resolve();
+    });
+    await ingest(app, a, msg);
+    // Control: the same words in a new message are.
+    expect(reached).toContain('mail.ingest');
+    expect(reached).not.toContain('mail.ingest.attemptLocked');
+    await ingest(app, a, confirmation(s));
+    expect(reached).toContain('mail.ingest.attemptLocked');
+  });
+
+  it("another user's copy of it does not count as stored", async () => {
+    const { app, a, b } = await boot(ON);
+    const s = await submittedAttempt(app, b);
+    const msg = confirmation(s);
+    await ingest(app, a, msg);
+    expect((await attempt(app, s.id)).status).toBe('submitted');
+    await ingest(app, b, msg);
+    expect((await attempt(app, s.id)).status).toBe('confirmed');
   });
 
   it('a re-delivered message does not confirm again, and a later outcome is not undone', async () => {
@@ -295,6 +340,22 @@ describe('triage: submission_window keeps an expected confirmation with no job w
     expect(vi.mocked(runStructured).mock.calls.some(([, task]) => task !== 'comms.classify')).toBe(
       false,
     );
+  });
+
+  it('such a note, stored and never queued, is not queued when it is delivered again', async () => {
+    const { app, a } = await boot(ON);
+    const s = await submittedAttempt(app, a);
+    const note = confirmation(s, { subject: 'Received', bodyText: `Ref ${s.ats.url}` });
+    const { id } = await ingest(app, a, note);
+    expect(await message(app, id)).toMatchObject({
+      triageDecision: 'passed',
+      triageRule: 'submission_window',
+    });
+    const before = await message(app, id);
+    await app.db.delete(jobs).run();
+    await ingest(app, a, note);
+    expect(await app.db.select().from(jobs).all()).toEqual([]);
+    expect({ ...(await message(app, id)), updatedAt: 0 }).toEqual({ ...before, updatedAt: 0 });
   });
 
   it('with the feature off, the same note is dropped and nothing is read or confirmed', async () => {
