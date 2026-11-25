@@ -17,12 +17,12 @@ import { enqueue } from '../lib/jobQueue';
 import type { AtsJobRef } from '@opportun/core';
 import { and, eq, isNotNull } from 'drizzle-orm';
 import { z } from 'zod';
-import { withTransaction, type Db } from '../db/client';
+import type { Db } from '../db/client';
 import { opportunities, settings, users } from '../db/schema';
 import { postingAtsJobRefKeeping } from '../lib/atsJobRef';
 import { racePoint } from '../lib/racePoints';
 import type { UserCtx } from '../repos/base';
-import { lockLiveAttempt, markPostingChanged } from '../repos/submissions';
+import { correctAtsJobRef } from '../repos/opportunities';
 import type { JobHandler } from './registry';
 
 export const BACKFILL_ATS_JOB_REFS_KIND = 'opportunities.backfill_ats_job_refs';
@@ -79,28 +79,8 @@ export async function backfillAtsJobRefs(db: Db, ctx: UserCtx): Promise<AtsJobRe
     if (sameRef(row.atsJobRef, ref)) continue;
     // Between the read above and this write, an attach, reconcile or URL edit may land.
     await racePoint('opportunities.backfillAtsJobRef.beforeWrite');
-    const changed = await withTransaction(db, async (tx) => {
-      // The live attempt's lock before the opportunity row (lock order: submissionScope).
-      const lockedAttempt = await lockLiveAttempt(tx, ctx, row.id);
-      const now = Date.now();
-      const written = await tx
-        .update(opportunities)
-        .set({ atsJobRef: ref, updatedAt: now })
-        .where(
-          and(
-            eq(opportunities.userId, ctx.userId),
-            eq(opportunities.id, row.id),
-            // The row as it was read: any write since (a ref, a new posting) wins.
-            eq(opportunities.postingUrl, row.postingUrl as string),
-            eq(opportunities.updatedAt, row.updatedAt),
-          ),
-        )
-        .returning({ id: opportunities.id });
-      // A corrected identity under a live attempt is a posting change like any other (#144).
-      if (written.length > 0) await markPostingChanged(tx, ctx, lockedAttempt, row.id, now);
-      return written;
-    });
-    if (changed.length === 0) continue;
+    const changed = await correctAtsJobRef(db, ctx, row, ref);
+    if (!changed) continue;
     if (ref === null) outcome.cleared += 1;
     else if (row.atsJobRef == null) outcome.set += 1;
     else outcome.changed += 1;
