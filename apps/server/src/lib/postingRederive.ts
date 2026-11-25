@@ -100,10 +100,12 @@ async function note(
   before: string,
   page: CapturedPage,
 ): Promise<void> {
+  const which =
+    page.siteName === null ? 'the captured page' : `the page captured from ${page.siteName}`;
   await createActivity(db, ctx, opportunityId, {
     kind: 'note',
     title: 'Description re-derived from capture',
-    bodyMd: `${before} the page captured from ${page.siteLabel}, already on this timeline.`,
+    bodyMd: `${before} ${which}, already on this timeline.`,
     occurredAt: Date.now(),
     participants: [],
     externalUrl: page.url,

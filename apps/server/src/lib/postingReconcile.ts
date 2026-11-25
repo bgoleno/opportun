@@ -26,9 +26,9 @@ import { siteLabel, siteOfLabel, siteOfUrl } from './captureSites';
 import { sourceLabel } from './sourceLabels';
 import {
   createActivity,
-  getActivity,
   listActivities,
   listCaptures,
+  textOfCapture,
   updateActivity,
 } from '../repos/activities';
 import type { UserCtx } from '../repos/base';
@@ -52,6 +52,8 @@ export interface ReconcileOutcome {
 export interface CapturedPage {
   text: string;
   siteLabel: string;
+  /** The site's own name, where it is one Opportun knows; `siteLabel` is what the entry's title says. */
+  siteName: string | null;
   siteId: string | null;
   /** Its posting's address, where that is a link. */
   url: string | null;
@@ -71,9 +73,19 @@ export async function capturedPage(
 ): Promise<CapturedPage | null> {
   const opp = await getOpportunity(db, ctx, opportunityId);
   const pages = await listCaptures(db, ctx, opportunityId);
-  const capture = await ownPage(db, ctx, opp, pages);
-  if (capture === undefined) return null;
-  const { bodyMd } = await getActivity(db, ctx, capture.id);
+  let left = pages;
+  let capture = await ownPage(db, ctx, opp, left);
+  let text: string | null = null;
+  while (capture !== undefined) {
+    const { id } = capture;
+    await racePoint('posting.capturedPage');
+    text = await textOfCapture(db, ctx, id);
+    if (text !== null) break;
+    // Deleted since it was listed: the next one.
+    left = left.filter((p) => p.id !== id);
+    capture = await ownPage(db, ctx, opp, left);
+  }
+  if (capture === undefined || text === null) return null;
   // "Captured from LinkedIn" names the site the merge heading has to read, and the site whose
   // extraction re-derive runs over the text (https://github.com/bgoleno/opportun/issues/93).
   // recordCapture writes that title for every capture; a title without it is read as LinkedIn,
@@ -86,8 +98,9 @@ export async function capturedPage(
   const site =
     siteOfLabel(label) ?? (capture.externalUrl == null ? null : siteOfUrl(capture.externalUrl));
   return {
-    text: bodyMd ?? '',
+    text,
     siteLabel: label,
+    siteName: site === null ? null : siteLabel(site.id),
     siteId: site?.id ?? null,
     url: httpLink(capture.externalUrl),
     ofSeveral: ofSeveralPostings(pages),
@@ -319,7 +332,8 @@ export async function confirm(
   // survived its grounding/dedup checks: comparing trimmed strings is the direct way to tell
   // whether anything was actually appended, rather than re-deriving its internal decision.
   const merged = patch.descriptionMd !== undefined && description.trim() !== atsText.trim();
-  const which = capture?.ofSeveral === true ? ` (${capture.siteLabel})` : '';
+  const which =
+    capture?.ofSeveral === true && capture.siteName !== null ? ` (${capture.siteName})` : '';
   const descriptionNote =
     patch.descriptionMd === undefined
       ? ''

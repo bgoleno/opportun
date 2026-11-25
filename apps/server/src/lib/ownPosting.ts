@@ -4,7 +4,8 @@
 // (https://github.com/bgoleno/opportun/issues/1063, lib/postingReconcile.ts).
 import { dedupeKey, type NormalizedPosting } from '@opportun/core';
 import { and, eq, isNull, ne, or } from 'drizzle-orm';
-import { discoveryResults } from '../db/schema';
+import { jsonText } from '../db/dialect';
+import { discoveryResults, discoveryRuns, discoverySources } from '../db/schema';
 import type { Exec, UserCtx } from '../repos/base';
 import { getResult, type DiscoveryResultView } from '../repos/discovery';
 import type { OpportunityView } from '../repos/opportunities';
@@ -12,6 +13,7 @@ import { postingIdentity } from './captureSites';
 
 /** The site part of a `<site>:<id>` identity. */
 const siteOfIdentity = (identity: string): string => identity.slice(0, identity.indexOf(':'));
+const bareIdOf = (identity: string): string => identity.slice(identity.indexOf(':') + 1);
 
 /**
  * True when two posting identities say the postings are different reqs. Only ids on the same
@@ -31,7 +33,7 @@ export function identitiesContradict(a: string | null, b: string | null): boolea
  * store a bare id that is a site's; from any other source it is opaque
  * (tl, https://github.com/bgoleno/opportun/issues/967#issuecomment-7120119028).
  */
-export function identityBeside(capture: string | null, result: DiscoveryResultView): string | null {
+export function identityBeside(capture: string | null, result: Lead): string | null {
   const own = postingIdentity(result.posting);
   if (own !== null || capture === null || result.sourceKind !== 'alert_email') return own;
   const bare = (result.posting.externalId ?? '').trim().toLowerCase();
@@ -67,8 +69,35 @@ export async function leadsBehind(
 }
 
 /** A lead of a location of its own, under a key that is not `key`. */
-export const isElsewhere = (r: DiscoveryResultView, key: string): boolean =>
+export const isElsewhere = (r: Lead, key: string): boolean =>
   (r.posting.location ?? '').trim() !== '' && r.dedupeKey !== null && r.dedupeKey !== key;
+
+/** What is asked of a result, and not its description: there can be many. */
+export type Lead = Pick<DiscoveryResultView, 'id' | 'dedupeKey' | 'sourceKind' | 'createdAt'> & {
+  posting: Pick<NormalizedPosting, 'company' | 'title' | 'location' | 'postingUrl' | 'externalId'>;
+};
+
+/** The results behind an opportunity, and the one that stands for where it came from. */
+interface Behind {
+  behind: readonly Lead[];
+  origin: Lead | undefined;
+}
+
+const placeOf = (location: string | null | undefined): string | null =>
+  (location ?? '').trim() === '' ? null : dedupeKey('', '', location);
+
+/** See isKnownOther: the result the opportunity came from, else the oldest of its place. */
+function behindOf(opp: OpportunityView, behind: readonly Lead[]): Behind {
+  const own = placeOf(opp.location);
+  const ofThisPlace = behind.filter((r) => {
+    const place = placeOf(r.posting.location);
+    return own === null || place === null || place === own;
+  });
+  const origin =
+    behind.find((r) => r.id === opp.sourceRef) ??
+    ofThisPlace.sort((x, y) => x.createdAt - y.createdAt)[0];
+  return { behind, origin };
+}
 
 /**
  * Whether the captured posting is known to be another than the opportunity's own
@@ -80,34 +109,28 @@ export const isElsewhere = (r: DiscoveryResultView, key: string): boolean =>
  * time. It is never another when what was found of it (`found`, by id or key) is the result the
  * opportunity came from, whatever either's place reads as since. With no result of that kind, the oldest
  * of this place behind it stands for it: an opportunity made by hand has its first posting's facts.
+ *
+ * `read`: what is behind it, for a caller that asks of many postings.
  */
 export async function isKnownOther(
   tx: Exec,
   ctx: UserCtx,
   opp: OpportunityView,
-  posting: NormalizedPosting,
+  posting: Lead['posting'],
   identity: string | null,
-  found: readonly DiscoveryResultView[] = [],
-  sameId: readonly DiscoveryResultView[] = [],
+  found: readonly Lead[] = [],
+  sameId: readonly Lead[] = [],
+  read?: Behind,
 ): Promise<boolean> {
-  const placeOf = (location: string | null | undefined): string | null =>
-    (location ?? '').trim() === '' ? null : dedupeKey('', '', location);
   const own = placeOf(opp.location);
-  const behind = await leadsBehind(tx, ctx, opp.id);
-  const ofThisPlace = behind.filter((r) => {
-    const place = placeOf(r.posting.location);
-    return own === null || place === null || place === own;
-  });
-  const origin =
-    behind.find((r) => r.id === opp.sourceRef) ??
-    ofThisPlace.sort((x, y) => x.createdAt - y.createdAt)[0];
+  const { behind, origin } = read ?? behindOf(opp, await leadsBehind(tx, ctx, opp.id));
   if (found.some((r) => r.id === origin?.id)) return false;
   const places = (sameId.length > 0 ? sameId.map((r) => r.posting) : [posting]).map((p) =>
     placeOf(p.location),
   );
   if (own !== null && places.every((p) => p !== null && p !== own)) return true;
   if (identity === null) return false;
-  const contradicts = (r: DiscoveryResultView): boolean =>
+  const contradicts = (r: Lead): boolean =>
     identitiesContradict(identity, identityBeside(identity, r));
   if (sameId.length > 0) return origin !== undefined && contradicts(origin);
   const here = own !== null && places.includes(own);
@@ -140,34 +163,78 @@ export async function ownPage<T extends { externalUrl: string | null }>(
   opp: OpportunityView,
   pages: readonly T[],
 ): Promise<T | undefined> {
-  const rows = await exec
-    .select({ id: discoveryResults.id })
-    .from(discoveryResults)
-    .where(
-      and(
-        eq(discoveryResults.userId, ctx.userId),
-        eq(discoveryResults.opportunityId, opp.id),
-        eq(discoveryResults.disposition, 'accepted'),
-      ),
-    )
-    .all();
-  const accepted: DiscoveryResultView[] = [];
-  for (const r of rows) accepted.push(await getResult(exec, ctx, r.id));
+  const accepted = await acceptedInto(exec, ctx, opp.id);
+  // As leadsBehind: not one that ingest linked.
+  const read = behindOf(
+    opp,
+    accepted.filter((r) => r.rankSkipReason !== 'linked'),
+  );
+  // By the id each carries, as there can be as many results as pages: identityBeside then decides.
+  const byId = new Map<string, Lead[]>();
+  const add = (id: string, r: Lead) => {
+    const there = byId.get(id);
+    if (there === undefined) byId.set(id, [r]);
+    else there.push(r);
+  };
+  for (const r of accepted) {
+    const identity = postingIdentity(r.posting);
+    const bare = (r.posting.externalId ?? '').trim().toLowerCase();
+    if (identity !== null) add(identity, r);
+    else if (bare !== '') add(bare, r);
+  }
   const others = new Map<string, boolean>();
   for (const page of pages) {
     const identity = identityOfPage(page);
     if (identity === null) return page;
     let isOther = others.get(identity);
     if (isOther === undefined) {
-      const known = accepted.filter((r) => identityBeside(identity, r) === identity);
+      const known = [identity, bareIdOf(identity)]
+        .flatMap((id) => byId.get(id) ?? [])
+        .filter((r) => identityBeside(identity, r) === identity);
       isOther =
         known[0] !== undefined &&
-        (await isKnownOther(exec, ctx, opp, known[0].posting, identity, known, known));
+        (await isKnownOther(exec, ctx, opp, known[0].posting, identity, known, known, read));
       others.set(identity, isOther);
     }
     if (!isOther) return page;
   }
-  const first = pages.at(-1);
-  if (first === undefined) return undefined;
-  return pages.find((p) => identityOfPage(p) === identityOfPage(first));
+  const last = pages.at(-1);
+  if (last === undefined) return undefined;
+  const first = identityOfPage(last);
+  return pages.find((p) => identityOfPage(p) === first);
+}
+
+/** The results accepted into an opportunity, those that ingest linked included, in one read. */
+async function acceptedInto(
+  exec: Exec,
+  ctx: UserCtx,
+  opportunityId: string,
+): Promise<(Lead & { rankSkipReason: string | null })[]> {
+  const rows = await exec
+    .select({
+      id: discoveryResults.id,
+      dedupeKey: discoveryResults.dedupeKey,
+      createdAt: discoveryResults.createdAt,
+      rankSkipReason: discoveryResults.rankSkipReason,
+      sourceKind: discoverySources.kind,
+      location: jsonText(discoveryResults.posting, 'location'),
+      postingUrl: jsonText(discoveryResults.posting, 'postingUrl'),
+      externalId: jsonText(discoveryResults.posting, 'externalId'),
+    })
+    .from(discoveryResults)
+    .innerJoin(discoveryRuns, eq(discoveryRuns.id, discoveryResults.runId))
+    .innerJoin(discoverySources, eq(discoverySources.id, discoveryRuns.sourceId))
+    .where(
+      and(
+        eq(discoveryResults.userId, ctx.userId),
+        eq(discoveryResults.opportunityId, opportunityId),
+        eq(discoveryResults.disposition, 'accepted'),
+      ),
+    )
+    .all();
+  return rows.map(({ location, postingUrl, externalId, ...row }) => ({
+    ...row,
+    // The company and the title are asked of a posting that no result has the id of: not of these.
+    posting: { company: '', title: '', location, postingUrl, externalId },
+  }));
 }

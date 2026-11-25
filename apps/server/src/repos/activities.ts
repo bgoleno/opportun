@@ -141,6 +141,16 @@ export async function listCaptures(
     .all();
 }
 
+/** A captured page's text; null when the entry has been deleted since, or has none. */
+export async function textOfCapture(db: Db, ctx: UserCtx, id: string): Promise<string | null> {
+  const row = await db
+    .select({ bodyMd: activities.bodyMd })
+    .from(activities)
+    .where(ownedActivity(ctx, id))
+    .get();
+  return row === undefined || row.bodyMd === '' ? null : row.bodyMd;
+}
+
 export async function getActivitySync(exec: Exec, ctx: UserCtx, id: string): Promise<ActivityRow> {
   const row = await exec.select().from(activities).where(ownedActivity(ctx, id)).get();
   if (row === undefined) throw notFound();

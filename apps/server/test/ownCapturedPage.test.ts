@@ -10,16 +10,25 @@ import { reconcilePosting } from '../src/jobs/postingReconcile';
 import { resolveCapture } from '../src/lib/captureResolve';
 import { insertLeads } from '../src/lib/discoveryIngest';
 import { descriptionFingerprint } from '../src/lib/postingFingerprint';
+import { ownPage } from '../src/lib/ownPosting';
 import { capturedPage } from '../src/lib/postingReconcile';
 import { rederivePosting } from '../src/lib/postingRederive';
 import type { BoardLookup } from '../src/lib/postingSearch';
 import type { safeFetch } from '../src/lib/safeFetch';
-import { createActivity } from '../src/repos/activities';
+import { createActivity, listCaptures } from '../src/repos/activities';
 import { createCompany } from '../src/repos/companies';
-import { createRun, ensureChannelSource, insertResult } from '../src/repos/discovery';
+import {
+  createRun,
+  ensureChannelSource,
+  insertResult,
+  setDisposition,
+} from '../src/repos/discovery';
 import { createOpportunity, getOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
+import { testDialect } from './db';
 import type { TestClient } from './isolation';
+import { pauseAt, whileParked } from './race';
+import { CPU_CLOCK, cpuMs } from './scaling';
 
 vi.mock('@opportun/ai', async (orig) => ({
   ...(await orig<typeof import('@opportun/ai')>()),
@@ -350,6 +359,97 @@ describe.each(SITES)('the captured page that is read, on %s', (site) => {
     expect(await reads(app, a, id)).toEqual(both('own1'));
   });
 
+  // A linked one gave the opportunity nothing, so it does not stand for where it came from.
+  it('a posting linked before its first page, of no known place: not what it came from', async () => {
+    const { app, a } = await boot();
+    await onBoard(app, a);
+    const id = await byHand(app, a);
+    const source = await ensureChannelSource(app.db, ctxOf(a), 'alert_email');
+    const linked = postingAt(BOSTON, null, 'card', { externalId: idOf(BOSTON) });
+    await insertLeads(app.db, ctxOf(a), [linked], source.id);
+    expect(await app.db.select().from(discoveryResults).all()).toMatchObject([
+      { rankSkipReason: 'linked', opportunityId: id },
+    ]);
+    expect(await capture(app, a, OWN, HERE, 'own1')).toBe(id);
+    expect(await capture(app, a, BOSTON, null, 'boston1')).toBe(id);
+    expect(await reads(app, a, id)).toEqual(both('own1'));
+  });
+
+  describe('a result knows a page', () => {
+    /** A result of the role accepted into it, and a page of BOSTON; its own page came before. */
+    async function known(
+      app: FastifyInstance,
+      a: TestClient,
+      results: readonly [kind: 'alert_email' | 'manual', posting: Partial<NormalizedPosting>][],
+      at: At = BOSTON,
+    ) {
+      await onBoard(app, a);
+      const id = await capture(app, a, OWN, HERE, 'own1');
+      for (const [kind, over] of results) {
+        const source = await ensureChannelSource(app.db, ctxOf(a), kind);
+        const run = await createRun(app.db, ctxOf(a), { sourceId: source.id });
+        const posting = postingAt(at, THERE, 'x', over);
+        const result = await insertResult(app.db, ctxOf(a), {
+          runId: run.id,
+          posting,
+          dedupeKey: dedupeKey(posting.company, posting.title, posting.location),
+          resolution: 'full',
+        });
+        await setDisposition(app.db, ctxOf(a), result.id, 'accepted', id);
+      }
+      await new Promise((r) => setTimeout(r, 3));
+      await createActivity(app.db, ctxOf(a), id, {
+        kind: 'capture',
+        title: `Captured from ${LABEL[at[0]]}`,
+        bodyMd: textOf(at[0], 'boston1'),
+        occurredAt: Date.now(),
+        participants: [],
+        externalUrl: urlOf(at),
+      });
+      return id;
+    }
+    const BOARD = 'https://jobs.example.com/r/abc';
+
+    it.each([
+      ['by its link', 'manual', { externalId: null }, 'own1'],
+      ['by its id', 'manual', { postingUrl: null }, 'own1'],
+      [
+        'by the bare id of an alert',
+        'alert_email',
+        { postingUrl: BOARD, externalId: 'ID' },
+        'own1',
+      ],
+      // Another source's bare id is its own, whatever it looks like.
+      [
+        'not by that of another source',
+        'manual',
+        { postingUrl: BOARD, externalId: 'ID' },
+        'boston1',
+      ],
+    ] as const)('%s', async (_how, kind, over, expected) => {
+      const { app, a } = await boot();
+      const bareId = 'externalId' in over && over.externalId === 'ID' ? idOf(BOSTON) : undefined;
+      const id = await known(app, a, [
+        [kind, { ...over, ...(bareId === undefined ? {} : { externalId: bareId }) }],
+      ]);
+      expect(await reads(app, a, id)).toEqual(both(expected));
+    });
+
+    it('each that has its id is asked', async () => {
+      const { app, a } = await boot();
+      const id = await known(
+        app,
+        a,
+        [
+          ['manual', {}],
+          ['manual', { location: HERE }],
+        ],
+        [other, 2],
+      );
+      expect(await reads(app, a, id)).toEqual(both('boston1'));
+    });
+  });
+
   it('what a merge brings is judged as what joined', async () => {
     const { app, a } = await boot();
     await onBoard(app, a);
@@ -374,6 +474,25 @@ describe.each(SITES)('the captured page that is read, on %s', (site) => {
     expect((await capturedPage(app.db, ctxOf(a), into))?.text).toBe(textOf(site, 'boston1'));
     await capture(app, a, OWN, HERE, 'own2');
     expect((await capturedPage(app.db, ctxOf(a), into))?.text).toBe(textOf(site, 'boston1'));
+  });
+
+  it('a page deleted while it is read: the next one', async () => {
+    const { app, a } = await boot();
+    const id = await capture(app, a, OWN, HERE, 'own1');
+    await capture(app, a, BOSTON, THERE, 'boston1');
+    await capture(app, a, OWN, HERE, 'own2');
+    const pause = pauseAt('posting.capturedPage');
+    const reading = capturedPage(app.db, ctxOf(a), id);
+    const [page] = await Promise.all([
+      reading,
+      whileParked(pause, () =>
+        app.db
+          .delete(activities)
+          .where(and(eq(activities.opportunityId, id), eq(activities.bodyMd, textOf(site, 'own2'))))
+          .run(),
+      ),
+    ]);
+    expect(page?.text).toBe(textOf(site, 'own1'));
   });
 
   it('more than fifty entries later too', async () => {
@@ -446,6 +565,48 @@ describe.each(SITES)('the captured page that is read, on %s', (site) => {
       expect(note.externalUrl).toBeNull();
     });
 
+    // Anyone can write an entry's title; a note names a site only when it is one Opportun knows.
+    it.each([
+      ['Captured from [a site](https://example.com)', 'the captured page'],
+      ['My own copy', `the page captured from ${LABEL[site]}`],
+      ['Captured from somewhere', `the page captured from ${LABEL[site]}`],
+    ])('an entry titled %j', async (title, said) => {
+      const { app, a } = await boot();
+      await onBoard(app, a);
+      const id = await byHand(app, a);
+      // A title that names no site is read as LinkedIn's, as ever.
+      const at: At = ['linkedin', 1];
+      await createActivity(app.db, ctxOf(a), id, {
+        kind: 'capture',
+        title,
+        bodyMd: textOf('linkedin', 'bare1'),
+        occurredAt: Date.now(),
+        participants: [],
+        externalUrl: title.includes('(https') ? 'https://example.com/j/1' : urlOf(at),
+      });
+      expect((await rederive(app, a, id, board())).kind).toBe('merged');
+      expect((await noteOf(app, id, REDERIVED)).bodyMd).toBe(
+        `A confident match on the company's board took priority, merged as usual with ${said.replace('Indeed', 'LinkedIn')}, already on this timeline.`,
+      );
+    });
+
+    it('the check names the site of the page’s link, where the title names none', async () => {
+      const { app, a } = await boot();
+      await onBoard(app, a);
+      const id = await capture(app, a, OWN, HERE, 'own1');
+      await capture(app, a, [other, 2], THERE, 'boston1');
+      await app.db
+        .update(activities)
+        .set({ title: 'Captured from [a site](https://example.com)' })
+        .where(and(eq(activities.opportunityId, id), eq(activities.externalUrl, urlOf(OWN))))
+        .run();
+      vi.mocked(runStructured).mockResolvedValue({ passages: [sentence('own1')] });
+      expect(await checked(app, a, id)).toBe('own1');
+      expect((await noteOf(app, id, CONFIRMED)).bodyMd).toContain(
+        `details only the captured page (${LABEL[site]}) had.`,
+      );
+    });
+
     it.each([['javascript:alert(1)'], [null]])('no link for a page of %j', async (url) => {
       const { app, a } = await boot();
       const id = await byHand(app, a);
@@ -461,4 +622,86 @@ describe.each(SITES)('the captured page that is read, on %s', (site) => {
       expect((await noteOf(app, id, REDERIVED)).externalUrl).toBeNull();
     });
   });
+});
+
+describe('with many postings of the role', () => {
+  /** An opportunity that `n` postings joined, each with a page, and its own page before them. */
+  async function joined(app: FastifyInstance, c: TestClient, n: number) {
+    const id = await capture(app, c, ['linkedin', 1], HERE, 'own1');
+    const source = await ensureChannelSource(app.db, ctxOf(c), 'extension');
+    const run = await createRun(app.db, ctxOf(c), { sourceId: source.id });
+    const text = 'What another page says. '.repeat(800);
+    for (let i = 0; i < n; i += 1) {
+      const at: At = ['linkedin', 100 + i];
+      const posting = postingAt(at, `Town ${i}`, 'x', { descriptionMd: text });
+      const result = await insertResult(app.db, ctxOf(c), {
+        runId: run.id,
+        posting,
+        dedupeKey: dedupeKey(posting.company, posting.title, posting.location),
+        resolution: 'full',
+      });
+      await setDisposition(app.db, ctxOf(c), result.id, 'accepted', id);
+      await createActivity(app.db, ctxOf(c), id, {
+        kind: 'capture',
+        title: 'Captured from LinkedIn',
+        bodyMd: textOf('linkedin', `joined${i}`),
+        occurredAt: Date.now() + 1000 + i,
+        participants: [],
+        externalUrl: urlOf(at),
+      });
+    }
+    return id;
+  }
+
+  it('the results are read once, however many pages there are', async () => {
+    const { app, a, b } = await boot();
+    const reads: number[] = [];
+    for (const [c, n] of [
+      [a, 3],
+      [b, 24],
+    ] as const) {
+      const id = await joined(app, c, n);
+      const opp = await getOpportunity(app.db, ctxOf(c), id);
+      const pages = await listCaptures(app.db, ctxOf(c), id);
+      expect(pages).toHaveLength(n + 1);
+      let selects = 0;
+      const counted = new Proxy(app.db, {
+        get(target, key) {
+          if (key === 'select') selects += 1;
+          const value = Reflect.get(target, key, target) as unknown;
+          return typeof value === 'function' ? (value.bind(target) as unknown) : value;
+        },
+      });
+      expect((await ownPage(counted, ctxOf(c), opp, pages))?.id).toBe(pages.at(-1)!.id);
+      reads.push(selects);
+    }
+    expect(reads).toEqual([1, 1]);
+  });
+
+  // The shape of the cost and not a bound: four times the postings, and not sixteen times the work.
+  // SQLite's alone, whose reads are work of this thread.
+  it.runIf(testDialect !== 'postgres')(
+    'the work grows with the pages',
+    async () => {
+      const { app, a, b } = await boot();
+      const cost: number[] = [];
+      for (const [c, n] of [
+        [a, 30],
+        [b, 120],
+      ] as const) {
+        const id = await joined(app, c, n);
+        let best = Number.POSITIVE_INFINITY;
+        for (let i = 0; i < 5; i += 1) {
+          const started = cpuMs();
+          for (let j = 0; j < 4; j += 1) await capturedPage(app.db, ctxOf(c), id);
+          best = Math.min(best, cpuMs() - started);
+        }
+        cost.push(best);
+      }
+      expect(cost[1]! / cost[0]!, `${cost[1]} ms of ${CPU_CLOCK} against ${cost[0]}`).toBeLessThan(
+        9,
+      );
+    },
+    120_000,
+  );
 });
