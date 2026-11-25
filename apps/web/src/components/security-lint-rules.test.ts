@@ -11,7 +11,21 @@ import { describe, expect, it } from 'vitest';
 
 // import.meta.dirname, not new URL('..', import.meta.url): under jsdom, URL is jsdom's.
 const repoRoot = resolve(import.meta.dirname, '../../../..');
-const eslint = new ESLint({ cwd: repoRoot });
+/**
+ * The repo's real config, without the type information its server block asks for, which no
+ * eslint-plugin-security rule reads, and with that plugin's rules alone run, as a rule that does read
+ * it fails without (https://github.com/bgoleno/opportun/issues/1039). Building it took the first
+ * server fixture 3.6 s, 4.6 s of CPU, and past the test timeout on a busy host. Which rules are on,
+ * for which files, at which level and with which options is the config's own, untouched.
+ */
+const eslint = new ESLint({
+  cwd: repoRoot,
+  overrideConfig: { languageOptions: { parserOptions: { projectService: false } } },
+  ruleFilter: ({ ruleId }) => ruleId.startsWith('security/'),
+});
+// What is left that is slow, loading the config and its plugins (about a second), is done once and
+// here, as the file is loaded, which no test's time bounds.
+await eslint.calculateConfigForFile(join(repoRoot, 'apps/web/src/lint-fixture.ts'));
 
 /** Each eslint-plugin-security rule that is an error so far, with a fixture that hits it. */
 const ERROR_RULES = [
@@ -37,10 +51,8 @@ const ERROR_RULES = [
   ],
 ] as const;
 
-// One source file per package, and a server test file, which has config blocks of its own. The
-// server's files are type-checked (projectService), which parses only files its tsconfig holds, so
-// those two fixtures take the path of a real file: the fixture's text is linted in its place, and
-// the file on disk is not changed.
+// One source file per package, and a server test file, which has config blocks of its own. Only the
+// path counts: the fixture's text is linted in its place, and a file there is not read or changed.
 const PATHS = [
   'apps/server/src/app.ts',
   'apps/server/test/helpers.ts',
