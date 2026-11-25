@@ -3,15 +3,24 @@
 // again, and used only if it is this one; the two other channels have their snippet; and a message the
 // user has blocked since is not sent at all. The same holds for the backfill of a new key, which has no
 // text of its own either. Every message is made up.
+import { readFileSync } from 'node:fs';
 import { AiUnavailableError, runStructured } from '@opportun/ai';
 import { eq } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { communications, jobs, opportunities, taskRuns, users } from '../src/db/schema';
+import {
+  communications,
+  discoveryResults,
+  jobs,
+  opportunities,
+  taskRuns,
+  users,
+} from '../src/db/schema';
 import { backfillClassify } from '../src/jobs/classifyBackfill';
 import { enqueueClassify } from '../src/lib/mailClassifyQueue';
 import { invalidateTriageContext } from '../src/lib/triageContext';
 import { sweepWaitingMessages } from '../src/jobs/classifyWaiting';
+import { reclassify } from '../src/repos/communications';
 import { createRule } from '../src/repos/mailFilters';
 import { createOpportunity } from '../src/repos/opportunities';
 import { useApi } from './api';
@@ -30,6 +39,8 @@ import {
 } from './classifyWaitingFixtures';
 import { connectGoogle, fakeGoogle, type FakeMail } from './fakeGoogle';
 import type { TestClient } from './isolation';
+import { pauseAt, whileParked } from './race';
+import { storeBodyFor } from './storedBody';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -450,14 +461,91 @@ describe('a message the user has blocked since', () => {
     await drain(app, a);
     expect(await rowOf(app, id)).toMatchObject({ classifyWait: 'blocked', classification: null });
   });
+});
 
-  it('a digest that waits is read as one, with no call, though its share of the budget is there', async () => {
+describe('an alert digest whose first job failed', () => {
+  const DIGEST = readFileSync(
+    new URL('./fixtures/alerts/linkedin-alert.txt', import.meta.url),
+    'utf8',
+  );
+  const SENDER = 'jobalerts-noreply@linkedin.com';
+  const digest: Stored = { ...row, from: SENDER, subject: 'Your job alert', wait: 'failed' };
+  const leads = async (app: FastifyInstance) =>
+    (await app.db.select().from(discoveryResults).all()).length;
+
+  it('is read again from Gmail, makes its leads, and no call', async () => {
     const { app, a } = await boot();
-    const id = await stored(app, a, { from: 'jobalerts-noreply@linkedin.com', wait: 'failed' });
-    await drain(app, a);
+    mail('m1', { from: SENDER, subject: 'Your job alert', text: DIGEST });
+    const id = await stored(app, a, { ...digest, channel: 'gmail', externalId: 'm1' });
+    expect(await drain(app, a)).toEqual({ classified: 0, left: 0, stopped: null });
+    expect(google.gmail.calls).toEqual(['messages.get']);
+    expect(await leads(app)).toBe(3);
     expect(shown()).toEqual([]);
     expect(await rowOf(app, id)).toMatchObject({
       classification: 'other',
+      classifyWait: null,
+      classifyTriedAt: null,
+    });
+  });
+
+  it.each([
+    ['Gmail has another message of that id', 'gmail', { subject: 'Another' }],
+    ['it is gone from Gmail', 'gmail', null],
+    ['its channel cannot be asked', 'apple_mail', null],
+    ['its channel cannot be asked', 'linkedin', null],
+  ] as [string, 'gmail' | 'apple_mail' | 'linkedin', Partial<FakeMail> | null][])(
+    '%s (%s): nothing is made of its snippet, and it says it failed',
+    async (_name, channel, other) => {
+      const { app, a } = await boot();
+      if (other !== null) mail('m1', { from: SENDER, text: DIGEST, ...other });
+      const snippet = DIGEST.slice(0, 500);
+      const id = await stored(app, a, { ...digest, snippet, channel, externalId: 'm1' });
+      expect(await drain(app, a)).toEqual({ classified: 0, left: 1, stopped: null });
+      expect(await leads(app)).toBe(0);
+      expect(shown()).toEqual([]);
+      expect(await rowOf(app, id)).toMatchObject({ classification: null, classifyWait: 'failed' });
+    },
+  );
+
+  it('the same in the backfill of a new key', async () => {
+    const { app, a } = await boot();
+    const id = await stored(app, a, { ...digest, wait: null, snippet: DIGEST.slice(0, 500) });
+    await backfillClassify(app.db, ctxOf(a));
+    await app.jobs.drain();
+    expect(await leads(app)).toBe(0);
+    expect(await waitOf(app, id)).toBe('failed');
+  });
+
+  it('a stored text, as an older version kept it, is read', async () => {
+    const { app, a } = await boot();
+    const id = await stored(app, a, digest);
+    await storeBodyFor(app, a.userId, id, DIGEST);
+    await drain(app, a);
+    expect(await leads(app)).toBe(3);
+    expect((await rowOf(app, id)).classification).toBe('other');
+  });
+
+  it('its job’s own text is read, and no Gmail', async () => {
+    const { app, a } = await boot();
+    const id = await stored(app, a, { ...digest, wait: null });
+    await enqueueClassify(app.db, ctxOf(a), id, DIGEST);
+    await app.jobs.drain();
+    expect(google.gmail.calls).toEqual([]);
+    expect(await leads(app)).toBe(3);
+  });
+
+  it('the user’s correction while it is read stands', async () => {
+    const { app, a } = await boot();
+    mail('m1', { from: SENDER, subject: 'Your job alert', text: DIGEST });
+    const id = await stored(app, a, { ...digest, channel: 'gmail', externalId: 'm1' });
+    const pause = pauseAt('alertDigest.mark');
+    const tried = drain(app, a);
+    await whileParked(pause, () =>
+      reclassify(app.db, ctxOf(a), id, { classification: 'networking' }),
+    );
+    await tried;
+    expect(await rowOf(app, id)).toMatchObject({
+      classification: 'networking',
       classifyWait: null,
       classifyTriedAt: null,
     });

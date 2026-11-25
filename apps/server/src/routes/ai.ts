@@ -51,6 +51,7 @@ import { IdParams } from './common';
 import { DISCOVERY_RANK_KIND } from '../lib/jobKinds';
 import { resumeClassifyAfterKeyChange } from '../jobs/classifyWaiting';
 import { resumeAfterKeyChange } from '../jobs/discoveryRankWaiting';
+import { resumeAllAfterKeyChange } from '../jobs/keyChange';
 
 const TaskKeySchema = z.enum(TASK_KEYS);
 
@@ -375,10 +376,7 @@ export async function aiRoutes(app: FastifyInstance): Promise<void> {
         detail: { id: req.params.secretId, provider: result.provider, ok: result.ok },
       });
       // The way back for a key the provider rejected and has since restored: the card says so.
-      if (result.ok) {
-        await resumeAfterKeyChange(db, ctx);
-        await resumeClassifyAfterKeyChange(db, ctx);
-      }
+      if (result.ok) await resumeAllAfterKeyChange(db, ctx);
       return result;
     },
   );

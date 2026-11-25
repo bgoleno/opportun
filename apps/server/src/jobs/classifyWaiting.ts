@@ -6,7 +6,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { AiUnavailableError } from '@opportun/ai';
 import type { ClassifyWait } from '@opportun/core';
 import { z } from 'zod';
-import { withTransaction, type Db } from '../db/client';
+import { lockScope, withTransaction, type Db } from '../db/client';
 import { enqueue } from '../lib/jobQueue';
 import { CLASSIFY_WAITING_KIND } from '../lib/mailClassifyQueue';
 import { racePoint } from '../lib/racePoints';
@@ -71,6 +71,9 @@ export async function resumeClassifyAfterKeyChange(db: Db, ctx: UserCtx): Promis
   await withTransaction(
     db,
     async (tx) => {
+      // The user's lock before any row, as for what else writes several of a user's messages, and
+      // after the key's: nothing takes these two the other way (the order is at submissionScope).
+      await lockScope(tx, `user:${ctx.userId}`);
       const now = Date.now();
       await writeClassifyKeyChangedAt(tx, ctx, now);
       await clearClassifyKeyRejected(tx, ctx, now);

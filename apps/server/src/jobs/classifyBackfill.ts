@@ -2,14 +2,15 @@
 // classifier (reason no_key) and stay unclassified; when an ai_api_key secret is added, this job
 // queues comms.classify for each of them. It reads newest first, in (sentAt, id) order, 100 at a time,
 // and only rows with classification IS NULL that no later try takes by itself (jobs/classifyWaiting,
-// #1050). Classify jobs are deduped per message, so a second key add while earlier ones are still
+// #1050): those that say no key or an unusable answer, or nothing, and the ones too old for a try. Classify jobs are deduped per message, so a second key add while earlier ones are still
 // pending queues nothing new.
 import { enqueueClassify } from '../lib/mailClassifyQueue';
 import { enqueue } from '../lib/jobQueue';
-import { and, desc, eq, inArray, isNull, lt, ne, or } from 'drizzle-orm';
+import { and, desc, eq, lt, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client';
 import { communications } from '../db/schema';
+import { backfillTakes } from '../repos/classifyWait';
 import type { UserCtx } from '../repos/base';
 import type { JobHandler } from './registry';
 
@@ -37,6 +38,7 @@ type Cursor = { sentAt: number; id: string } | null;
 
 /** Enqueues comms.classify for every unclassified message of the user; returns how many. */
 export async function backfillClassify(db: Db, ctx: UserCtx): Promise<number> {
+  const now = Date.now();
   let after: Cursor = null;
   let queued = 0;
   for (;;) {
@@ -46,19 +48,11 @@ export async function backfillClassify(db: Db, ctx: UserCtx): Promise<number> {
       .where(
         and(
           eq(communications.userId, ctx.userId),
-          isNull(communications.classification),
-          isNull(communications.rejectedAt),
-          // Stage 1 blocked these, so they have no classification and never will. Without this
-          // they stay eligible forever and the next key add sends every blocked sender's From
-          // header to the model: the body is gone, but "this user hears from a clinic" is
-          // exactly the fact the filter exists to keep local.
-          or(isNull(communications.triageDecision), ne(communications.triageDecision, 'filtered')),
-          // Not one that waits, or it would be tried twice; nor one whose key was refused, which the
-          // key change ends, nor one the user has blocked since.
-          or(
-            isNull(communications.classifyWait),
-            inArray(communications.classifyWait, ['no_key', 'invalid_output']),
-          ),
+          // Not one that a later try takes, or it would be tried twice. Nor one Stage 1 blocked: those
+          // have no classification and never will, and the next key add would send every blocked
+          // sender's From header to the model: the body is gone, but "this user hears from a clinic"
+          // is exactly the fact the filter exists to keep local.
+          backfillTakes(now),
           after === null
             ? undefined
             : or(

@@ -42,8 +42,11 @@ export const CLASSIFY_WAIT_DAYS = 30;
  */
 export const CLASSIFY_WAITING_SHARE = 0.5;
 
-/** The reasons a later try takes by themselves (`trying` is one from an earlier day only). */
-const TAKEN = ['budget_exceeded', 'provider_error', 'failed'] as const;
+/** The reasons a later try takes every time. */
+const TAKEN = ['budget_exceeded', 'provider_error'] as const;
+
+/** Begun on an earlier UTC day. */
+const triedBefore = (now: number): SQL => lt(communications.classifyTriedAt, startOfUtcDay(now));
 
 /** Unclassified mail that may reach the model: passed by the filter and not rejected. */
 const unclassified = (): SQL =>
@@ -73,12 +76,32 @@ const waits = (now: number): SQL =>
       inArray(communications.classifyWait, [...TAKEN]),
       // Set before the call and cleared by its end: one from an earlier day ended with its process. So
       // a message that ends the process does it once a day, not every hour (#588).
+      and(eq(communications.classifyWait, 'trying'), triedBefore(now)),
+      // Nor one that fails, as its call may have been paid for; a first job's at once.
       and(
-        eq(communications.classifyWait, 'trying'),
-        lt(communications.classifyTriedAt, startOfUtcDay(now)),
+        eq(communications.classifyWait, 'failed'),
+        or(isNull(communications.classifyTriedAt), triedBefore(now)),
       ),
     ),
     noUnfinishedJob(),
+  ) as SQL;
+
+/**
+ * What the backfill of a new key takes (jobs/classifyBackfill): all that no later try does by itself,
+ * the old ones too, whatever they say. Not one the user has blocked, nor one whose try is under way.
+ */
+export const backfillTakes = (now: number): SQL =>
+  and(
+    unclassified(),
+    or(
+      isNull(communications.classifyWait),
+      inArray(communications.classifyWait, ['no_key', 'invalid_output']),
+      and(
+        lt(communications.createdAt, now - CLASSIFY_WAIT_DAYS * DAY_MS),
+        ne(communications.classifyWait, 'blocked'),
+        or(ne(communications.classifyWait, 'trying'), triedBefore(now)),
+      ),
+    ),
   ) as SQL;
 
 /**
@@ -192,13 +215,10 @@ export async function usersWithWaitingMessages(
 
 /**
  * Whether a message of the caller's says their key was refused: nothing is sent until that ends
- * (clearClassifyKeyRejected). One over the 30 days stops nothing, as nothing ends it.
+ * (clearClassifyKeyRejected). Of any age, as that is: a new key's backfill takes old mail too, and each
+ * would be sent to a key that is refused.
  */
-export async function classifyKeyRejected(
-  exec: Exec,
-  ctx: UserCtx,
-  now: number = Date.now(),
-): Promise<boolean> {
+export async function classifyKeyRejected(exec: Exec, ctx: UserCtx): Promise<boolean> {
   const row = await exec
     .select({ id: communications.id })
     .from(communications)
@@ -207,7 +227,6 @@ export async function classifyKeyRejected(
         ownedBy(communications.userId, ctx),
         eq(communications.classifyWait, 'key_rejected'),
         unclassified(),
-        recent(now),
       ),
     )
     .limit(1)
@@ -215,7 +234,10 @@ export async function classifyKeyRejected(
   return row !== undefined;
 }
 
-/** Ends that stop: what the refused key left waits for a later try. The caller holds keyChangeScope. */
+/**
+ * Ends that stop: what the refused key left waits for a later try, or is too old for one. The caller
+ * holds keyChangeScope.
+ */
 export async function clearClassifyKeyRejected(
   exec: Exec,
   ctx: UserCtx,
@@ -225,11 +247,7 @@ export async function clearClassifyKeyRejected(
     .update(communications)
     .set({ classifyWait: 'provider_error', updatedAt: now })
     .where(
-      and(
-        ownedBy(communications.userId, ctx),
-        eq(communications.classifyWait, 'key_rejected'),
-        recent(now),
-      ),
+      and(ownedBy(communications.userId, ctx), eq(communications.classifyWait, 'key_rejected')),
     )
     .run();
 }
@@ -271,6 +289,13 @@ export type UnclassifiedCounts = Record<
   number
 >;
 
+/** These wait for the user, whatever their age. */
+const OF_THE_USER: ReadonlySet<ClassifyWait> = new Set([
+  'key_rejected',
+  'no_key',
+  'invalid_output',
+]);
+
 /**
  * What the Inbox says of the mail that is not classified. Not one whose first job is not over (it says
  * nothing yet), nor one the user has blocked since. One that only its age keeps from a later try is
@@ -310,8 +335,7 @@ export async function countUnclassified(
   };
   for (const row of rows) {
     if (row.wait === null || row.wait === 'blocked') continue;
-    // These two wait for the user, whatever their age.
-    const old = row.wait === 'no_key' || row.wait === 'invalid_output' ? 0 : Number(row.old);
+    const old = OF_THE_USER.has(row.wait) ? 0 : Number(row.old);
     out[row.wait] = Number(row.n) - old;
     out.no_longer_tried += old;
   }

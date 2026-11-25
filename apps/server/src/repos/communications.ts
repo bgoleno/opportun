@@ -1096,7 +1096,8 @@ export async function markAlertDigest(exec: Exec, ctx: UserCtx, id: string): Pro
       ...NOT_WAITING,
       updatedAt: Date.now(),
     })
-    .where(and(ownedComm(ctx, id), notRejected()))
+    // The user's own correction, made while it was read, stands (#1050).
+    .where(and(ownedComm(ctx, id), notRejected(), isNull(communications.classification)))
     .run();
 }
 

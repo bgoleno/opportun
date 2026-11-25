@@ -12,9 +12,13 @@ import {
   CLASSIFY_BACKFILL_KIND,
   enqueueClassifyBackfill,
 } from '../src/jobs/classifyBackfill';
-import { CLASSIFY_WAITING_SWEEP_KIND, sweepWaitingMessages } from '../src/jobs/classifyWaiting';
+import {
+  CLASSIFY_WAITING_SWEEP_KIND,
+  resumeClassifyAfterKeyChange,
+  sweepWaitingMessages,
+} from '../src/jobs/classifyWaiting';
 import { ingestInbound } from '../src/jobs/mailIngest';
-import { recoverStaleJobs, startRunner } from '../src/jobs/runner';
+import { DEFAULT_KIND_LIMITS, recoverStaleJobs, startRunner } from '../src/jobs/runner';
 import { budgetKey, writeSetting } from '../src/lib/ai';
 import { enqueue, readSchedules } from '../src/lib/jobQueue';
 import {
@@ -30,6 +34,7 @@ import {
   setClassifyWait,
 } from '../src/repos/classifyWait';
 import { reclassify } from '../src/repos/communications';
+import { readKeyChangedAt } from '../src/repos/discoveryBudget';
 import { rejectCommunication } from '../src/repos/reject';
 import { useApi } from './api';
 import {
@@ -53,6 +58,7 @@ import {
   waitOf,
 } from './classifyWaitingFixtures';
 import type { TestClient } from './isolation';
+import { heldApart } from './race';
 
 vi.mock('@opportun/ai', async (importOriginal) => {
   const real = await importOriginal<typeof import('@opportun/ai')>();
@@ -217,10 +223,17 @@ describe('how a first job ends', () => {
     expect(await waitOf(app, other)).toBe('key_rejected');
   });
 
-  it('one refused over 30 days ago, or classified since, stops nothing', async () => {
+  it('one that came over 30 days ago stops them too', async () => {
     const { app, a } = await boot();
     await stored(app, a, { wait: 'key_rejected', createdAt: NOW - 31 * DAY });
-    // Nor does one that is not to be classified any more, whatever is left in its row.
+    const id = await arrives(app, a);
+    await app.jobs.drain();
+    expect(shown()).toEqual([]);
+    expect(await waitOf(app, id)).toBe('key_rejected');
+  });
+
+  it('one that is classified since stops nothing, whatever is left in its row', async () => {
+    const { app, a } = await boot();
     const done = await stored(app, a, { wait: 'key_rejected' });
     await app.db
       .update(communications)
@@ -514,7 +527,7 @@ describe('the sweep and the drain', () => {
   it('one that throws says it failed, and those behind it go on', async () => {
     const { app, a } = await boot();
     const bad = await stored(app, a, { subject: 'bad' });
-    const good = await stored(app, a);
+    const good = await stored(app, a, { subject: 'good' });
     classifier((system) => {
       if (system.includes('Subject: bad')) throw new Error('a defect');
       return FOLLOW_UP;
@@ -522,10 +535,36 @@ describe('the sweep and the drain', () => {
     expect(await drain(app, a)).toEqual({ classified: 1, left: 1, stopped: null });
     expect(await waitOf(app, bad)).toBe('failed');
     expect((await rowOf(app, good)).classification).toBe('follow_up');
-    // Again at the next drain, once, behind what is new.
-    await stored(app, a, { subject: 'older', sentAt: NOW - 9 * DAY });
+    // Its call may have been paid for: again on another UTC day alone, once.
+    for (const at of [NOW + HOUR, TOMORROW - 1]) {
+      vi.setSystemTime(at);
+      expect(await sweepWaitingMessages(app.db)).toEqual({ queued: 0 });
+      await drain(app, a);
+    }
+    expect(asked()).toEqual(['bad', 'good']);
+    vi.setSystemTime(TOMORROW + MINUTE);
+    expect(await sweepWaitingMessages(app.db)).toEqual({ queued: 1 });
+    await app.jobs.drain();
     await drain(app, a);
-    expect(asked().slice(2)).toEqual(['older', 'bad']);
+    expect(asked()).toEqual(['bad', 'good', 'bad']);
+  });
+
+  it('a first job that died is tried at once, and then once a day', async () => {
+    const { app, a } = await boot();
+    fails(new Error('a defect'));
+    const id = await arrives(app, a);
+    await runTries(app);
+    expect(shown()).toHaveLength(3);
+    expect((await rowOf(app, id)).classifyTriedAt).toBeNull();
+    await drain(app, a);
+    await drain(app, a);
+    expect(shown()).toHaveLength(4);
+  });
+
+  it('leaves workers for the rest, with ranking’s drains beside it', () => {
+    const limits = DEFAULT_KIND_LIMITS;
+    expect(limits[CLASSIFY_WAITING_KIND]).toBe(1);
+    expect(limits[CLASSIFY_WAITING_KIND]! + limits['discovery.rank_waiting']!).toBeLessThan(4);
   });
 
   it('an unusable answer is not tried again', async () => {
@@ -544,6 +583,13 @@ describe('the sweep and the drain', () => {
     expect((await drain(app, a)).stopped).toBe('no_prompt');
     expect(await waitOf(app, id)).toBe('failed');
     expect(shown()).toEqual([]);
+    // A first job says so, and a row that says something keeps it.
+    const first = await arrives(app, a);
+    const blocked = await arrives(app, a);
+    await setClassifyWait(app.db, ctxOf(a), blocked, 'blocked');
+    await app.jobs.drain();
+    expect(await waitOf(app, first)).toBe('failed');
+    expect(await waitOf(app, blocked)).toBe('blocked');
   });
 
   it('says it is trying before its call, committed, and is not tried again that day if its process ends', async () => {
@@ -654,9 +700,10 @@ describe('the stop at a refused key, and what ends it', () => {
     const kept: [string, ClassifyWait][] = [
       [await stored(app, c, { wait: 'blocked' }), 'blocked'],
       [await stored(app, c, { wait: 'invalid_output' }), 'invalid_output'],
-      [await stored(app, c, { wait: 'key_rejected', createdAt: NOW - 31 * DAY }), 'key_rejected'],
     ];
-    return { ids, kept };
+    // Ended with the others, and too old for a later try.
+    const old = await stored(app, c, { wait: 'key_rejected', createdAt: NOW - 31 * DAY });
+    return { ids, kept, old };
   }
   /** What the stop left waits, a drain is queued, and it classifies them; the rest is as it was. */
   async function resumed(
@@ -666,8 +713,10 @@ describe('the stop at a refused key, and what ends it', () => {
   ) {
     for (const id of was.ids) expect(await waitOf(app, id)).toBe('provider_error');
     for (const [id, wait] of was.kept) expect(await waitOf(app, id)).toBe(wait);
+    expect(await waitOf(app, was.old)).toBe('provider_error');
     expect(await drainsQueued(app, c)).toBe(1);
     await drain(app, c);
+    expect(await waitOf(app, was.old)).toBe('provider_error');
     for (const id of was.ids) expect((await rowOf(app, id)).classification).toBe('follow_up');
     for (const [id] of was.kept) expect((await rowOf(app, id)).classification).toBeNull();
   }
@@ -771,6 +820,77 @@ describe('the stop at a refused key, and what ends it', () => {
     const { ids } = await stopped(app, a);
     await act();
     await still(app, a, ids);
+  });
+
+  // sec on #1058: the change has happened, and neither task's end may be lost to the other's.
+  describe('an error in one task’s end does not keep the other from its own', () => {
+    /** Ranking's counts what waits, and nothing before it reads a count of that name. */
+    const rankingFails = (app: FastifyInstance) => {
+      const select = app.db.select.bind(app.db);
+      vi.spyOn(app.db, 'select').mockImplementation(((fields?: object) => {
+        if (fields !== undefined && 'n' in fields) throw new Error('read failed');
+        return select(fields as never);
+      }) as never);
+    };
+    const mailFails = () =>
+      setRaceHook((point) => {
+        if (point === 'classify.resume') throw new Error('mail failed');
+      });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+    const add = (c: TestClient) =>
+      c.request({
+        method: 'POST',
+        url: '/api/v1/secrets',
+        payload: { kind: 'ai_api_key', label: 'anthropic', value: 'made-up-key-for-a-test' },
+      });
+    const WAYS: [string, (c: TestClient, id: string) => Promise<{ statusCode: number }>][] = [
+      ['a key added', (c) => add(c)],
+      ['a key deleted', (c, id) => c.request({ method: 'DELETE', url: `/api/v1/secrets/${id}` })],
+      [
+        'a key found good',
+        (c, id) => {
+          vi.stubGlobal('fetch', modelList(200));
+          return recheck(c, id);
+        },
+      ],
+    ];
+    it.each(WAYS)('%s: ranking’s fails, mail’s is ended', async (_name, act) => {
+      const { app, a } = await boot();
+      const id = await addKey(a);
+      const { ids } = await stopped(app, a);
+      rankingFails(app);
+      expect((await act(a, id)).statusCode).toBe(500);
+      vi.restoreAllMocks();
+      for (const was of ids) expect(await waitOf(app, was)).toBe('provider_error');
+    });
+    it.each(WAYS)('%s: mail’s fails, ranking’s is ended', async (_name, act) => {
+      const { app, a } = await boot();
+      const id = await addKey(a);
+      await app.db.delete(jobs).where(eq(jobs.kind, CLASSIFY_BACKFILL_KIND)).run();
+      const before = await readKeyChangedAt(app.db, ctxOf(a));
+      vi.setSystemTime(Date.now() + MINUTE);
+      mailFails();
+      expect((await act(a, id)).statusCode).toBe(500);
+      expect(await readKeyChangedAt(app.db, ctxOf(a))).toBeGreaterThan(before);
+      // And the mail that had no key is queued where a key came.
+      if (_name === 'a key added')
+        expect(await jobsOf(app, CLASSIFY_BACKFILL_KIND)).toHaveLength(1);
+    });
+  });
+
+  it('it writes the messages under the user’s lock, as what writes several does', async () => {
+    const { app, a } = await boot();
+    const { ids } = await stopped(app, a);
+    await heldApart(
+      app,
+      'reclassify.read',
+      () => reclassify(app.db, ctxOf(a), ids[0]!, { classification: 'networking' }),
+      () => resumeClassifyAfterKeyChange(app.db, ctxOf(a)),
+    );
+    expect((await rowOf(app, ids[0]!)).classifyWait).toBeNull();
+    expect(await waitOf(app, ids[1]!)).toBe('provider_error');
   });
 
   it('with no room in the budget: they wait, and no drain is queued', async () => {
@@ -888,6 +1008,69 @@ describe('the stop at a refused key, and what ends it', () => {
   });
 });
 
+describe('mail that came over 30 days ago, and a new key', () => {
+  const OLD = NOW - 60 * DAY;
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no network in this test')));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+  const addKey = async (c: TestClient, label: string) => {
+    const res = await c.request({
+      method: 'POST',
+      url: '/api/v1/secrets',
+      payload: { kind: 'ai_api_key', label, value: 'made-up-key-for-a-test' },
+    });
+    expect(res.statusCode, res.body).toBe(201);
+  };
+
+  it('a wrong key and then the right one: one call to the wrong, and each is classified', async () => {
+    const { app, a } = await boot();
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      ids.push(await stored(app, a, { wait: 'no_key', createdAt: OLD }));
+    }
+    fails(refused());
+    await addKey(a, 'openai');
+    await app.jobs.drain();
+    expect(shown()).toHaveLength(1);
+    for (const id of ids) expect(await waitOf(app, id)).toBe('key_rejected');
+
+    vi.setSystemTime(Date.now() + MINUTE);
+    classifier(() => FOLLOW_UP);
+    await addKey(a, 'anthropic');
+    await app.jobs.drain();
+    for (const id of ids) expect((await rowOf(app, id)).classification).toBe('follow_up');
+    expect(shown()).toHaveLength(6);
+  });
+
+  it('a new key takes whatever only its age keeps from a later try', async () => {
+    const { app, a } = await boot();
+    const taken: string[] = [];
+    for (const [wait, triedAt] of [
+      ['budget_exceeded', null],
+      ['provider_error', NOW - MINUTE],
+      ['failed', null],
+      ['trying', NOW - DAY],
+      ['key_rejected', null],
+      ['no_key', null],
+      ['invalid_output', null],
+      [null, null],
+    ] as const) {
+      taken.push(await stored(app, a, { wait, triedAt, createdAt: OLD }));
+    }
+    await stored(app, a, { wait: 'blocked', createdAt: OLD });
+    // A try of it is under way.
+    await stored(app, a, { wait: 'trying', triedAt: NOW - MINUTE, createdAt: OLD });
+    expect(await backfillClassify(app.db, ctxOf(a))).toBe(taken.length);
+    const queued = (await jobsOf(app, CLASSIFY_JOB_KIND)).map(
+      (j) => (j.payload as { communicationId: string }).communicationId,
+    );
+    expect(queued.sort()).toEqual([...taken].sort());
+  });
+});
+
 describe('the backfill on a new key', () => {
   it('takes what no later try does, newest first', async () => {
     const { app, a, b } = await boot();
@@ -906,6 +1089,17 @@ describe('the backfill on a new key', () => {
       await stored(app, a, { wait, sentAt: NOW });
     }
     await stored(app, b, { wait: null });
+    // Nor one that is not to be classified, whatever its row says and however old it is.
+    for (const over of [
+      { classification: 'other' as const },
+      { rejectedAt: NOW },
+      { triageDecision: 'filtered' },
+    ]) {
+      for (const wait of [null, 'no_key', 'budget_exceeded'] as const) {
+        const id = await stored(app, a, { wait, createdAt: NOW - 60 * DAY });
+        await app.db.update(communications).set(over).where(eq(communications.id, id)).run();
+      }
+    }
     await enqueueClassifyBackfill(app.db, ctxOf(a));
     await backfillClassify(app.db, ctxOf(a));
     const queued = (await jobsOf(app, CLASSIFY_JOB_KIND))
@@ -949,7 +1143,7 @@ describe('what the Inbox is told', () => {
     ] as const) {
       await stored(app, a, { wait, triedAt: wait === 'trying' ? NOW : null });
     }
-    // Over 30 days: these were to be tried, and are not any more.
+    // Over 30 days: these were to be tried, and are not any more; a refused key is the user's to end.
     const createdAt = NOW - 31 * DAY;
     for (const wait of ['budget_exceeded', 'key_rejected', 'trying'] as const) {
       await stored(app, a, { wait, createdAt });
@@ -980,10 +1174,10 @@ describe('what the Inbox is told', () => {
       provider_error: 1,
       failed: 1,
       trying: 1,
-      key_rejected: 1,
+      key_rejected: 2,
       no_key: 2,
       invalid_output: 2,
-      no_longer_tried: 3,
+      no_longer_tried: 2,
     });
     expect(await counts(b)).toEqual(NONE);
   });

@@ -279,6 +279,7 @@ export type ClassifyRun =
         | 'rejected'
         | 'classified'
         | 'blocked'
+        | 'no_text'
         | 'budget_exceeded'
         | 'key_rejected'
         | 'key_changed';
@@ -321,7 +322,18 @@ export async function classifyCommunication(
   };
   if (blocked?.sender === true) return await isBlocked();
   if (await isAlertDigest(db, ctx, row.from)) {
-    const digest = await processAlertDigest(db, ctx, storage, row.id, body);
+    let text = body;
+    if (!ownText) {
+      const read = await messageText(storage, row, undefined, refetch);
+      // Its leads are in the whole of it, and marked as read it would not be read again: so nothing is
+      // made of a snippet (#1050).
+      if (read.source === 'snippet') {
+        await setClassifyWait(db, ctx, row.id, 'failed');
+        return { status: 'skipped', reason: 'no_text' };
+      }
+      text = read.body;
+    }
+    const digest = await processAlertDigest(db, ctx, storage, row.id, text);
     return {
       status: 'alert_digest',
       leads: digest.status === 'processed' ? digest.stats.inserted : 0,
@@ -462,6 +474,9 @@ export const classifyJob: JobHandler<z.infer<typeof PayloadSchema>> = {
       // Tried again with the key there is now, by the runner: the text is in this job.
       if (run.status === 'skipped' && run.reason === 'key_changed') {
         throw new AiUnavailableError('provider_error', 'the key changed during the call');
+      }
+      if (run.status === 'skipped' && run.reason === 'no_prompt') {
+        await setClassifyFailedIfUnsaid(db, user, payload.communicationId);
       }
     } catch (err) {
       // The runner's tries are over: it is not dead but waits, and a later try takes it
