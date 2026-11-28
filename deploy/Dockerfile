@@ -13,7 +13,7 @@
 # it in each FROM below.
 # apps/server/test/dockerfileBaseImage.test.ts holds every FROM to a digest.
 
-FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS base
+FROM node:22-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb AS base
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     CI=true
@@ -51,7 +51,7 @@ RUN pnpm --filter @opportun/server --prod deploy /out/server \
 # (https://github.com/bgoleno/opportun/issues/442);
 # apps/server/test/dockerfilePgdg.test.ts holds the file to that, and to fetching nothing from
 # postgresql.org but the apt packages.
-FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS pgdg-key
+FROM node:22-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb AS pgdg-key
 COPY deploy/pgdg-ACCC4CF8.asc /pgdg.asc
 RUN apt-get update \
  && apt-get install -y --no-install-recommends gnupg \
@@ -62,7 +62,7 @@ RUN apt-get update \
       exit 1; \
     fi
 
-FROM node:22-slim@sha256:e9f565d32859f0cbfb52125eafe8be39390f24dac302dc3cdf566e8ba3ab21ee AS runtime
+FROM node:22-slim@sha256:be979e5523c76fa4d5ca4ebd3099078f220aa47ec39c48ad5b5df9314debd6eb AS runtime
 # OCI labels, on the runtime stage because that is the image that ships. `source` is what
 # GitHub reads to link the container package to its repository: with it, the package is listed
 # on the public repository's page and shows that repository's README, instead of being attached
